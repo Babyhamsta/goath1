@@ -308,7 +308,7 @@ they spawned in the lobby */
 boolean royale_insertion_running(void);
 /* (insertion, for gulag and bots) */
 void royale_insertion_redeploy(long player_index);
-void royale_insertion_jump(long player_index);
+boolean royale_insertion_jump(long player_index);
 
 /* ---- core's hooks in the game (the game's code calls these) */
 
