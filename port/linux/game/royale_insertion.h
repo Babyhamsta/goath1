@@ -47,6 +47,9 @@ enum
 	/* ticks a jumper is airborne before a touch of the ground counts as the
 	landing (the step off the deck) */
 	ROYALE_INSERTION_LANDING_GRACE_TICKS = 4,
+	/* ticks on the ground without a break that end a fall (a ledge or a tree
+	brushed on the way down does not) */
+	ROYALE_INSERTION_SETTLE_TICKS = 10,
 };
 
 /* the Pelican's speed (world units a second) when the path gives none, and
@@ -90,9 +93,9 @@ throttle (forward, left: -1..1) in the facing's frame; only the horizontal
 part changes, by at most the acceleration, toward the air speed */
 void royale_insertion_air_control(real_vector3d *velocity, real throttle_forward, real throttle_left,
 	real_vector3d const *facing);
-/* whether a falling player has landed: airborne_ticks since the jump past
-the grace and on the ground now */
-boolean royale_insertion_landed(long ticks_falling, boolean airborne);
+/* whether a falling player has landed: the ticks since the jump past
+the grace, and on the ground for the settle ticks without a break */
+boolean royale_insertion_landed(long ticks_falling, long ground_ticks);
 /* the safe area: the play area less the part the beam has glassed or will by
 the current stage's end (side NONE: all of it) */
 void royale_insertion_safe_area(struct royale_bounds const *bounds, short side, real target_fraction,
