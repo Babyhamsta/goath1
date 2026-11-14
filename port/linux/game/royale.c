@@ -1130,7 +1130,9 @@ static void royale_draw_squadmate(
 	hud_draw_mark_end();
 }
 
-/* the line at the top: the phase, the squads left, the kills */
+/* the line at the top: the lobby's countdown, and DROP while this player is
+aboard or falling (once down, the squads left and the kills are the HUD's:
+royale_hud.c) */
 static void royale_draw_banner(
 	long player_index)
 {
@@ -1138,6 +1140,7 @@ static void royale_draw_banner(
 	rectangle2d bounds;
 	wchar_t text[96];
 	long seconds;
+	enum royale_player_state state = royale_player_state(player_index);
 
 	switch (royale.rules.phase)
 	{
@@ -1146,15 +1149,9 @@ static void royale_draw_banner(
 		usnprintf(text, NUMBEROF(text) - 1, L"ROYALE  -  SQUADS DRAWN IN %ld", seconds + 1);
 		break;
 	case ROYALE_RULES_PHASE_INSERTION:
+		if (state != ROYALE_PLAYER_IN_PELICAN && state != ROYALE_PLAYER_FALLING)
+			return;
 		usnprintf(text, NUMBEROF(text) - 1, L"DROP  -  %d SQUADS", royale.rules.squads_alive);
-		break;
-	case ROYALE_RULES_PHASE_PLAY:
-		usnprintf(text, NUMBEROF(text) - 1, L"SQUADS LEFT %d   KILLS %d", royale.rules.squads_alive,
-			royale_player_kills(player_index));
-		break;
-	case ROYALE_RULES_PHASE_ENDGAME:
-		usnprintf(text, NUMBEROF(text) - 1, L"FINAL %d SQUADS   KILLS %d", royale.rules.squads_alive,
-			royale_player_kills(player_index));
 		break;
 	default:
 		return;
@@ -1253,98 +1250,6 @@ static void royale_draw_state(
 	}
 }
 
-/* the results: the winner, then each squad by its place with its players
-and their kills */
-static void royale_draw_results(
-	long player_index)
-{
-	rectangle2d window = royale_window();
-	short line = royale_line_height();
-	short width = (short)MIN(window.x1 - window.x0 - 40, 34 * line);
-	short left = (short)((window.x0 + window.x1 - width) / 2);
-	short rows = (short)MIN(royale.rules.squad_count, 10);
-	short top = (short)(window.y0 + (window.y1 - window.y0) / 8);
-	short my_squad = royale_squad_of(player_index);
-	short squad_column = (short)(line * 4);
-	rectangle2d box;
-	rectangle2d bounds;
-	wchar_t text[128];
-	wchar_t a_name[16];
-	wchar_t b_name[16];
-	short place;
-	short row = 0;
-
-	box.x0 = left;
-	box.x1 = (short)(left + width);
-	box.y0 = top;
-	box.y1 = (short)(top + line * (rows + 4) + line / 2);
-	draw_quad(&box, 0xC0000000);
-	bounds.x0 = left;
-	bounds.x1 = (short)(left + width);
-	bounds.y0 = (short)(top + line / 2);
-	bounds.y1 = (short)(bounds.y0 + line);
-	if (royale.rules.winner != 0xFF)
-	{
-		royale_player_name(royale_squad_member(royale.rules.winner, 0), a_name, NUMBEROF(a_name));
-		royale_player_name(royale_squad_member(royale.rules.winner, 1), b_name, NUMBEROF(b_name));
-		usnprintf(text, NUMBEROF(text) - 1, my_squad == royale.rules.winner ? L"VICTORY  -  %s & %s" :
-			L"WINNERS  -  %s & %s", a_name, b_name);
-	}
-	else
-		usnprintf(text, NUMBEROF(text) - 1, L"NO SQUAD LEFT");
-	text[NUMBEROF(text) - 1] = 0;
-	royale_text(&bounds, 2, text, 1.0f, 0.85f, 0.4f, 1.0f);
-	bounds.y0 = (short)(bounds.y0 + line * 2);
-	bounds.y1 = (short)(bounds.y0 + line);
-	bounds.x0 = (short)(left + line);
-	bounds.x1 = (short)(left + width - line);
-	royale_text(&bounds, 0, L"PLACE", 0.7f, 0.7f, 0.7f, 1.0f);
-	{
-		rectangle2d header = bounds;
-
-		header.x0 = (short)(bounds.x0 + squad_column);
-		royale_text(&header, 0, L"SQUAD", 0.7f, 0.7f, 0.7f, 1.0f);
-	}
-	royale_text(&bounds, 1, L"KILLS", 0.7f, 0.7f, 0.7f, 1.0f);
-	for (place = 1; place <= royale.rules.squad_count && row < rows; place++)
-	{
-		short squad;
-
-		for (squad = 0; squad < royale.rules.squad_count && row < rows; squad++)
-		{
-			long a;
-			long b;
-			boolean mine;
-
-			if (royale.rules.placement[squad] != place)
-				continue;
-			a = royale_squad_member(squad, 0);
-			b = royale_squad_member(squad, 1);
-			mine = squad == my_squad;
-			royale_player_name(a, a_name, NUMBEROF(a_name));
-			royale_player_name(b, b_name, NUMBEROF(b_name));
-			bounds.y0 = (short)(bounds.y0 + line);
-			bounds.y1 = (short)(bounds.y0 + line);
-			usnprintf(text, NUMBEROF(text) - 1, L"#%d", place);
-			text[NUMBEROF(text) - 1] = 0;
-			royale_text(&bounds, 0, text, 1.0f, mine ? 0.85f : 1.0f, mine ? 0.4f : 1.0f, 1.0f);
-			{
-				/* (the squad's column, under SQUAD's header) */
-				rectangle2d names = bounds;
-
-				names.x0 = (short)(bounds.x0 + squad_column);
-				usnprintf(text, NUMBEROF(text) - 1, L"%s & %s", a_name, b_name);
-				text[NUMBEROF(text) - 1] = 0;
-				royale_text(&names, 0, text, 1.0f, mine ? 0.85f : 1.0f, mine ? 0.4f : 1.0f, 1.0f);
-			}
-			usnprintf(text, NUMBEROF(text) - 1, L"%d", royale_player_kills(a) + royale_player_kills(b));
-			text[NUMBEROF(text) - 1] = 0;
-			royale_text(&bounds, 1, text, 1.0f, mine ? 0.85f : 1.0f, mine ? 0.4f : 1.0f, 1.0f);
-			row++;
-		}
-	}
-}
-
 void royale_draw(
 	short local_player_index)
 {
@@ -1355,9 +1260,11 @@ void royale_draw(
 	/* (once over, the game's own end of game scoreboard alone) */
 	if (royale.rules.phase >= ROYALE_RULES_PHASE_OVER)
 		return;
-	if (royale.rules.phase >= ROYALE_RULES_PHASE_RESULTS)
+	/* (the flyover, the victory and the carnage report: the cinema's
+	alone, royale_cinema.c) */
+	if (royale.rules.phase >= ROYALE_RULES_PHASE_RESULTS || royale_cinema_owns_screen(local_player_index))
 	{
-		royale_draw_results(player_index);
+		royale_cinema_draw(local_player_index);
 		return;
 	}
 	/* (in the gulag: its lines alone; the beam, the squad and the map are

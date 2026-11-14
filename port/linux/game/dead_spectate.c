@@ -174,9 +174,19 @@ static boolean spectate_teammate(
 
 	if (!player || other == self || player->unit_index == NONE || !object_try_and_get(player->unit_index))
 		return FALSE;
-	/* (Royale: the squadmate) */
+	/* (Royale: the squadmate; once the squad is out, anyone still in the
+	fight, through their eyes, never the death camera, which sits above
+	whoever it follows and, over a redeploy's fall from the drop height,
+	above the level, where nothing is drawn) */
 	if (royale_active())
-		return royale_squadmate_of(self) == other;
+	{
+		enum royale_player_state state = royale_player_state(other);
+
+		if (royale_squadmate_of(self) == other)
+			return TRUE;
+		return royale_player_state(self) == ROYALE_PLAYER_ELIMINATED &&
+			(state == ROYALE_PLAYER_ALIVE || state == ROYALE_PLAYER_DOWNED || state == ROYALE_PLAYER_FALLING);
+	}
 	return !game_engine_running() || player->team_index == player_get(self)->team_index;
 }
 
@@ -367,6 +377,16 @@ long dead_spectate_unit(
 
 		if (gulag_unit != NONE && object_try_and_get(gulag_unit))
 			return gulag_unit;
+		/* (and one whose squadmate waits in the gulag with no unit: the
+		fight their squadmate waits for) */
+		if (royale_player_state(self) == ROYALE_PLAYER_SPECTATING &&
+			royale_player_state(royale_squadmate_of(self)) == ROYALE_PLAYER_GULAG &&
+			!spectate_teammate(self, royale_squadmate_of(self)))
+		{
+			gulag_unit = royale_gulag_spectate_unit(royale_squadmate_of(self));
+			if (gulag_unit != NONE && object_try_and_get(gulag_unit))
+				return gulag_unit;
+		}
 	}
 	if (!spectate_teammate(self, *watched))
 		*watched = next_teammate(self, NONE);
@@ -557,7 +577,9 @@ void dead_spectate_draw(
 		hint = L"\r\nYou come back beside them once it is safe";
 	else
 		hint = L"\r\nYou join them when they're on foot";
-	usnprintf(text, NUMBEROF(text) - 1, L"WATCHING %.12s   %s: NEXT TEAMMATE%s", player->name, button, hint);
+	usnprintf(text, NUMBEROF(text) - 1, L"WATCHING %.12s   %s: NEXT %s%s", player->name, button,
+		royale_active() && royale_squadmate_of(local_player_get_player_index(local_player_index)) != watched ?
+			L"PLAYER" : L"TEAMMATE", hint);
 	text[NUMBEROF(text) - 1] = 0;
 	draw_bottom_text(text);
 }
