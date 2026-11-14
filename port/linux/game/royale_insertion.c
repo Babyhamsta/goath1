@@ -27,6 +27,7 @@ Who does what:
 #include "objects/damage.h"
 #include "objects/objects.h"
 #include "scenario/scenario.h"
+#include "structures/structure_bsp_definitions.h"
 #include "cache/cache_files.h"
 #include "tag_files/tag_files.h"
 #include "tag_files/tag_groups.h"
@@ -834,14 +835,26 @@ void royale_insertion_start(struct royale_map_config const *config)
 	if (insertion.bounds.maximum.x <= insertion.bounds.minimum.x ||
 		insertion.bounds.maximum.y <= insertion.bounds.minimum.y)
 	{
-		/* (no bounds: about the world's middle) */
-		insertion.bounds.minimum.x = insertion.bounds.minimum.y = -50.0f;
-		insertion.bounds.maximum.x = insertion.bounds.maximum.y = 50.0f;
-		insertion.bounds.minimum.z = 0.0f;
-		insertion.bounds.maximum.z = 20.0f;
+		/* (no bounds: the structure BSP's, a sixth in from each edge) */
+		struct structure_bsp *bsp = global_structure_bsp_get();
+		real_rectangle3d world = bsp ? bsp->world_bounds : (real_rectangle3d){ { -60, 60, -60, 60, 0, 30 } };
+		real inset_x = (world.x1 - world.x0) / 6.0f;
+		real inset_y = (world.y1 - world.y0) / 6.0f;
+
+		insertion.bounds.minimum.x = world.x0 + inset_x;
+		insertion.bounds.maximum.x = world.x1 - inset_x;
+		insertion.bounds.minimum.y = world.y0 + inset_y;
+		insertion.bounds.maximum.y = world.y1 - inset_y;
+		insertion.bounds.minimum.z = world.z0;
+		insertion.bounds.maximum.z = world.z1;
 	}
+	/* (no height: just under the world's top, inside the BSP, where the
+	Pelicans and the falling are drawn) */
 	if (!(insertion.height > insertion.bounds.minimum.z))
-		insertion.height = insertion.bounds.maximum.z + ROYALE_INSERTION_DEFAULT_HEIGHT_ABOVE;
+		insertion.height = insertion.bounds.maximum.z - ROYALE_INSERTION_DEFAULT_HEIGHT_BELOW_TOP;
+	error(_error_log, "royale insertion: play area %.1f..%.1f x %.1f..%.1f, drop height %.1f",
+		insertion.bounds.minimum.x, insertion.bounds.maximum.x, insertion.bounds.minimum.y,
+		insertion.bounds.maximum.y, insertion.height);
 }
 
 void royale_insertion_tick(void)

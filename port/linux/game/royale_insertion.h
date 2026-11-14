@@ -49,8 +49,8 @@ its flight's length over the play area it aims for (seconds) */
 #define ROYALE_INSERTION_DEFAULT_CROSSING_SECONDS 32.0f
 #define ROYALE_INSERTION_MINIMUM_SPEED 4.0f
 #define ROYALE_INSERTION_MAXIMUM_SPEED 14.0f
-/* the drop height above the play area's top when the config gives none */
-#define ROYALE_INSERTION_DEFAULT_HEIGHT_ABOVE 30.0f
+/* the drop height below the world's top when the config gives none */
+#define ROYALE_INSERTION_DEFAULT_HEIGHT_BELOW_TOP 4.0f
 /* paths begin and end this far outside the play area */
 #define ROYALE_INSERTION_PATH_MARGIN 12.0f
 /* the share of the play area's size a path's middle may stray from its center */
