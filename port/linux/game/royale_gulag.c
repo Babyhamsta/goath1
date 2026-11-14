@@ -205,6 +205,84 @@ long royale_gulag_queue_leave(
 	return royale_gulag_queue_fighter_died(queue, player_index);
 }
 
+/* a player as a byte: their absolute index, 0xFF for none */
+static byte royale_gulag_queue_slot_byte(
+	long player_index)
+{
+	long slot = player_index == NONE ? NONE : DATUM_INDEX_TO_ABSOLUTE_INDEX(player_index);
+
+	return VALID_INDEX(slot, ROYALE_MAXIMUM_PLAYERS) ? (byte)slot : 0xFF;
+}
+
+long royale_gulag_queue_write(
+	struct royale_gulag_queue const *queue,
+	long now,
+	byte *buffer,
+	long size)
+{
+	unsigned long start = (unsigned long)(queue->fighter[0] != NONE ? now - queue->fight_ticks : 0);
+	short index;
+
+	if (size < 3 + queue->waiting_count + 4)
+		return 0;
+	*buffer++ = (byte)queue->waiting_count;
+	for (index = 0; index < queue->waiting_count; index++)
+		*buffer++ = royale_gulag_queue_slot_byte(queue->waiting[index]);
+	*buffer++ = royale_gulag_queue_slot_byte(queue->fighter[0]);
+	*buffer++ = royale_gulag_queue_slot_byte(queue->fighter[1]);
+	buffer[0] = (byte)(start & 0xFF);
+	buffer[1] = (byte)((start >> 8) & 0xFF);
+	buffer[2] = (byte)((start >> 16) & 0xFF);
+	buffer[3] = (byte)((start >> 24) & 0xFF);
+	return 3 + queue->waiting_count + 4;
+}
+
+long royale_gulag_queue_read(
+	byte const *buffer,
+	long size,
+	long (*player_of_slot)(long slot),
+	struct royale_gulag_queue *queue,
+	long *fight_start)
+{
+	short count;
+	short index;
+	short side;
+	unsigned long start;
+
+	if (size < 1)
+		return NONE;
+	count = buffer[0];
+	if (count > ROYALE_MAXIMUM_PLAYERS || size < 3 + count + 4)
+		return NONE;
+	royale_gulag_queue_reset(queue);
+	for (index = 0; index < count; index++)
+	{
+		byte slot = buffer[1 + index];
+		long player_index;
+
+		if (slot >= ROYALE_MAXIMUM_PLAYERS)
+			return NONE;
+		player_index = player_of_slot(slot);
+		if (player_index != NONE)
+			queue->waiting[queue->waiting_count++] = player_index;
+	}
+	for (side = 0; side < 2; side++)
+	{
+		byte slot = buffer[1 + count + side];
+
+		if (slot != 0xFF && slot >= ROYALE_MAXIMUM_PLAYERS)
+			return NONE;
+		queue->fighter[side] = slot == 0xFF ? NONE : player_of_slot(slot);
+	}
+	/* (a fight is two, or none) */
+	if ((queue->fighter[0] == NONE) != (queue->fighter[1] == NONE))
+		queue->fighter[0] = queue->fighter[1] = NONE;
+	start = (unsigned long)buffer[3 + count] | ((unsigned long)buffer[4 + count] << 8) |
+		((unsigned long)buffer[5 + count] << 16) | ((unsigned long)buffer[6 + count] << 24);
+	*fight_start = (long)(start & 0x7FFFFFFFUL);
+	return 3 + count + 4;
+}
+
 /* ---- the game's side */
 
 /* a fighter this far past the arena's bounds goes back to their spawn */
@@ -215,9 +293,18 @@ static struct
 	struct royale_gulag_queue queue;
 	struct royale_gulag_arena arena;
 	boolean have_arena;
-	/* (by absolute index) a default win's player: spawned in the arena to
-	have a unit, then redeployed */
+	/* (by absolute index, the host's) a default win's player: spawned in the
+	arena to have a unit, then redeployed (at once, in the host's
+	postspawn: a client never sees that unit in the arena) */
 	boolean redeploy_on_spawn[ROYALE_MAXIMUM_PLAYERS];
+	/* a client's: the fight's start (match time), and the host's line read
+	but not yet taken (royale_gulag_take_network_state) */
+	long fight_start;
+	struct royale_gulag_queue received;
+	long received_fight_start;
+	boolean have_received;
+	/* (by absolute index) each fighter's unit turned the arena's way */
+	long faced_unit[ROYALE_MAXIMUM_PLAYERS];
 	/* each side's unit given the kit (the host's) */
 	long armed_unit[2];
 	/* (debug) the match second the host kills its first local player, and
@@ -227,6 +314,7 @@ static struct
 } royale_gulag;
 
 static void royale_gulag_arm_fighters(void);
+static void royale_gulag_face_fighters(void);
 
 static boolean royale_gulag_host(
 	void)
@@ -271,6 +359,9 @@ void royale_gulag_start(
 
 	royale_gulag_queue_reset(&royale_gulag.queue);
 	csmemset(royale_gulag.redeploy_on_spawn, 0, sizeof(royale_gulag.redeploy_on_spawn));
+	csmemset(royale_gulag.faced_unit, 0xFF, sizeof(royale_gulag.faced_unit));
+	royale_gulag.fight_start = 0;
+	royale_gulag.have_received = FALSE;
 	royale_gulag.armed_unit[0] = NONE;
 	royale_gulag.armed_unit[1] = NONE;
 	{
@@ -360,6 +451,15 @@ void royale_gulag_tick(
 
 	if (!royale_active())
 		return;
+	/* (a client's line is the host's, the fight's clock its own match
+	time's; a fighter's view turns the arena's way when their unit comes) */
+	royale_gulag_face_fighters();
+	if (!royale_gulag_host())
+	{
+		if (royale_gulag.queue.fighter[0] != NONE)
+			royale_gulag.queue.fight_ticks = MAX(royale_match_time() - royale_gulag.fight_start, 0);
+		return;
+	}
 	/* (players who quit leave the line; a fighter's opponent wins) */
 	for (side = 0; side < 2; side++)
 	{
@@ -618,12 +718,97 @@ void royale_gulag_postspawn(
 		royale_gulag_spawn_point(player_index, &position, &facing))
 	{
 		player_control_set_facing(player->local_player_index, &facing);
+		if (VALID_INDEX(slot, ROYALE_MAXIMUM_PLAYERS))
+			royale_gulag.faced_unit[slot] = unit_index;
 	}
 	if (redeploy)
 	{
 		royale_gulag.redeploy_on_spawn[slot] = FALSE;
 		royale_gulag_win(player_index);
 	}
+}
+
+/* every machine: a local fighter's view turned the arena's way once a unit
+(the host's spawn does it in royale_gulag_postspawn; a client's unit comes
+from the network, whenever the line has said who fights) */
+static void royale_gulag_face_fighters(
+	void)
+{
+	short side;
+
+	for (side = 0; side < 2; side++)
+	{
+		long player_index = royale_gulag.queue.fighter[side];
+		long slot = player_index != NONE ? DATUM_INDEX_TO_ABSOLUTE_INDEX(player_index) : NONE;
+		struct player_datum *player = player_index != NONE ? player_try_and_get(player_index) : NULL;
+		long unit_index = royale_gulag_living_unit(player_index);
+		real_vector3d facing;
+
+		if (!player || player->local_player_index == NONE || unit_index == NONE ||
+			!VALID_INDEX(slot, ROYALE_MAXIMUM_PLAYERS) || royale_gulag.faced_unit[slot] == unit_index)
+		{
+			continue;
+		}
+		royale_gulag.faced_unit[slot] = unit_index;
+		facing.i = cosf(royale_gulag.arena.spawn_facing[side]);
+		facing.j = sinf(royale_gulag.arena.spawn_facing[side]);
+		facing.k = 0.0f;
+		player_control_set_facing(player->local_player_index, &facing);
+	}
+}
+
+/* a player by their absolute index, NONE if none */
+static long royale_gulag_player_of_slot(
+	long slot)
+{
+	struct data_iterator iterator;
+
+	data_iterator_new(&iterator, player_data);
+	while (data_iterator_next(&iterator))
+	{
+		if (DATUM_INDEX_TO_ABSOLUTE_INDEX(iterator.datum_index) == slot)
+			return iterator.datum_index;
+	}
+	return NONE;
+}
+
+long royale_gulag_write_network_state(
+	byte *buffer,
+	long size)
+{
+	return royale_gulag_queue_write(&royale_gulag.queue, royale_match_time(), buffer, size);
+}
+
+long royale_gulag_read_network_state(
+	byte const *buffer,
+	long size)
+{
+	long read = royale_gulag_queue_read(buffer, size, royale_gulag_player_of_slot, &royale_gulag.received,
+		&royale_gulag.received_fight_start);
+
+	royale_gulag.have_received = read != NONE;
+	return read;
+}
+
+void royale_gulag_take_network_state(
+	void)
+{
+	if (!royale_gulag.have_received || royale_gulag_host())
+		return;
+	royale_gulag.have_received = FALSE;
+	if (royale_gulag.queue.fighter[0] != royale_gulag.received.fighter[0] ||
+		royale_gulag.queue.fighter[1] != royale_gulag.received.fighter[1] ||
+		royale_gulag.queue.waiting_count != royale_gulag.received.waiting_count)
+	{
+		error(_error_silent, "royale gulag: the host's line: %ld vs %ld, %d waiting",
+			royale_gulag.received.fighter[0] == NONE ? -1L : DATUM_INDEX_TO_ABSOLUTE_INDEX(royale_gulag.received.fighter[0]),
+			royale_gulag.received.fighter[1] == NONE ? -1L : DATUM_INDEX_TO_ABSOLUTE_INDEX(royale_gulag.received.fighter[1]),
+			royale_gulag.received.waiting_count);
+	}
+	royale_gulag.queue = royale_gulag.received;
+	royale_gulag.fight_start = royale_gulag.received_fight_start;
+	if (royale_gulag.queue.fighter[0] != NONE)
+		royale_gulag.queue.fight_ticks = MAX(royale_match_time() - royale_gulag.fight_start, 0);
 }
 
 long royale_gulag_spectate_unit(

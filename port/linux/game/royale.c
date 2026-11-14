@@ -57,6 +57,7 @@ reads a map config from a file.
 #include "units/units.h"
 #include "units/unit_control_data.h"
 #include "game_modes.h"
+#include "network_distributed.h"
 #include "network_standard.h"
 #include "royale.h"
 #include "royale_rules.h"
@@ -107,7 +108,16 @@ static struct
 	long bled_unit[ROYALE_RULES_MAXIMUM_SLOTS];
 	/* the host's: ticks a player in the fight has had no unit */
 	long unitless_ticks[ROYALE_RULES_MAXIMUM_SLOTS];
+	/* the host's: the clock's bytes at the end of the state last written
+	(royale_network_state_clock_size); a client's: the host's clock taken */
+	long clock_bytes;
+	boolean clock_taken;
 } royale;
+
+/* (the rules, the gulag and the lanes by player slot: every player the
+port allows) */
+typedef char royale_slots_cover_players[ROYALE_RULES_MAXIMUM_SLOTS == ROYALE_MAXIMUM_PLAYERS &&
+	ROYALE_MAXIMUM_PLAYERS >= HALO_PORT_MAXIMUM_NETWORK_PLAYERS ? 1 : -1];
 
 /* ---- slots and players */
 
@@ -421,6 +431,8 @@ static boolean royale_initialize_for_new_map(
 	}
 	royale.started = FALSE;
 	royale.results_logged = FALSE;
+	royale.clock_bytes = 0;
+	royale.clock_taken = FALSE;
 	royale.config_loaded = royale_map_config_load(royale_map_short_name(), &royale.config);
 	platform_log("royale: map %s, config %s, insertion %s", royale_map_short_name(),
 		royale.config_loaded ? "loaded" : "none", royale.settings.skip_insertion ? "skipped" : "on");
@@ -669,6 +681,10 @@ static void royale_update(
 		royale_start_lanes();
 	if (!network_game_distributed_client())
 		royale_host_tick();
+	/* (a client's clock goes on by itself, as the host's: the host's state
+	only corrects it) */
+	else
+		royale_rules_advance(&royale.rules, &royale.settings);
 	royale_downed_update();
 	royale_log_results();
 	/* (the lanes, on every machine, before the objects move) */
@@ -695,6 +711,7 @@ static void royale_player_killed_player(
 	if (slot == NONE)
 		return;
 	royale.bled_unit[slot] = NONE;
+	/* (a client's rules and gulag line are the host's: royale_read_network_state) */
 	if (!network_game_distributed_client())
 	{
 		platform_log("royale: slot %ld died (state %d) to slot %ld at tick %ld", slot,
@@ -702,10 +719,6 @@ static void royale_player_killed_player(
 		royale_rules_died(&royale.rules, &royale.settings, slot, royale_slot(killing_player_index),
 			royale_gulag_proc);
 	}
-	/* (a client's gulag lane hears each death as the host's does; the state
-	that follows is the host's) */
-	else if (royale.rules.phase != ROYALE_RULES_PHASE_LOBBY && game_variant_options_get()->royale_gulag)
-		royale_gulag_player_died(dead_player_index, killing_player_index);
 }
 
 /* a player's score, as the scoreboard and the postgame's places rank them:
@@ -810,10 +823,9 @@ boolean royale_absorb_lethal_damage(
 		return FALSE;
 	if (network_game_distributed_client())
 	{
-		/* (a client's prediction: the host's state says whether they go
-		down; its kill comes from the host if they die) */
-		downed = royale.rules.slots[slot].state == ROYALE_RULES_ALIVE &&
-			royale_rules_squadmate(&royale.rules, slot) != NONE;
+		/* (a client's prediction, by the host's own rule on the host's
+		state; its kill comes from the host if they die) */
+		downed = royale_rules_can_be_downed(&royale.rules, slot);
 	}
 	else
 	{
@@ -850,41 +862,64 @@ void royale_player_control(
 	control->throttle.j *= ROYALE_CRAWL_SPEED;
 }
 
-/* ---- the network state: Slayer's (its size first), then the rules */
+/* ---- the network state: Slayer's (its size first), then the rules'
+discrete part and the gulag's line, then the clock
+
+What changes only with events comes first: the host sends the state when it
+changes (game_engine_write_network_state). The clock comes last, outside
+that check (royale_network_state_clock_size): every machine advances its own
+(royale_rules_advance), and the host's rides along as a correction with each
+state, and at least every few seconds (network_distributed.c). */
+
+/* a client's clock more than this off the host's (the message's age added)
+is put right; nearer, it keeps its own steady count */
+#define ROYALE_CLOCK_SLACK_TICKS (TICKS_PER_SECOND / 4)
 
 long royale_write_network_state(
 	byte *buffer,
 	long size)
 {
 	long slayer_size;
+	long written;
+	long rules_size;
+	long gulag_size;
+	long clock_size;
+	byte *cursor;
+	byte *end = buffer + size;
 
-	if (size < (long)(sizeof(long) + sizeof(royale.rules)))
+	royale.clock_bytes = 0;
+	if (size < (long)sizeof(long))
 		return 0;
-	slayer_size = game_engine_slayer_write_network_state(buffer + sizeof(long),
-		size - (long)sizeof(long) - (long)sizeof(royale.rules));
+	/* (Slayer's whole, then Royale's in what is left: Slayer's takes 2.4 KB
+	with 64-bit longs, and given less it writes nothing, which a client
+	refuses) */
+	slayer_size = game_engine_slayer_write_network_state(buffer + sizeof(long), size - (long)sizeof(long));
+	if (slayer_size <= 0)
+		return 0;
 	csmemcpy(buffer, &slayer_size, sizeof(slayer_size));
-	csmemcpy(buffer + sizeof(long) + slayer_size, &royale.rules, sizeof(royale.rules));
-	return (long)sizeof(long) + slayer_size + (long)sizeof(royale.rules);
+	cursor = buffer + sizeof(long) + slayer_size;
+	rules_size = royale_rules_write_discrete(&royale.rules, cursor, (long)(end - cursor));
+	if (!rules_size)
+		return 0;
+	cursor += rules_size;
+	gulag_size = royale_gulag_write_network_state(cursor, (long)(end - cursor));
+	if (!gulag_size)
+		return 0;
+	cursor += gulag_size;
+	/* (more of the discrete part goes here: the clock stays last) */
+	clock_size = royale_rules_write_clock(&royale.rules, cursor, (long)(end - cursor));
+	if (!clock_size)
+		return 0;
+	cursor += clock_size;
+	written = (long)(cursor - buffer);
+	royale.clock_bytes = clock_size;
+	return written;
 }
 
-static boolean royale_rules_valid(
-	struct royale_rules const *rules)
+long royale_network_state_clock_size(
+	void)
 {
-	long slot;
-
-	if (rules->phase > ROYALE_RULES_PHASE_OVER || rules->squad_count > ROYALE_RULES_MAXIMUM_SQUADS)
-		return FALSE;
-	for (slot = 0; slot < ROYALE_RULES_MAXIMUM_SLOTS; slot++)
-	{
-		struct royale_rules_slot const *entry = &rules->slots[slot];
-
-		if ((entry->state > ROYALE_RULES_ELIMINATED && entry->state != ROYALE_RULES_NONE) ||
-			(entry->squad != 0xFF && entry->squad >= ROYALE_RULES_MAXIMUM_SQUADS))
-		{
-			return FALSE;
-		}
-	}
-	return TRUE;
+	return royale_active() ? royale.clock_bytes : 0;
 }
 
 boolean royale_read_network_state(
@@ -893,20 +928,43 @@ boolean royale_read_network_state(
 	boolean first)
 {
 	long slayer_size;
+	long read;
 	struct royale_rules rules;
+	byte const *cursor;
+	byte const *end = buffer + size;
 
 	if (!network_game_distributed_client() || size < (long)sizeof(long))
 		return FALSE;
 	csmemcpy(&slayer_size, buffer, sizeof(slayer_size));
-	if (slayer_size < 0 || size != (long)sizeof(long) + slayer_size + (long)sizeof(rules))
+	if (slayer_size < 0 || slayer_size > size - (long)sizeof(long))
 		return FALSE;
-	csmemcpy(&rules, buffer + sizeof(long) + slayer_size, sizeof(rules));
-	if (!royale_rules_valid(&rules))
+	cursor = buffer + sizeof(long) + slayer_size;
+	read = royale_rules_read_discrete(cursor, (long)(end - cursor), &rules);
+	if (read == NONE)
+		return FALSE;
+	cursor += read;
+	read = royale_gulag_read_network_state(cursor, (long)(end - cursor));
+	if (read == NONE)
+		return FALSE;
+	cursor += read;
+	read = royale_rules_read_clock(cursor, (long)(end - cursor), &rules);
+	if (read == NONE || cursor + read != end)
 		return FALSE;
 	if (!game_engine_slayer_read_network_state(buffer + sizeof(long), slayer_size, first))
 		return FALSE;
-	royale.rules = rules;
+	/* (the host's clock was its own when it sent this, half a round trip
+	ago) */
+	royale_rules_take(&royale.rules, &rules, (long)(distributed_own_round_trip_ticks() / 2.0f + 0.5f),
+		ROYALE_CLOCK_SLACK_TICKS, first || !royale.clock_taken);
+	royale.clock_taken = TRUE;
+	royale_gulag_take_network_state();
 	return TRUE;
+}
+
+long royale_play_start_time(
+	void)
+{
+	return royale_active() ? royale.rules.play_start : NONE;
 }
 
 /* ---- the HUD */

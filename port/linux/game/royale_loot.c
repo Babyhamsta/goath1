@@ -221,7 +221,70 @@ void royale_loot_plan_make(
 	}
 }
 
+long royale_loot_pod_fall_start(
+	long play_start,
+	long endgame_start,
+	long drop_ticks)
+{
+	long start;
+
+	if (play_start == NONE)
+		return NONE;
+	start = play_start + drop_ticks;
+	if (endgame_start != NONE && endgame_start < start)
+		start = endgame_start;
+	return start;
+}
+
+short royale_loot_kit_action(
+	short phase,
+	short state,
+	boolean kitted,
+	boolean armed)
+{
+	/* (the gulag gives its own, and a winner keeps it) */
+	if (state == ROYALE_PLAYER_GULAG)
+		return kitted ? ROYALE_LOOT_KIT_LEAVE : ROYALE_LOOT_KIT_KEEP;
+	if (!kitted)
+		return phase == ROYALE_PHASE_LOBBY || phase == ROYALE_PHASE_INSERTION ? ROYALE_LOOT_KIT_GIVE : ROYALE_LOOT_KIT_KEEP;
+	return state == ROYALE_PLAYER_FALLING && !armed ? ROYALE_LOOT_KIT_GIVE : ROYALE_LOOT_KIT_LEAVE;
+}
+
+static boolean royale_loot_listed(
+	long const *list,
+	short count,
+	long object_index)
+{
+	short index;
+
+	for (index = 0; index < count; index++)
+	{
+		if (list[index] == object_index)
+			return TRUE;
+	}
+	return FALSE;
+}
+
+boolean royale_loot_purge_spares(
+	long object_index,
+	long const *placed,
+	short placed_count,
+	long const *held,
+	short held_count,
+	long const *kits,
+	short kit_count)
+{
+	if (royale_loot_listed(kits, kit_count, object_index))
+		return FALSE;
+	return royale_loot_listed(placed, placed_count, object_index) || royale_loot_listed(held, held_count, object_index);
+}
+
 /* ---------- the game */
+
+/* the weapons the host has seen held in the lobby and the drop (spared by
+the sweep), and the start kits' pistols */
+#define ROYALE_LOOT_MAXIMUM_HELD 1024
+#define ROYALE_LOOT_MAXIMUM_KITS 512
 
 enum
 {
@@ -245,14 +308,21 @@ static struct
 	struct
 	{
 		short state;
-		long fall_start; /* royale_phase_time() */
+		long fall_start; /* royale_match_time() */
 		long crate_index;
 	} pods[ROYALE_LOOT_POD_COUNT];
 	/* the host: the loot it placed (spared by royale_loot_purge) */
 	long placed_items[ROYALE_LOOT_MAXIMUM_PLACED];
 	short placed_count;
-	/* the host: each player's unit given the start kit */
+	/* the host: each player's unit given the start kit (or whose weapons
+	are its own: royale_loot_kit_action) */
 	long kitted_unit[HALO_PORT_MAXIMUM_NETWORK_PLAYERS];
+	/* the host: weapons a unit held (a real drop when loose), and the kits'
+	pistols */
+	long held_items[ROYALE_LOOT_MAXIMUM_HELD];
+	short held_count;
+	long kit_items[ROYALE_LOOT_MAXIMUM_KITS];
+	short kit_count;
 } royale_loot;
 
 static long royale_loot_find_tag(
@@ -379,7 +449,8 @@ static long royale_loot_place(
 	return object_index;
 }
 
-/* the host deletes the map's own weapons and equipment lying loose */
+/* the host deletes the map's own weapons and equipment lying loose (not
+loot's, nor a drop of a weapon a unit held: royale_loot_purge_spares) */
 static void royale_loot_purge(
 	void)
 {
@@ -392,16 +463,13 @@ static void royale_loot_purge(
 	object_iterator_new(&iterator, _object_mask_weapon | _object_mask_equipment, 0);
 	while ((object = (struct object_datum *)object_iterator_next(&iterator)) != NULL && count < NUMBEROF(doomed))
 	{
-		short placed;
-
 		if (object->object.parent_object_index != NONE)
 			continue;
-		for (placed = 0; placed < royale_loot.placed_count && royale_loot.placed_items[placed] != iterator.index;
-			placed++)
+		if (!royale_loot_purge_spares(iterator.index, royale_loot.placed_items, royale_loot.placed_count,
+			royale_loot.held_items, royale_loot.held_count, royale_loot.kit_items, royale_loot.kit_count))
 		{
-		}
-		if (placed == royale_loot.placed_count)
 			doomed[count++] = iterator.index;
+		}
 	}
 	for (index = 0; index < count; index++)
 		object_delete(doomed[index]);
@@ -498,20 +566,20 @@ static void royale_loot_give_kit(
 	{
 		return;
 	}
-	/* (kitted once a unit; but a Pelican's seat drops what its rider holds
-	(the purge then deletes it), so a rider out of it falls with none: the
-	kit again then) */
-	if (royale_loot.kitted_unit[slot] == player->unit_index &&
-		(royale_player_state(player_index) != ROYALE_PLAYER_FALLING || royale_loot_unit_armed(player->unit_index)))
-	{
-		return;
-	}
-	/* (the gulag gives its own) */
-	if (royale_player_state(player_index) == ROYALE_PLAYER_GULAG)
-		return;
 	unit = unit_try_and_get(player->unit_index);
 	if (!unit || TEST_FLAG(unit->object.damage_flags, _object_dead_bit))
 		return;
+	switch (royale_loot_kit_action(royale_phase(), royale_player_state(player_index),
+		royale_loot.kitted_unit[slot] == player->unit_index, royale_loot_unit_armed(player->unit_index)))
+	{
+	case ROYALE_LOOT_KIT_GIVE:
+		break;
+	case ROYALE_LOOT_KIT_KEEP:
+		royale_loot.kitted_unit[slot] = player->unit_index;
+		return;
+	default:
+		return;
+	}
 	royale_loot.kitted_unit[slot] = player->unit_index;
 	royale_loot_delete_weapons(player->unit_index);
 	for (grenade = 0; grenade < NUMBER_OF_UNIT_GRENADE_TYPES; grenade++)
@@ -525,6 +593,35 @@ static void royale_loot_give_kit(
 	royale_loot_ration(weapon_index, royale_loot_start_rounds[0], royale_loot_start_rounds[1]);
 	if (!unit_add_weapon_to_inventory(player->unit_index, weapon_index, 2))
 		object_delete(weapon_index);
+	else if (royale_loot.kit_count < ROYALE_LOOT_MAXIMUM_KITS)
+		royale_loot.kit_items[royale_loot.kit_count++] = weapon_index;
+}
+
+/* the host: the weapons its players hold now, noted (a real drop when they
+let go of one) */
+static void royale_loot_note_held(
+	void)
+{
+	struct data_iterator iterator;
+	struct player_datum *player;
+
+	data_iterator_new(&iterator, player_data);
+	while ((player = (struct player_datum *)data_iterator_next(&iterator)) != NULL)
+	{
+		struct unit_datum *unit = player->unit_index != NONE ? unit_try_and_get(player->unit_index) : NULL;
+		short slot;
+
+		for (slot = 0; unit && slot < MAXIMUM_WEAPONS_PER_UNIT; slot++)
+		{
+			long weapon_index = unit->unit.weapon_object_indices[slot];
+
+			if (weapon_index != NONE && royale_loot.held_count < ROYALE_LOOT_MAXIMUM_HELD &&
+				!royale_loot_listed(royale_loot.held_items, royale_loot.held_count, weapon_index))
+			{
+				royale_loot.held_items[royale_loot.held_count++] = weapon_index;
+			}
+		}
+	}
 }
 
 void royale_loot_postspawn(
@@ -539,7 +636,8 @@ static void royale_loot_pods_tick(
 	void)
 {
 	struct royale_map_config const *config = royale_loot.config;
-	long now = royale_phase_time();
+	long now = royale_match_time();
+	long endgame_start = royale_phase() == ROYALE_PHASE_ENDGAME ? now - royale_phase_time() : NONE;
 	long fall_ticks = MAX(royale_seconds_to_ticks(ROYALE_LOOT_POD_FALL_SECONDS), 1);
 	long trail_ticks = MAX(royale_seconds_to_ticks(ROYALE_LOOT_TRAIL_SECONDS), 1);
 	short index;
@@ -555,14 +653,17 @@ static void royale_loot_pods_tick(
 		real fraction;
 		short item;
 
-		/* (ENDGAME's phase time starts again: a pod still to fall falls
-		at once) */
+		/* (from the match clock: every machine's pod falls alike; one still
+		to fall at ENDGAME falls then) */
 		if (royale_loot.pods[index].state == _royale_loot_pod_waiting)
 		{
-			if (royale_phase() == ROYALE_PHASE_PLAY && now < royale_seconds_to_ticks((real)plan->drop_second))
+			long fall_start = royale_loot_pod_fall_start(royale_play_start_time(), endgame_start,
+				royale_seconds_to_ticks((real)plan->drop_second));
+
+			if (fall_start == NONE || now < fall_start)
 				continue;
 			royale_loot.pods[index].state = _royale_loot_pod_falling;
-			royale_loot.pods[index].fall_start = game_time_get();
+			royale_loot.pods[index].fall_start = fall_start;
 			position.z += ROYALE_LOOT_POD_FALL_HEIGHT;
 			if (royale_loot.crate_definition != NONE)
 			{
@@ -572,11 +673,12 @@ static void royale_loot_pods_tick(
 				placement.position = position;
 				royale_loot.pods[index].crate_index = object_new(&placement);
 			}
-			error(_error_silent, "royale: loot: supply pod %d falls on spot %d", index, plan->spot);
+			error(_error_silent, "royale: loot: supply pod %d falls on spot %d at match tick %ld", index, plan->spot,
+				fall_start);
 		}
 		if (royale_loot.pods[index].state != _royale_loot_pod_falling)
 			continue;
-		elapsed = game_time_get() - royale_loot.pods[index].fall_start;
+		elapsed = MAX(now - royale_loot.pods[index].fall_start, 0);
 		fraction = MIN((real)elapsed / (real)fall_ticks, 1.0f);
 		/* (falling faster as it comes) */
 		position.z = ground->z + ROYALE_LOOT_POD_FALL_HEIGHT * (1.0f - fraction * fraction);
@@ -601,7 +703,7 @@ static void royale_loot_pods_tick(
 			spot.y += ROYALE_LOOT_POD_ITEM_RADIUS * sinf(angle);
 			royale_loot_place(plan->kinds[item], &spot);
 		}
-		error(_error_silent, "royale: loot: supply pod %d landed", index);
+		error(_error_silent, "royale: loot: supply pod %d landed at match tick %ld", index, now);
 	}
 }
 
@@ -616,6 +718,8 @@ void royale_loot_tick(
 		return;
 	if (host)
 	{
+		if (royale_phase() == ROYALE_PHASE_LOBBY || royale_phase() == ROYALE_PHASE_INSERTION)
+			royale_loot_note_held();
 		/* the ground loot placed at once, and the map's own items deleted
 		(again each second: scripts and BSP loads place theirs late) until
 		PLAY, when players can drop their own */

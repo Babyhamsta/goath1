@@ -63,4 +63,32 @@ void royale_loot_plan_make(unsigned long seed, short const *spot_tiers, short sp
 /* the plan this game drew (royale_loot_start) */
 struct royale_loot_plan const *royale_loot_plan_get(void);
 
+/* ---------- the rules of the game's side (pure: tools/harness/tests/test_royale_loot.py) */
+
+/* the match time a pod starts to fall: drop_ticks into PLAY, or ENDGAME's
+start if that comes first (a pod still to fall falls then); NONE before PLAY.
+From the match clock, so every machine's pod falls alike */
+long royale_loot_pod_fall_start(long play_start, long endgame_start, long drop_ticks);
+
+enum royale_loot_kit_action
+{
+	ROYALE_LOOT_KIT_LEAVE = 0, /* its weapons are its own */
+	ROYALE_LOOT_KIT_GIVE, /* the start kit: its weapons gone, a pistol */
+	ROYALE_LOOT_KIT_KEEP /* its weapons are its own from now (the unit taken as kitted) */
+};
+
+/* the host's look at a player's unit each tick: phase and state (royale.h's
+enums), whether this unit had the kit (or was kept), whether it holds a
+weapon. The start kit goes to a unit of the lobby or the drop, again to one
+that fell out of its Pelican with none (the seat drops what a rider holds);
+a gulag fighter's and a gulag winner's weapons, and a redeployed one's, are
+theirs */
+short royale_loot_kit_action(short phase, short state, boolean kitted, boolean armed);
+
+/* the lobby's and the drop's sweep: a loose item is the map's own (deleted)
+unless loot placed it or a unit ever held it; a loose start kit pistol goes
+anyway (given again on the fall) */
+boolean royale_loot_purge_spares(long object_index, long const *placed, short placed_count, long const *held,
+	short held_count, long const *kits, short kit_count);
+
 #endif
