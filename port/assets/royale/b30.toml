@@ -109,26 +109,22 @@ facing_b = 3.1416
 bounds_min = [-28.50, 39.50, 1.00]
 bounds_max = [-17.50, 47.50, 9.00]
 
-# the interior's entrances, closed: no player passes these boxes (min, max)
+# the interior's entrances, closed: no player passes these boxes (pushed out of the nearest side). The east shaft
+# (the Cartographer's, its lens closed) needs none: a player who falls below the bounds' bottom is put back
 [[blocked]]
-name = "north tower door"
-bounds_min = [-11.00, 26.50, 11.00]
-bounds_max = [-1.50, 31.00, 18.00]
+name = "north tower: the door in the passage under the tower"
+bounds_min = [-11.00, 26.50, 11.50]
+bounds_max = [-1.50, 30.50, 17.50]
 
 [[blocked]]
-name = "south facility roof hatch"
-bounds_min = [22.00, -26.50, 8.50]
-bounds_max = [28.00, -17.50, 14.00]
+name = "south facility: the door under the roof on its east platform"
+bounds_min = [21.00, -25.50, 8.50]
+bounds_max = [29.00, -18.50, 14.50]
 
 [[blocked]]
-name = "south facility ground door"
-bounds_min = [-4.00, -29.50, 0.50]
-bounds_max = [1.00, -21.00, 6.00]
-
-[[blocked]]
-name = "east shaft"
-bounds_min = [32.00, 15.00, -20.00]
-bounds_max = [42.00, 25.00, 12.00]
+name = "round platform: the covered walkway down to its center"
+bounds_min = [25.80, 7.00, 12.00]
+bounds_max = [29.20, 26.00, 26.00]
 
 [[blocked]]
 name = "gulag cove (only the gulag's fighters)"
@@ -137,215 +133,211 @@ bounds_max = [-17.50, 47.50, 9.00]
 
 # supply pods: open, flat ground, far apart
 [[pod]]
-position = [-34.00, 0.50, 20.36]
+position = [-18.00, -60.00, 1.87]
 
 [[pod]]
-position = [-25.00, -61.00, 1.80]
+position = [35.50, -52.50, 8.77]
 
 [[pod]]
-position = [50.50, 56.50, 2.39]
+position = [-71.00, 9.00, 0.74]
 
 [[pod]]
-position = [43.00, -20.50, 3.65]
+position = [57.00, 56.00, 1.51]
 
 [[pod]]
-position = [-1.00, -23.50, 22.67]
+position = [-66.00, -37.00, 1.25]
 
 [[pod]]
-position = [-67.50, -25.50, 1.53]
+position = [-17.00, -22.50, 21.44]
 
 [[pod]]
-position = [-64.50, 37.00, 0.79]
+position = [72.00, 9.00, 14.25]
 
 [[pod]]
-position = [26.00, -64.50, 9.07]
+position = [16.00, -11.00, 23.94]
 
 [[pod]]
-position = [-58.50, -57.00, 14.18]
+position = [53.00, -18.50, 2.80]
 
 [[pod]]
-position = [9.50, 51.00, 1.56]
+position = [-24.50, 12.00, 22.06]
 
 [[pod]]
-position = [79.00, 17.50, 0.82]
+position = [5.00, 26.00, 24.00]
 
 [[pod]]
-position = [45.50, 14.50, 24.13]
+position = [25.50, 63.50, 1.61]
 
 [[pod]]
-position = [13.00, 17.00, 20.37]
+position = [-56.50, 42.50, 1.27]
 
 [[pod]]
-position = [-22.50, 34.50, 16.17]
+position = [-51.50, -66.50, 0.68]
 
 # ground loot by tier (common, rare, epic, legendary): beaches, high ground and cliff tops, outsides of
 # the structures
 [[loot]]
-position = [-11.00, -68.50, 0.73]
+position = [-7.50, -70.00, 0.61]
 tier = "common"
 
 [[loot]]
-position = [-35.00, -66.50, 0.74]
+position = [-46.00, -66.50, 0.70]
 tier = "common"
 
 [[loot]]
-position = [-54.50, -63.50, 0.88]
+position = [-57.00, -64.50, 0.62]
+tier = "rare"
+
+[[loot]]
+position = [1.00, -64.00, 2.24]
 tier = "common"
 
 [[loot]]
-position = [3.00, -64.50, 2.91]
+position = [45.00, -63.00, 0.86]
+tier = "rare"
+
+[[loot]]
+position = [-18.00, -60.00, 1.82]
 tier = "common"
 
 [[loot]]
-position = [-25.00, -61.00, 1.75]
+position = [-31.50, -56.00, 2.26]
 tier = "common"
 
 [[loot]]
-position = [-12.50, -55.50, 2.64]
-tier = "common"
+position = [-1.50, -54.00, 2.27]
+tier = "rare"
 
 [[loot]]
 position = [-66.00, -48.50, 0.78]
 tier = "common"
 
 [[loot]]
-position = [-11.00, -45.50, 1.57]
+position = [-9.00, -46.50, 2.07]
 tier = "common"
 
 [[loot]]
-position = [-59.50, -40.00, 1.50]
-tier = "common"
-
-[[loot]]
-position = [44.00, -38.50, 3.23]
+position = [-66.00, -37.00, 1.20]
 tier = "rare"
 
 [[loot]]
-position = [57.00, -30.00, 0.87]
-tier = "common"
-
-[[loot]]
-position = [-67.50, -25.50, 1.48]
-tier = "common"
-
-[[loot]]
-position = [43.00, -20.50, 3.60]
-tier = "common"
-
-[[loot]]
-position = [63.00, -18.50, 0.56]
-tier = "common"
-
-[[loot]]
-position = [59.50, -9.00, 2.46]
-tier = "rare"
-
-[[loot]]
-position = [-47.50, 1.50, 3.29]
-tier = "common"
-
-[[loot]]
-position = [94.00, 2.50, 4.93]
-tier = "common"
-
-[[loot]]
-position = [65.00, 3.00, 2.40]
+position = [53.50, -35.50, 1.02]
 tier = "epic"
 
 [[loot]]
-position = [-68.50, 7.00, 1.10]
-tier = "common"
-
-[[loot]]
-position = [-59.50, 15.00, 2.22]
-tier = "rare"
-
-[[loot]]
-position = [-70.00, 17.00, 0.76]
-tier = "rare"
-
-[[loot]]
-position = [79.00, 17.50, 0.77]
-tier = "rare"
-
-[[loot]]
-position = [-66.00, 26.50, 1.05]
-tier = "rare"
-
-[[loot]]
-position = [74.50, 27.00, 1.12]
-tier = "rare"
-
-[[loot]]
-position = [-56.00, 28.00, 2.47]
-tier = "common"
-
-[[loot]]
-position = [68.00, 35.50, 0.95]
-tier = "common"
-
-[[loot]]
-position = [-64.50, 37.00, 0.74]
-tier = "common"
-
-[[loot]]
-position = [55.00, 41.50, 4.05]
-tier = "common"
-
-[[loot]]
-position = [43.50, 44.00, 4.69]
-tier = "rare"
-
-[[loot]]
-position = [-56.50, 45.50, 0.88]
-tier = "common"
-
-[[loot]]
-position = [-39.00, 49.00, 1.14]
-tier = "common"
-
-[[loot]]
-position = [9.50, 51.00, 1.51]
-tier = "common"
-
-[[loot]]
-position = [50.50, 56.50, 2.34]
-tier = "rare"
-
-[[loot]]
-position = [11.00, 63.00, 1.53]
-tier = "common"
-
-[[loot]]
-position = [48.00, 69.00, 0.63]
-tier = "common"
-
-[[loot]]
-position = [30.00, 70.50, 0.70]
-tier = "common"
-
-[[loot]]
-position = [-50.00, -56.00, 14.79]
-tier = "common"
-
-[[loot]]
-position = [-60.00, -52.50, 14.27]
+position = [-58.50, -27.50, 2.74]
 tier = "epic"
 
 [[loot]]
-position = [29.50, -52.50, 9.40]
-tier = "rare"
-
-[[loot]]
-position = [15.00, -47.00, 21.08]
+position = [-47.00, -27.50, 4.02]
 tier = "common"
 
 [[loot]]
-position = [-37.50, -45.00, 17.84]
+position = [46.00, -26.50, 3.01]
+tier = "epic"
+
+[[loot]]
+position = [53.00, -18.50, 2.75]
+tier = "common"
+
+[[loot]]
+position = [45.00, -7.50, 4.18]
+tier = "common"
+
+[[loot]]
+position = [62.00, -6.00, 2.06]
+tier = "common"
+
+[[loot]]
+position = [70.00, 1.00, 0.86]
+tier = "common"
+
+[[loot]]
+position = [-71.00, 9.00, 0.69]
+tier = "common"
+
+[[loot]]
+position = [-52.00, 14.00, 3.05]
+tier = "common"
+
+[[loot]]
+position = [-65.50, 19.50, 1.33]
+tier = "common"
+
+[[loot]]
+position = [75.00, 22.50, 1.32]
+tier = "common"
+
+[[loot]]
+position = [-53.50, 27.00, 2.96]
+tier = "rare"
+
+[[loot]]
+position = [-65.00, 29.50, 1.08]
+tier = "common"
+
+[[loot]]
+position = [55.00, 36.00, 3.17]
+tier = "common"
+
+[[loot]]
+position = [-35.00, 38.50, 2.38]
+tier = "common"
+
+[[loot]]
+position = [-56.50, 42.50, 1.22]
+tier = "common"
+
+[[loot]]
+position = [-45.50, 46.00, 1.72]
+tier = "common"
+
+[[loot]]
+position = [68.00, 47.00, 0.83]
+tier = "common"
+
+[[loot]]
+position = [57.00, 56.00, 1.46]
+tier = "common"
+
+[[loot]]
+position = [3.50, 57.50, 0.66]
+tier = "common"
+
+[[loot]]
+position = [14.00, 59.50, 2.13]
+tier = "common"
+
+[[loot]]
+position = [45.00, 63.00, 1.57]
+tier = "rare"
+
+[[loot]]
+position = [25.50, 63.50, 1.56]
+tier = "rare"
+
+[[loot]]
+position = [38.00, 71.00, 0.58]
+tier = "common"
+
+[[loot]]
+position = [25.50, -55.00, 20.28]
 tier = "legendary"
 
 [[loot]]
-position = [-46.00, -42.00, 16.65]
+position = [-53.50, -53.00, 15.08]
+tier = "rare"
+
+[[loot]]
+position = [15.50, -53.00, 19.61]
+tier = "rare"
+
+[[loot]]
+position = [-41.00, -45.50, 17.31]
+tier = "rare"
+
+[[loot]]
+position = [23.50, -44.50, 21.98]
 tier = "common"
 
 [[loot]]
@@ -353,305 +345,325 @@ position = [32.00, -40.00, 9.40]
 tier = "rare"
 
 [[loot]]
-position = [24.00, -37.00, 22.33]
-tier = "common"
-
-[[loot]]
-position = [-17.00, -36.00, 20.15]
-tier = "common"
-
-[[loot]]
-position = [-1.50, -34.50, 20.07]
-tier = "common"
-
-[[loot]]
-position = [-33.00, -31.50, 19.74]
+position = [-17.00, -38.50, 19.74]
 tier = "rare"
 
 [[loot]]
-position = [9.50, -31.50, 22.85]
-tier = "rare"
-
-[[loot]]
-position = [-44.00, -26.00, 17.61]
-tier = "rare"
-
-[[loot]]
-position = [-1.00, -23.50, 22.62]
-tier = "rare"
-
-[[loot]]
-position = [-25.50, -23.00, 21.08]
-tier = "rare"
-
-[[loot]]
-position = [-15.50, -19.50, 21.81]
+position = [16.50, -38.00, 23.43]
 tier = "common"
 
 [[loot]]
-position = [16.00, -17.00, 23.70]
-tier = "common"
-
-[[loot]]
-position = [6.50, -15.00, 24.23]
-tier = "common"
-
-[[loot]]
-position = [-5.50, -14.50, 23.26]
+position = [7.50, -37.00, 21.14]
 tier = "rare"
 
 [[loot]]
-position = [31.50, -7.50, 22.57]
-tier = "common"
-
-[[loot]]
-position = [-27.50, -7.00, 22.11]
+position = [-32.50, -35.00, 19.54]
 tier = "epic"
 
 [[loot]]
-position = [12.00, -7.00, 24.53]
+position = [-1.50, -35.00, 19.92]
+tier = "epic"
+
+[[loot]]
+position = [-27.00, -27.00, 20.54]
+tier = "epic"
+
+[[loot]]
+position = [8.50, -27.00, 23.34]
 tier = "rare"
+
+[[loot]]
+position = [-17.00, -22.50, 21.39]
+tier = "rare"
+
+[[loot]]
+position = [2.50, -15.50, 23.92]
+tier = "common"
+
+[[loot]]
+position = [-15.00, -11.50, 23.20]
+tier = "common"
+
+[[loot]]
+position = [16.00, -11.00, 23.89]
+tier = "rare"
+
+[[loot]]
+position = [35.00, -8.00, 21.19]
+tier = "common"
 
 [[loot]]
 position = [0.50, -5.50, 24.38]
-tier = "common"
-
-[[loot]]
-position = [-13.50, -3.00, 15.98]
-tier = "common"
-
-[[loot]]
-position = [-34.00, 0.50, 20.31]
 tier = "rare"
 
 [[loot]]
-position = [11.50, 3.00, 25.19]
+position = [-20.50, -2.50, 23.51]
 tier = "common"
 
 [[loot]]
-position = [24.00, 3.00, 25.90]
+position = [11.50, -2.00, 24.62]
 tier = "common"
 
 [[loot]]
-position = [-20.00, 3.50, 23.80]
-tier = "common"
-
-[[loot]]
-position = [70.00, 6.50, 13.70]
+position = [-35.50, 0.00, 19.97]
 tier = "rare"
 
 [[loot]]
-position = [42.50, 12.00, 24.39]
+position = [27.50, -0.50, 25.09]
 tier = "common"
 
 [[loot]]
-position = [-26.00, 14.00, 21.36]
-tier = "common"
-
-[[loot]]
-position = [6.00, 17.00, 25.23]
-tier = "common"
-
-[[loot]]
-position = [-38.50, 22.00, 19.31]
-tier = "common"
-
-[[loot]]
-position = [-30.50, 28.00, 18.25]
+position = [19.00, 3.00, 25.91]
 tier = "rare"
 
 [[loot]]
-position = [6.00, 27.50, 23.60]
+position = [-5.00, 6.00, 16.81]
 tier = "common"
 
 [[loot]]
-position = [47.00, 27.50, 22.80]
+position = [44.00, 6.50, 23.41]
+tier = "rare"
+
+[[loot]]
+position = [20.50, 9.00, 20.17]
+tier = "rare"
+
+[[loot]]
+position = [72.00, 9.00, 14.20]
+tier = "common"
+
+[[loot]]
+position = [-24.50, 12.00, 22.01]
 tier = "epic"
 
 [[loot]]
-position = [-42.00, 33.00, 17.23]
-tier = "common"
-
-[[loot]]
-position = [18.50, 41.50, 20.40]
-tier = "common"
-
-[[loot]]
-position = [21.00, 52.00, 17.27]
-tier = "common"
-
-[[loot]]
-position = [30.50, 57.50, 17.02]
+position = [14.50, 17.50, 19.94]
 tier = "rare"
 
 [[loot]]
-position = [7.50, -69.00, 7.79]
+position = [-36.00, 20.50, 19.55]
 tier = "common"
 
 [[loot]]
-position = [17.00, -63.50, 6.76]
-tier = "common"
-
-[[loot]]
-position = [26.00, -64.50, 9.02]
-tier = "common"
-
-[[loot]]
-position = [-29.50, -47.50, 3.51]
-tier = "common"
-
-[[loot]]
-position = [39.50, -48.50, 7.47]
+position = [52.50, 19.50, 21.71]
 tier = "rare"
 
 [[loot]]
-position = [82.50, 3.50, 7.09]
+position = [5.00, 26.00, 23.95]
+tier = "rare"
+
+[[loot]]
+position = [-23.00, 30.00, 17.06]
+tier = "rare"
+
+[[loot]]
+position = [-32.50, 33.00, 16.73]
+tier = "rare"
+
+[[loot]]
+position = [-49.00, 35.00, 15.79]
 tier = "common"
 
 [[loot]]
-position = [55.50, 6.50, 5.73]
+position = [18.00, 37.50, 22.03]
 tier = "common"
+
+[[loot]]
+position = [37.00, 39.50, 22.62]
+tier = "rare"
+
+[[loot]]
+position = [22.50, 49.00, 18.50]
+tier = "rare"
+
+[[loot]]
+position = [33.50, 62.50, 15.94]
+tier = "common"
+
+[[loot]]
+position = [6.00, -69.50, 7.11]
+tier = "common"
+
+[[loot]]
+position = [23.00, -65.50, 8.21]
+tier = "common"
+
+[[loot]]
+position = [12.00, -62.50, 5.63]
+tier = "rare"
+
+[[loot]]
+position = [35.50, -52.50, 8.72]
+tier = "common"
+
+[[loot]]
+position = [-28.00, -47.50, 4.12]
+tier = "common"
+
+[[loot]]
+position = [42.50, -45.00, 5.55]
+tier = "common"
+
+[[loot]]
+position = [87.00, 2.00, 7.87]
+tier = "rare"
+
+[[loot]]
+position = [48.00, 3.00, 7.17]
+tier = "common"
+
+[[loot]]
+position = [56.00, 7.50, 5.87]
+tier = "epic"
 
 [[loot]]
 position = [-32.00, 47.00, 6.89]
-tier = "rare"
-
-[[loot]]
-position = [-21.50, 51.50, 6.98]
 tier = "common"
 
 [[loot]]
-position = [35.50, -30.00, 3.63]
+position = [39.50, 48.50, 5.70]
+tier = "common"
+
+[[loot]]
+position = [52.50, 47.50, 6.03]
+tier = "rare"
+
+[[loot]]
+position = [-14.50, 55.00, 5.86]
+tier = "common"
+
+[[loot]]
+position = [24.50, -34.00, 22.15]
+tier = "rare"
+
+[[loot]]
+position = [22.00, -28.50, 22.14]
 tier = "epic"
 
 [[loot]]
-position = [21.00, -28.50, 22.48]
+position = [29.50, -28.00, 9.19]
+tier = "rare"
+
+[[loot]]
+position = [18.00, -24.00, 24.42]
+tier = "epic"
+
+[[loot]]
+position = [31.50, -22.50, 25.68]
+tier = "common"
+
+[[loot]]
+position = [-66.00, -20.00, 2.05]
+tier = "rare"
+
+[[loot]]
+position = [-50.50, -20.00, 14.41]
+tier = "common"
+
+[[loot]]
+position = [-41.50, -20.00, 19.74]
+tier = "rare"
+
+[[loot]]
+position = [-34.50, -18.00, 20.87]
+tier = "epic"
+
+[[loot]]
+position = [40.50, -17.50, 4.20]
+tier = "epic"
+
+[[loot]]
+position = [21.00, -17.00, 23.23]
+tier = "epic"
+
+[[loot]]
+position = [-65.50, -13.00, 15.50]
+tier = "epic"
+
+[[loot]]
+position = [-58.50, -13.00, 15.97]
+tier = "rare"
+
+[[loot]]
+position = [-73.00, -12.50, 14.66]
+tier = "rare"
+
+[[loot]]
+position = [-41.50, -12.00, 22.12]
+tier = "epic"
+
+[[loot]]
+position = [25.00, -11.50, 22.76]
+tier = "rare"
+
+[[loot]]
+position = [-33.00, -10.50, 21.29]
+tier = "rare"
+
+[[loot]]
+position = [-65.00, -7.00, 1.95]
+tier = "epic"
+
+[[loot]]
+position = [-42.50, -6.00, 18.85]
+tier = "rare"
+
+[[loot]]
+position = [-59.00, -1.50, 3.29]
+tier = "rare"
+
+[[loot]]
+position = [31.50, 5.50, 25.63]
+tier = "common"
+
+[[loot]]
+position = [-6.50, 18.50, 23.39]
+tier = "common"
+
+[[loot]]
+position = [0.50, 20.50, 24.27]
+tier = "epic"
+
+[[loot]]
+position = [35.50, 21.50, 18.69]
+tier = "rare"
+
+[[loot]]
+position = [20.00, 25.00, 18.69]
 tier = "legendary"
 
 [[loot]]
-position = [16.00, -24.00, 23.81]
-tier = "epic"
-
-[[loot]]
-position = [28.50, -21.50, 25.68]
-tier = "common"
-
-[[loot]]
-position = [-67.00, -18.50, 1.86]
+position = [32.00, 31.00, 18.44]
 tier = "rare"
 
 [[loot]]
-position = [-43.50, -18.50, 19.48]
+position = [23.50, 32.00, 18.37]
 tier = "rare"
 
 [[loot]]
-position = [-35.00, -17.50, 20.86]
+position = [-2.50, 36.50, 21.07]
 tier = "rare"
 
 [[loot]]
-position = [-63.00, -13.50, 15.79]
-tier = "epic"
-
-[[loot]]
-position = [-43.00, -14.50, 22.59]
-tier = "epic"
-
-[[loot]]
-position = [23.50, -14.00, 22.72]
-tier = "common"
-
-[[loot]]
-position = [-56.00, -13.00, 15.97]
+position = [-7.50, 41.00, 21.65]
 tier = "legendary"
 
 [[loot]]
-position = [-69.00, -12.00, 15.11]
-tier = "common"
+position = [-14.00, 42.50, 18.65]
+tier = "rare"
 
 [[loot]]
-position = [-36.50, -11.50, 20.87]
+position = [2.50, 42.50, 18.29]
 tier = "epic"
 
 [[loot]]
-position = [-67.50, -7.00, 1.61]
-tier = "epic"
+position = [6.00, 46.00, 1.68]
+tier = "rare"
 
 [[loot]]
-position = [-42.00, -6.50, 19.08]
-tier = "epic"
+position = [-6.00, 49.50, 18.65]
+tier = "rare"
 
 [[loot]]
-position = [-61.00, -2.00, 3.03]
-tier = "common"
-
-[[loot]]
-position = [-54.00, -2.00, 3.25]
+position = [2.50, 51.50, 0.78]
 tier = "legendary"
-
-[[loot]]
-position = [-7.50, 8.00, 16.58]
-tier = "rare"
-
-[[loot]]
-position = [-7.00, 15.00, 23.39]
-tier = "epic"
-
-[[loot]]
-position = [23.50, 17.50, 18.19]
-tier = "common"
-
-[[loot]]
-position = [0.00, 19.50, 24.33]
-tier = "rare"
-
-[[loot]]
-position = [20.00, 22.50, 18.64]
-tier = "common"
-
-[[loot]]
-position = [-9.00, 23.00, 23.39]
-tier = "epic"
-
-[[loot]]
-position = [-17.00, 24.00, 12.93]
-tier = "rare"
-
-[[loot]]
-position = [24.50, 29.00, 18.69]
-tier = "common"
-
-[[loot]]
-position = [30.50, 29.00, 18.69]
-tier = "rare"
-
-[[loot]]
-position = [-6.50, 34.50, 20.94]
-tier = "rare"
-
-[[loot]]
-position = [-7.00, 43.50, 21.65]
-tier = "common"
-
-[[loot]]
-position = [2.50, 44.00, 18.28]
-tier = "rare"
-
-[[loot]]
-position = [-12.00, 46.00, 18.65]
-tier = "legendary"
-
-[[loot]]
-position = [7.00, 45.50, 1.76]
-tier = "legendary"
-
-[[loot]]
-position = [-7.00, 49.50, 18.65]
-tier = "rare"
-
-[[loot]]
-position = [-0.50, 49.50, 18.37]
-tier = "epic"
-
-[[loot]]
-position = [1.00, 54.50, 0.55]
-tier = "epic"
