@@ -10,7 +10,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from harness import CHECK_FAILED, build, constant, enum_with, function, mutated, read, run, structure  # noqa: E402
 
-CASES = ["determinism", "tiers", "available", "pods", "stable"]
+CASES = ["determinism", "tiers", "available", "pods", "stable", "pod-clock", "kit", "sweep"]
 
 # a fault each, and the case that must catch it
 NEGATIVE_CONTROLS = {
@@ -29,6 +29,16 @@ NEGATIVE_CONTROLS = {
     "empty-takes-less": (("byte kind = royale_loot_roll_kind(seed, rarity == NONE ? ROYALE_LOOT_RARITY_COMMON : rarity, available);",
                           "byte kind = rarity == NONE ? ROYALE_LOOT_KIND_NONE : royale_loot_roll_kind(seed, rarity, available);"),
                          "stable"),
+    # ENDGAME's start ignored: a pod waits on in the endgame
+    "endgame-ignored": (("if (endgame_start != NONE && endgame_start < start)", "if (0)"), "pod-clock"),
+    # the old kit check: a gulag fighter's unit never taken as theirs, so the winner is disarmed
+    "gulag-unit-not-kept": (("return kitted ? ROYALE_LOOT_KIT_LEAVE : ROYALE_LOOT_KIT_KEEP;",
+                             "return ROYALE_LOOT_KIT_LEAVE;"), "kit"),
+    # a unit not kitted given the kit whatever the phase (a winner's new unit)
+    "kit-in-play": (("return phase == ROYALE_PHASE_LOBBY || phase == ROYALE_PHASE_INSERTION ? ROYALE_LOOT_KIT_GIVE : ROYALE_LOOT_KIT_KEEP;",
+                     "return ROYALE_LOOT_KIT_GIVE;"), "kit"),
+    # the old sweep: only loot's spared
+    "drops-swept": ((" || royale_loot_listed(held, held_count, object_index);", ";"), "sweep"),
 }
 
 
@@ -55,7 +65,11 @@ def generated(fault=None):
         # (the tag groups, four-character constants, are nothing to the plan)
         tables.replace("'weap'", "0").replace("'eqip'", "1"),
         function(loot, "royale_loot_roll_rarity"), function(loot, "royale_loot_roll_kind"),
-        function(loot, "royale_loot_roll"), function(loot, "royale_loot_plan_make")])
+        function(loot, "royale_loot_roll"), function(loot, "royale_loot_plan_make"),
+        enum_with(royale, "ROYALE_PHASE_NONE = -1"), enum_with(royale, "ROYALE_PLAYER_NONE = -1"),
+        enum_with(header, "ROYALE_LOOT_KIT_LEAVE = 0"),
+        function(loot, "royale_loot_pod_fall_start"), function(loot, "royale_loot_kit_action"),
+        function(loot, "royale_loot_listed"), function(loot, "royale_loot_purge_spares")])
     if fault:
         code = mutated(code, *fault)
     return (("generated.inc", code),)

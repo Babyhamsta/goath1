@@ -193,6 +193,59 @@ int main(int argc, char **argv)
 		CHECK(!memcmp(first.pods, second.pods, sizeof(first.pods)), "a tier changed shifts the pods");
 		return 0;
 	}
+	/* a pod falls at its time into PLAY from the match clock, or at
+	ENDGAME's start if that comes first (also straight from the drop) */
+	CASE("pod-clock")
+	{
+		CHECK(royale_loot_pod_fall_start(NONE, NONE, 100) == NONE, "a pod before PLAY");
+		CHECK(royale_loot_pod_fall_start(500, NONE, 100) == 600, "in PLAY: %ld", royale_loot_pod_fall_start(500, NONE, 100));
+		CHECK(royale_loot_pod_fall_start(500, 550, 100) == 550, "ENDGAME first: %ld",
+			royale_loot_pod_fall_start(500, 550, 100));
+		CHECK(royale_loot_pod_fall_start(500, 700, 100) == 600, "ENDGAME after it fell: %ld",
+			royale_loot_pod_fall_start(500, 700, 100));
+		CHECK(royale_loot_pod_fall_start(500, 500, 100) == 500, "straight to ENDGAME: %ld",
+			royale_loot_pod_fall_start(500, 500, 100));
+		return 0;
+	}
+	/* the start kit: the lobby's and the drop's units, again after a seat's
+	drop; never over a gulag fighter's, a gulag winner's or a redeployed
+	one's weapons */
+	CASE("kit")
+	{
+		CHECK(royale_loot_kit_action(ROYALE_PHASE_LOBBY, ROYALE_PLAYER_IN_PELICAN, FALSE, TRUE) == ROYALE_LOOT_KIT_GIVE,
+			"no kit in the lobby");
+		CHECK(royale_loot_kit_action(ROYALE_PHASE_LOBBY, ROYALE_PLAYER_IN_PELICAN, TRUE, TRUE) == ROYALE_LOOT_KIT_LEAVE,
+			"a kitted unit kitted again");
+		CHECK(royale_loot_kit_action(ROYALE_PHASE_INSERTION, ROYALE_PLAYER_FALLING, TRUE, FALSE) == ROYALE_LOOT_KIT_GIVE,
+			"a rider out of the seat with nothing not kitted again");
+		CHECK(royale_loot_kit_action(ROYALE_PHASE_PLAY, ROYALE_PLAYER_GULAG, FALSE, TRUE) == ROYALE_LOOT_KIT_KEEP,
+			"a gulag fighter's unit not taken as their own");
+		/* (the winner: the same unit, ALIVE then FALLING on the redeploy) */
+		CHECK(royale_loot_kit_action(ROYALE_PHASE_PLAY, ROYALE_PLAYER_ALIVE, TRUE, TRUE) == ROYALE_LOOT_KIT_LEAVE,
+			"a gulag winner's weapons taken");
+		CHECK(royale_loot_kit_action(ROYALE_PHASE_PLAY, ROYALE_PLAYER_FALLING, TRUE, TRUE) == ROYALE_LOOT_KIT_LEAVE,
+			"a redeployed player's weapons taken");
+		CHECK(royale_loot_kit_action(ROYALE_PHASE_INSERTION, ROYALE_PLAYER_ALIVE, TRUE, TRUE) == ROYALE_LOOT_KIT_LEAVE,
+			"a gulag winner of the drop's time disarmed");
+		/* (a unit come after the drop, whatever it holds, is left so) */
+		CHECK(royale_loot_kit_action(ROYALE_PHASE_PLAY, ROYALE_PLAYER_ALIVE, FALSE, TRUE) == ROYALE_LOOT_KIT_KEEP,
+			"a unit of PLAY disarmed");
+		return 0;
+	}
+	/* the sweep deletes only the map's own: never loot's, nor a weapon a unit
+	held (a real drop); a loose start kit pistol goes */
+	CASE("sweep")
+	{
+		long placed[] = { 11, 12 };
+		long held[] = { 21, 22, 31 };
+		long kits[] = { 31 };
+
+		CHECK(royale_loot_purge_spares(11, placed, 2, held, 3, kits, 1), "loot's swept");
+		CHECK(royale_loot_purge_spares(22, placed, 2, held, 3, kits, 1), "a real drop swept");
+		CHECK(!royale_loot_purge_spares(40, placed, 2, held, 3, kits, 1), "the map's own spared");
+		CHECK(!royale_loot_purge_spares(31, placed, 2, held, 3, kits, 1), "a loose kit pistol spared");
+		return 0;
+	}
 	fprintf(stderr, "no case %s\n", case_name);
 	return 2;
 }
