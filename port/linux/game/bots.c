@@ -1576,7 +1576,7 @@ static long bots_find_item(struct bots_bot *bot, struct unit_datum *unit, real_p
 			continue;
 		}
 		/* (Royale: none in the beam; a loot tier worth more) */
-		if (!bots_royale_point_safe(&item->object.position))
+		if (!bots_royale_item_allowed(bot->player_index, &item->object.position))
 			continue;
 		distance = bots_distance3d(&item->object.position, position);
 		value = bots_weapon_value(item->definition_index) + bots_royale_item_value(iterator.index);
@@ -4026,7 +4026,8 @@ static void bots_choose_goal(struct bots_bot *bot, long player_index, real_point
 		bots_royale.h) */
 		if (royale_active() && !bot->smooth)
 		{
-			long pickup = bots_royale_find_pickup(position, own_unit->object.body_vitality, fighting);
+			long pickup = bots_royale_find_pickup(player_index, position, own_unit->object.body_vitality,
+				fighting);
 
 			if (pickup != NONE && bots_set_item_goal(bot, pickup))
 				return;
