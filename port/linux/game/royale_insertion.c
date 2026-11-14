@@ -590,13 +590,20 @@ static void insertion_board(void)
 		SET_FLAG(placement.flags, _new_object_never_automatically_delete_bit, TRUE);
 		pelican->object_index = object_new(&placement);
 		if (pelican->object_index == NONE)
+		{
+			error(_error_log, "royale insertion: Pelican %d not made at %.1f %.1f %.1f", index, position.x,
+				position.y, position.z);
 			break;
+		}
 		insertion.pelican_count = index + 1;
 		SET_FLAG(object_get(pelican->object_index)->object.damage_flags, _object_cannot_take_damage_bit, TRUE);
 		unit_set_enterable_by_player(pelican->object_index, FALSE);
 		object_set_automatic_deactivation(pelican->object_index, FALSE);
 
 		seat_count = insertion_pelican_seats(pelican->object_index, seats);
+		error(_error_log, "royale insertion: Pelican %d (%d seats) from %.1f %.1f to %.1f %.1f at %.1f, window %ld..%ld",
+			index, seat_count, pelican->path.start.x, pelican->path.start.y, pelican->path.end.x, pelican->path.end.y,
+			pelican->path.start.z, pelican->enter_ticks, pelican->leave_ticks);
 		if (seats_per_pelican == 0)
 			seats_per_pelican = seat_count;
 		/* (spread the players evenly over as many Pelicans as they need, an
