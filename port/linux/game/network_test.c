@@ -2637,6 +2637,14 @@ void network_test_update(
 			network_game_server_port_clear_queued_players(global_network_game_server_get());
 			platform_log("network test: the next game");
 		}
+		/* (HALO_NETWORK_TEST_QUIT=1: the last game of the list over, its
+		scores shown and the lobby back, the test is done: a long game's run,
+		Royale's, ends with it rather than at debug.exit_after) */
+		else if (getenv("HALO_NETWORK_TEST_QUIT") && atoi(getenv("HALO_NETWORK_TEST_QUIT")) > 0)
+		{
+			platform_log("network test: the last game is over: quitting (HALO_NETWORK_TEST_QUIT)");
+			exit(0);
+		}
 	}
 
 	if (!main_menu_loaded)

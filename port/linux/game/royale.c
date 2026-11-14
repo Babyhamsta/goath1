@@ -658,6 +658,23 @@ static void royale_player_killed_player(
 		royale_gulag_player_died(dead_player_index, killing_player_index);
 }
 
+/* a player's score, as the scoreboard and the postgame's places rank them:
+their squad's place first (100 a squad beaten), then their kills, so the
+winning squad's players come first */
+static long royale_get_player_score(
+	long player_index,
+	enum get_score_type score_type)
+{
+	short squad = royale_squad_of(player_index);
+	short place = squad != NONE ? royale_squad_placement(squad) : 0;
+	long score = royale_player_kills(player_index);
+
+	(void)score_type;
+	if (place > 0)
+		score += (long)(royale.rules.squad_count + 1 - place) * 100;
+	return score;
+}
+
 struct game_engine *royale_engine_get(
 	struct game_engine const *slayer)
 {
@@ -666,6 +683,7 @@ struct game_engine *royale_engine_get(
 	royale.engine.initialize_for_new_map = royale_initialize_for_new_map;
 	royale.engine.update = royale_update;
 	royale.engine.player_killed_player = royale_player_killed_player;
+	royale.engine.get_player_score = royale_get_player_score;
 	return &royale.engine;
 }
 
