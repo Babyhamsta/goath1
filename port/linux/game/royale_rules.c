@@ -28,6 +28,7 @@ one, the one who downed it. Nothing here reads a clock or a random of the
 game's: the same events give the same state on every run.
 */
 
+#include "cseries.h"
 #include "royale_rules.h"
 
 #define SLOT_NONE 0xFF

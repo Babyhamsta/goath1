@@ -51,6 +51,7 @@ the lobby; HALO_ROYALE_MAP_CONFIG=<file> reads a map config from a file.
 #include "text/font_group.h"
 #include "text/unicode.h"
 #include "units/units.h"
+#include "units/unit_control_data.h"
 #include "game_modes.h"
 #include "network_standard.h"
 #include "royale.h"

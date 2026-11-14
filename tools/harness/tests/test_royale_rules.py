@@ -28,7 +28,7 @@ NEGATIVE_CONTROLS = {
 
 def generated(fault=None):
     header = read("port/linux/game/royale_rules.h")
-    body = re.sub(r'^#include "royale_rules.h"$', "", read("port/linux/game/royale_rules.c"), flags=re.M)
+    body = re.sub(r'^#include "(royale_rules|cseries)\.h"$', "", read("port/linux/game/royale_rules.c"), flags=re.M)
     if fault:
         body = mutated(body, *fault)
     return (("royale_rules.inc", header + "\n" + body),)
