@@ -271,18 +271,6 @@ static long royale_loot_find_tag(
 	return NONE;
 }
 
-/* the match's seed, the same on every machine: a network game's (each
-machine's game options have it), else this machine's game's */
-static unsigned long royale_loot_match_seed(
-	void)
-{
-	short connection = game_connection();
-
-	if (connection == _game_connection_network_client || connection == _game_connection_network_server)
-		return (unsigned long)network_game_get_random_seed();
-	return *get_global_random_seed_address();
-}
-
 struct royale_loot_plan const *royale_loot_plan_get(
 	void)
 {
@@ -317,7 +305,7 @@ void royale_loot_start(
 	royale_loot.landing_effect = royale_loot_find_tag('effe', landing_names, NUMBEROF(landing_names));
 	for (index = 0; index < config->loot_spot_count && index < ROYALE_MAXIMUM_LOOT_SPOTS; index++)
 		spot_tiers[index] = config->loot_spots[index].tier;
-	royale_loot.seed = royale_loot_match_seed();
+	royale_loot.seed = royale_match_seed();
 	royale_loot_plan_make(royale_loot.seed, spot_tiers, config->loot_spot_count, config->pod_spot_count,
 		royale_loot.available, &royale_loot.plan);
 	for (index = 0; index < ROYALE_LOOT_POD_COUNT; index++)
