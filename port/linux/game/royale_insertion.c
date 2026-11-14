@@ -96,6 +96,7 @@ static struct
 {
 	boolean started;
 	boolean boarded;
+	boolean creating; /* (royale_insertion_creating) */
 	unsigned long seed;
 	long insertion_ticks;
 	struct royale_bounds bounds;
@@ -526,7 +527,32 @@ static void insertion_board(void)
 	short index;
 	short next = 0;
 
+	short config_paths[ROYALE_MAXIMUM_FLIGHT_PATHS];
+	short config_path_count = 0;
+
 	insertion.boarded = TRUE;
+	/* the map's paths with a length, shuffled */
+	if (insertion.config)
+	{
+		short path_index;
+
+		for (path_index = 0; path_index < insertion.config->flight_path_count &&
+			path_index < ROYALE_MAXIMUM_FLIGHT_PATHS; path_index++)
+		{
+			struct royale_flight_path const *path = &insertion.config->flight_paths[path_index];
+
+			if (path_length(path, NULL) > 1.0f)
+				config_paths[config_path_count++] = path_index;
+		}
+		for (path_index = config_path_count - 1; path_index > 0; path_index--)
+		{
+			short other = seed_random_range(&insertion.seed, 0, (short)(path_index + 1));
+			short swap = config_paths[path_index];
+
+			config_paths[path_index] = config_paths[other];
+			config_paths[other] = swap;
+		}
+	}
 	if (tag_index == NONE || player_count == 0)
 	{
 		if (tag_index == NONE)
@@ -555,11 +581,11 @@ static void insertion_board(void)
 
 		csmemset(pelican, 0, sizeof(*pelican));
 		pelican->object_index = NONE;
-		if (insertion.config && index < insertion.config->flight_path_count && insertion.config->flight_paths[index].start.x !=
-			insertion.config->flight_paths[index].end.x)
+		if (index < config_path_count)
 		{
-			/* (the map's own paths, each flown either way) */
-			pelican->path = insertion.config->flight_paths[index];
+			/* (the map's own paths, drawn in a random order, each flown
+			either way) */
+			pelican->path = insertion.config->flight_paths[config_paths[index]];
 			if (seed_random_range(&insertion.seed, 0, 2))
 			{
 				real_point3d swap = pelican->path.start;
@@ -588,7 +614,9 @@ static void insertion_board(void)
 			placement.forward = *global_forward3d;
 		placement.up = *global_up3d;
 		SET_FLAG(placement.flags, _new_object_never_automatically_delete_bit, TRUE);
+		insertion.creating = TRUE;
 		pelican->object_index = object_new(&placement);
+		insertion.creating = FALSE;
 		if (pelican->object_index == NONE)
 		{
 			error(_error_log, "royale insertion: Pelican %d not made at %.1f %.1f %.1f", index, position.x,
@@ -914,6 +942,11 @@ boolean royale_insertion_pelican_position(long player_index, real_point3d *posit
 boolean royale_insertion_running(void)
 {
 	return TRUE;
+}
+
+boolean royale_insertion_creating(void)
+{
+	return insertion.creating;
 }
 
 boolean royale_insertion_jump(long player_index)

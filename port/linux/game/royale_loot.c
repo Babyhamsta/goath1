@@ -77,10 +77,11 @@ static struct royale_loot_kind_definition const royale_loot_kinds[NUMBER_OF_ROYA
 	{ ROYALE_LOOT_RARITY_RARE, 4, 4, 0, 'weap', { "weapons\\sniper rifle\\sniper rifle", NULL } },
 	{ ROYALE_LOOT_RARITY_RARE, 3, 2, 0, 'weap', { "weapons\\rocket launcher\\rocket launcher", NULL } },
 	{ ROYALE_LOOT_RARITY_RARE, 3, 0, 0, 'weap', { "weapons\\fuel rod gun\\fuel rod gun", NULL } },
+	/* (the stock maps' power-ups, b30's too, are named by their folders) */
 	{ ROYALE_LOOT_RARITY_POWERUP, 3, 0, 0, 'eqip',
-		{ "powerups\\active camouflage\\active camouflage", "powerups\\active camoflage\\active camoflage" } },
-	{ ROYALE_LOOT_RARITY_POWERUP, 3, 0, 0, 'eqip', { "powerups\\over shield\\over shield", NULL } },
-	{ ROYALE_LOOT_RARITY_POWERUP, 6, 0, 0, 'eqip', { "powerups\\health pack\\health pack", "powerups\\healthpack\\healthpack" } },
+		{ "powerups\\active camouflage", "powerups\\active camouflage\\active camouflage" } },
+	{ ROYALE_LOOT_RARITY_POWERUP, 3, 0, 0, 'eqip', { "powerups\\over shield", "powerups\\over shield\\over shield" } },
+	{ ROYALE_LOOT_RARITY_POWERUP, 6, 0, 0, 'eqip', { "powerups\\health pack", "powerups\\healthpack\\healthpack" } },
 };
 
 /* a spot's tier (enum royale_loot_tier): the weights of nothing, common,
@@ -282,7 +283,7 @@ void royale_loot_start(
 {
 	static char const *const crate_names[] = { "scenery\\c_storage\\c_storage" };
 	static char const *const trail_names[] =
-		{ "scenery\\emitters\\heavysmoke\\effects\\heavysmoke", "weapons\\rocket launcher\\effects\\contrail" };
+		{ "weapons\\frag grenade\\effects\\smoke", "scenery\\emitters\\heavysmoke\\effects\\heavysmoke" };
 	static char const *const landing_names[] =
 		{ "vehicles\\pelican\\effects\\pelican explosion", "weapons\\frag grenade\\effects\\explosion" };
 	short spot_tiers[ROYALE_MAXIMUM_LOOT_SPOTS];
