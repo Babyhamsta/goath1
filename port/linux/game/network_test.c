@@ -2601,6 +2601,16 @@ void network_test_update(
 				network_test.postgame_seconds = 0.0f;
 				network_game_server_reset_to_pregame(global_network_game_server_get());
 			}
+			/* (HALO_NETWORK_TEST_QUIT=<seconds>: the last game of the list
+			over and its scores shown that long, the test is done, rather
+			than waiting on the scores for debug.exit_after: a long game's
+			run, a Royale match's, ends with it) */
+			else if (getenv("HALO_NETWORK_TEST_QUIT") && atoi(getenv("HALO_NETWORK_TEST_QUIT")) > 0 &&
+				network_test.postgame_seconds >= (real)atoi(getenv("HALO_NETWORK_TEST_QUIT")))
+			{
+				platform_log("network test: the last game is over: quitting (HALO_NETWORK_TEST_QUIT)");
+				exit(0);
+			}
 		}
 	}
 	/* (a joining machine's player: the other team again in the next game's
@@ -2636,14 +2646,6 @@ void network_test_update(
 			later one, the server holding it behind the queued player */
 			network_game_server_port_clear_queued_players(global_network_game_server_get());
 			platform_log("network test: the next game");
-		}
-		/* (HALO_NETWORK_TEST_QUIT=1: the last game of the list over, its
-		scores shown and the lobby back, the test is done: a long game's run,
-		Royale's, ends with it rather than at debug.exit_after) */
-		else if (getenv("HALO_NETWORK_TEST_QUIT") && atoi(getenv("HALO_NETWORK_TEST_QUIT")) > 0)
-		{
-			platform_log("network test: the last game is over: quitting (HALO_NETWORK_TEST_QUIT)");
-			exit(0);
 		}
 	}
 
