@@ -47,6 +47,8 @@ the lobby; HALO_ROYALE_MAP_CONFIG=<file> reads a map config from a file.
 #include "rasterizer/rasterizer.h"
 #include "render/render.h"
 #include "render/render_camera_projection.h"
+#include "scenario/scenario.h"
+#include "tag_files/tag_groups.h"
 #include "text/draw_string.h"
 #include "text/font_group.h"
 #include "text/unicode.h"
@@ -89,6 +91,7 @@ static struct
 	/* the lanes started (the game's first update) */
 	boolean started;
 	boolean results_logged;
+	long test_end_ticks;
 	/* this tick's: who holds action (players.c), who revives whom, the
 	rules' events */
 	boolean action_held[ROYALE_RULES_MAXIMUM_SLOTS];
@@ -357,6 +360,7 @@ static void royale_settings_build(
 	royale.settings.results_ticks = royale_debug_seconds("HALO_ROYALE_RESULTS_SECONDS", ROYALE_RESULTS_SECONDS) *
 		TICKS_PER_SECOND;
 	royale.settings.endgame_squads = ROYALE_ENDGAME_SQUADS;
+	royale.test_end_ticks = royale_debug_seconds("HALO_ROYALE_TEST_END", 0) * TICKS_PER_SECOND;
 	royale.settings.skip_insertion = !royale_insertion_running();
 }
 
@@ -364,7 +368,7 @@ static void royale_settings_build(
 static char const *royale_map_short_name(
 	void)
 {
-	char const *name = main_get_map_name();
+	char const *name = global_scenario_index != NONE ? tag_get_name(global_scenario_index) : NULL;
 	char const *last = name;
 
 	if (!name)
@@ -491,6 +495,17 @@ static void royale_host_tick(
 	{
 		if (royale.rules.slots[slot].state != ROYALE_RULES_NONE && royale_player_of_slot(slot) == NONE)
 			royale_rules_leave(&royale.rules, &royale.settings, slot, royale_gulag_proc);
+	}
+	/* (debug: HALO_ROYALE_TEST_END=<seconds> puts every squad but the first
+	out at that time of the match, for the results screen) */
+	if (royale.test_end_ticks > 0 && royale.rules.match_time == royale.test_end_ticks)
+	{
+		for (slot = 0; slot < ROYALE_RULES_MAXIMUM_SLOTS; slot++)
+		{
+			if (royale.rules.slots[slot].squad != 0xFF && royale.rules.slots[slot].squad != 0)
+				royale_rules_leave(&royale.rules, &royale.settings, slot, royale_gulag_proc);
+		}
+		platform_log("royale: test end");
 	}
 	royale_find_revivers();
 	royale_rules_tick(&royale.rules, &royale.settings, royale.reviver, royale.events, royale_match_seed(),

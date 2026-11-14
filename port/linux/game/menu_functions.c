@@ -7631,6 +7631,9 @@ static void gametype_rules_text(long profile_index, wchar_t *text, short size)
 	case _game_mode_gun_game:
 		usnprintf(text, size - 1, L"%s\r\nFree for all\r\nA kill with each weapon", kind);
 		break;
+	case _game_mode_royale:
+		usnprintf(text, size - 1, L"%s\r\nSquads of two\r\nThe last squad alive wins", kind);
+		break;
 	default:
 		usnprintf(text, size - 1, L"%s\r\n%s\r\nScore to win: %ld", kind ? kind : engine_names[engine],
 			variant.universal_variant.teams ? L"Teams" : L"Free for all", variant.universal_variant.score_to_win);
@@ -14925,8 +14928,8 @@ struct gametype_option
 static struct gametype_option const gametype_options[] =
 {
 	/* OPENCE OPTIONS (OpenCE's gametypes: game_modes.c) */
-	{ "oce_mode_spinner", _option_option_byte, OPTIONS_FIELD(mode), 0, 4,
-		{ _game_mode_none, _game_mode_swat, _game_mode_infection, _game_mode_gun_game } },
+	{ "oce_mode_spinner", _option_option_byte, OPTIONS_FIELD(mode), 0, 5,
+		{ _game_mode_none, _game_mode_swat, _game_mode_infection, _game_mode_gun_game, _game_mode_royale } },
 	{ "oce_hardcore_spinner", _option_option_byte, OPTIONS_FIELD(hardcore), 0, 2, { FALSE, TRUE } },
 	{ "inf_zombies_spinner", _option_option_byte, OPTIONS_FIELD(infection_initial_zombies), 0, 6, { 1, 2, 3, 4, 8, 16 } },
 	{ "inf_speed_spinner", _option_option_byte, OPTIONS_FIELD(infection_zombie_speed), 0, 6,
@@ -14938,6 +14941,10 @@ static struct gametype_option const gametype_options[] =
 	{ "gg_order_spinner", _option_option_byte, OPTIONS_FIELD(gun_game_order), 0, 3,
 		{ _gun_game_order_strongest_first, _gun_game_order_weakest_first, _gun_game_order_random } },
 	{ "gg_melee_spinner", _option_option_byte, OPTIONS_FIELD(gun_game_melee_demotes), 0, 2, { FALSE, TRUE } },
+	/* (Royale: royale.c) */
+	{ "br_bleed_spinner", _option_option_byte, OPTIONS_FIELD(royale_bleed_out), 0, 5, { 10, 20, 30, 45, 60 } },
+	{ "br_revive_spinner", _option_option_byte, OPTIONS_FIELD(royale_revive), 0, 4, { 1, 2, 3, 5 } },
+	{ "br_gulag_spinner", _option_option_byte, OPTIONS_FIELD(royale_gulag), 0, 2, { FALSE, TRUE } },
 	/* player options */
 	{ "number_of_lives_spinner", _option_long, VARIANT_FIELD(universal_variant.lives), 0, 4, { 0, 1, 3, 5 } },
 	{ "maximum_health_spinner", _option_health, 0, 0, 6, { 5, 10, 15, 20, 30, 40 } },
@@ -15433,7 +15440,7 @@ static boolean gametype_options_save(struct widget_instance *widget)
 	{
 		if (edit_options()->mode == _game_mode_infection)
 			edit_variant()->universal_variant.teams = TRUE;
-		else if (edit_options()->mode == _game_mode_gun_game)
+		else if (edit_options()->mode == _game_mode_gun_game || edit_options()->mode == _game_mode_royale)
 			edit_variant()->universal_variant.teams = FALSE;
 	}
 	return TRUE;
@@ -15654,7 +15661,7 @@ static void gametype_option_help(struct widget_instance *list)
 
 		for (row = list->child; row; row = row->next)
 		{
-			if (strncmp(row->name, "op_inf_", 7) && strncmp(row->name, "op_gg_", 6))
+			if (strncmp(row->name, "op_inf_", 7) && strncmp(row->name, "op_gg_", 6) && strncmp(row->name, "op_br_", 6))
 				continue;
 			if (row->visible)
 			{

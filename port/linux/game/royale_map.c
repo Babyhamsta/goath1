@@ -250,6 +250,44 @@ static void royale_map_push_out(struct royale_bounds const *bounds, real_point3d
 		point->y = bounds->maximum.y + ROYALE_MAP_PUSH_MARGIN;
 }
 
+/* what royale_map_keep_point did */
+enum
+{
+	_royale_map_kept_inside = 0, /* inside, out of every blocked box: now its last safe point */
+	_royale_map_kept_pushed_out, /* in a blocked box: put out of its nearest side */
+	_royale_map_kept_put_back, /* out of bounds: put back at its last safe point */
+	_royale_map_kept_lost, /* out of bounds with no safe point yet: left */
+};
+
+/* a player's point kept on the island and out of the blocked boxes: moved
+(and what was done) or, inside, remembered as its last safe point */
+static short royale_map_keep_point(struct royale_map_config const *config, real_point3d *point,
+	boolean *safe_valid, real_point3d *safe_point)
+{
+	short index;
+
+	for (index = 0; index < config->blocked_entrance_count; index++)
+	{
+		struct royale_bounds const *box = &config->blocked_entrances[index].bounds;
+
+		if (royale_map_inside(box, point, 0.0f))
+		{
+			royale_map_push_out(box, point);
+			return _royale_map_kept_pushed_out;
+		}
+	}
+	if (!royale_map_inside(&config->bounds, point, 0.0f))
+	{
+		if (!*safe_valid)
+			return _royale_map_kept_lost;
+		*point = *safe_point;
+		return _royale_map_kept_put_back;
+	}
+	*safe_point = *point;
+	*safe_valid = TRUE;
+	return _royale_map_kept_inside;
+}
+
 static void royale_map_move(long object_index, real_point3d const *point)
 {
 	struct object_datum *object = object_get(object_index);
@@ -264,8 +302,7 @@ static void royale_map_keep_player(long player_index, struct player_datum const 
 	long slot = DATUM_INDEX_TO_ABSOLUTE_INDEX(player_index);
 	long object_index;
 	real_point3d origin;
-	short index;
-	boolean blocked = FALSE;
+	short kept;
 
 	if (!VALID_INDEX(slot, ROYALE_MAXIMUM_PLAYERS))
 		return;
@@ -290,29 +327,9 @@ static void royale_map_keep_player(long player_index, struct player_datum const 
 	object_index = object_get_ultimate_parent(player->unit_index);
 	object_get_origin(object_index, &origin);
 
-	for (index = 0; index < config->blocked_entrance_count; index++)
-	{
-		struct royale_bounds const *box = &config->blocked_entrances[index].bounds;
-
-		if (royale_map_inside(box, &origin, 0.0f))
-		{
-			royale_map_push_out(box, &origin);
-			royale_map_move(object_index, &origin);
-			blocked = TRUE;
-			break;
-		}
-	}
-	if (blocked)
-		return;
-
-	if (!royale_map_inside(&config->bounds, &origin, 0.0f))
-	{
-		if (royale_map.safe_valid[slot])
-			royale_map_move(object_index, &royale_map.safe_point[slot]);
-		return;
-	}
-	royale_map.safe_point[slot] = origin;
-	royale_map.safe_valid[slot] = TRUE;
+	kept = royale_map_keep_point(config, &origin, &royale_map.safe_valid[slot], &royale_map.safe_point[slot]);
+	if (kept == _royale_map_kept_pushed_out || kept == _royale_map_kept_put_back)
+		royale_map_move(object_index, &origin);
 }
 
 /* ---------- public code */

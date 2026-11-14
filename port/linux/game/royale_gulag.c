@@ -18,6 +18,7 @@ objects go to clients through the network.
 */
 
 #include "cseries.h"
+#include "cseries/errors.h"
 #include "game/game.h"
 #include "game/game_engine.h"
 #include "game/players.h"
@@ -365,6 +366,14 @@ void royale_gulag_tick(
 
 	royale_gulag_queue_step(&royale_gulag.queue, royale_seconds_to_ticks(ROYALE_GULAG_ALONE_SECONDS),
 		royale_seconds_to_ticks(ROYALE_GULAG_FIGHT_SECONDS), &event);
+	if (event.type != ROYALE_GULAG_EVENT_NONE)
+	{
+		error(_error_silent, "royale gulag: %s %ld %ld (%d waiting)", event.type == ROYALE_GULAG_EVENT_FIGHT ? "fight" :
+			event.type == ROYALE_GULAG_EVENT_WIN_BY_DEFAULT ? "win by default" : "time up",
+			DATUM_INDEX_TO_ABSOLUTE_INDEX(event.player[0]),
+			event.player[1] == NONE ? -1L : DATUM_INDEX_TO_ABSOLUTE_INDEX(event.player[1]),
+			royale_gulag.queue.waiting_count);
+	}
 	switch (event.type)
 	{
 	case ROYALE_GULAG_EVENT_FIGHT:
@@ -402,6 +411,8 @@ boolean royale_gulag_player_died(
 	winner = royale_gulag_queue_fighter_died(&royale_gulag.queue, player_index);
 	if (winner != NONE)
 	{
+		error(_error_silent, "royale gulag: %ld won, %ld out", DATUM_INDEX_TO_ABSOLUTE_INDEX(winner),
+			DATUM_INDEX_TO_ABSOLUTE_INDEX(player_index));
 		royale_gulag_win(winner);
 		return FALSE;
 	}

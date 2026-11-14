@@ -117,11 +117,11 @@ int main(int argc, char **argv)
 	{
 		/* at the north edge's band (y 140), glassed when the front passes 0.05
 		(tick 300 + 0.1 * 600 = 360): 3 a second until tick 900, then the
-		default second stage's 4 a second for 150 ticks */
+		default second stage's 0.04 a second for 150 ticks (past the front from tick 361) */
 		real taken = damage_over(0.0f, 140.0f, 0, 900 + 150);
 		real safe = damage_over(0.0f, -40.0f, 0, 900 + 150);
 
-		CHECK(fabsf(taken - (3.0f * (900 - 360) / 30.0f + 4.0f * 150 / 30.0f)) < 0.2f,
+		CHECK(fabsf(taken - (3.0f * (900 - 361) / 30.0f + 0.04f * 150 / 30.0f)) < 0.05f,
 			"the glassed band took %f", taken);
 		CHECK(safe == 0.0f, "the far side took %f before the front reached it", safe);
 		/* none during the first hold */

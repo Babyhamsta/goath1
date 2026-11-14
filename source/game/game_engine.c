@@ -9788,6 +9788,10 @@ long game_engine_remap_object_definition(
 	{
 		return definition_index;
 	}
+	/* port: Royale's own objects: the insertion's Pelicans
+	(port/linux/game/royale_insertion.c) */
+	if (royale_insertion_creating())
+		return definition_index;
 
 	object_type = object_definition_get(definition_index)->object.type;
 	if (object_type==_object_type_vehicle)
