@@ -110,6 +110,12 @@ static struct
 	(royale_network_state_clock_size); a client's: the host's clock taken */
 	long clock_bytes;
 	boolean clock_taken;
+	/* every machine's: the states and phase last logged (royale_log_changes),
+	and a client's states taken and clocks put right */
+	byte logged_state[ROYALE_RULES_MAXIMUM_SLOTS];
+	byte logged_phase;
+	long states_taken;
+	long clock_corrections;
 } royale;
 
 /* (the rules, the gulag and the lanes by player slot: every player the
@@ -414,6 +420,10 @@ static boolean royale_initialize_for_new_map(
 	royale.results_logged = FALSE;
 	royale.clock_bytes = 0;
 	royale.clock_taken = FALSE;
+	csmemset(royale.logged_state, ROYALE_RULES_NONE, sizeof(royale.logged_state));
+	royale.logged_phase = ROYALE_RULES_PHASE_LOBBY;
+	royale.states_taken = 0;
+	royale.clock_corrections = 0;
 	royale.config_loaded = royale_map_config_load(royale_map_short_name(), &royale.config);
 	platform_log("royale: map %s, config %s, insertion %s", royale_map_short_name(),
 		royale.config_loaded ? "loaded" : "none", royale.settings.skip_insertion ? "skipped" : "on");
@@ -604,6 +614,29 @@ static void royale_downed_update(
 	}
 }
 
+/* every machine logs each phase and player state as it comes, alike, with
+the match time: a host's and a client's logs compare line by line */
+static void royale_log_changes(
+	void)
+{
+	long slot;
+
+	if (royale.logged_phase != royale.rules.phase)
+	{
+		platform_log("royale: phase %d -> %d at match tick %ld (play began %ld)", royale.logged_phase,
+			royale.rules.phase, royale.rules.match_time, royale.rules.play_start);
+		royale.logged_phase = royale.rules.phase;
+	}
+	for (slot = 0; slot < ROYALE_RULES_MAXIMUM_SLOTS; slot++)
+	{
+		if (royale.logged_state[slot] == royale.rules.slots[slot].state)
+			continue;
+		platform_log("royale: slot %ld state %d -> %d at match tick %ld", slot, royale.logged_state[slot],
+			royale.rules.slots[slot].state, royale.rules.match_time);
+		royale.logged_state[slot] = royale.rules.slots[slot].state;
+	}
+}
+
 static void royale_log_results(
 	void)
 {
@@ -614,6 +647,11 @@ static void royale_log_results(
 	royale.results_logged = TRUE;
 	platform_log("royale: results: squad %d wins after %ld ticks (%d squads)",
 		royale.rules.winner == 0xFF ? -1 : royale.rules.winner, royale.rules.match_time, royale.rules.squad_count);
+	if (network_game_distributed_client())
+	{
+		platform_log("royale: client took %ld host states, its clock put right %ld times", royale.states_taken,
+			royale.clock_corrections);
+	}
 	for (squad = 0; squad < royale.rules.squad_count; squad++)
 	{
 		long a = royale_squad_member(squad, 0);
@@ -638,6 +676,7 @@ static void royale_update(
 	else
 		royale_rules_advance(&royale.rules, &royale.settings);
 	royale_downed_update();
+	royale_log_changes();
 	royale_log_results();
 	/* (the lanes, on every machine, before the objects move) */
 	royale_map_tick();
@@ -906,8 +945,19 @@ boolean royale_read_network_state(
 		return FALSE;
 	/* (the host's clock was its own when it sent this, half a round trip
 	ago) */
-	royale_rules_take(&royale.rules, &rules, (long)(distributed_own_round_trip_ticks() / 2.0f + 0.5f),
-		ROYALE_CLOCK_SLACK_TICKS, first || !royale.clock_taken);
+	{
+		long before = royale.rules.match_time;
+		long ahead = (long)(distributed_own_round_trip_ticks() / 2.0f + 0.5f);
+
+		royale_rules_take(&royale.rules, &rules, ahead, ROYALE_CLOCK_SLACK_TICKS, first || !royale.clock_taken);
+		royale.states_taken++;
+		if (royale.rules.match_time != before)
+		{
+			royale.clock_corrections++;
+			platform_log("royale: client clock %ld -> %ld (host's %ld, %ld ticks ago)", before, royale.rules.match_time,
+				rules.match_time, ahead);
+		}
+	}
 	royale.clock_taken = TRUE;
 	royale_gulag_take_network_state();
 	return TRUE;
