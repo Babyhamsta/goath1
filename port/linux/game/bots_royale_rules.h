@@ -60,6 +60,10 @@ int bots_royale_chord(struct bots_royale_box const *box, float x, float y, float
 1 at end; beyond, outside 0 to 1) */
 float bots_royale_path_progress(float start_x, float start_y, float end_x, float end_y, float x, float y);
 
+/* a squad jumps: over the island (its Pelican inside the bounds), at its
+fraction of the way or with the island nearly passed */
+int bots_royale_should_jump(float progress, float fraction, int over_island);
+
 /* steering a free fall to (to_x, to_y) from (x, y): the way to face
 (radians) and the throttle (0 to 1: easing off within a few units) */
 void bots_royale_fall_steer(float x, float y, float to_x, float to_y, float *yaw, float *throttle);

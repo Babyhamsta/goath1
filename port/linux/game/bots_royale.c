@@ -240,7 +240,7 @@ void bots_royale_report(void)
 
 /* its squad's jump: the path nearest its Pelican, its squad's share of
 it, the landing beside it (ahead of the beam's first stage) */
-static void bots_royale_plan_jump(struct bots_royale_bot *bot, long player_index, real_point3d const *pelican,
+static boolean bots_royale_plan_jump(struct bots_royale_bot *bot, long player_index, real_point3d const *pelican,
 	real_vector3d const *velocity)
 {
 	short squad = royale_squad_of(player_index);
@@ -249,12 +249,11 @@ static void bots_royale_plan_jump(struct bots_royale_bot *bot, long player_index
 	real fraction_random, side_random;
 
 	/* (its Pelican's way over the island: where its line crosses the
-	bounds; standing still, the place it is) */
+	bounds; not yet moving, or not crossing it: no plan yet) */
 	if (!bots_royale_chord(&bots_royale.box, pelican->x, pelican->y, velocity->i, velocity->j,
 		&bot->path_start_x, &bot->path_start_y, &bot->path_end_x, &bot->path_end_y))
 	{
-		bot->path_start_x = bot->path_end_x = pelican->x;
-		bot->path_start_y = bot->path_end_y = pelican->y;
+		return FALSE;
 	}
 	fraction_random = bots_royale_unit_random(&squad_random);
 	side_random = bots_royale_unit_random(&squad_random) * 2.0f - 1.0f;
@@ -267,6 +266,7 @@ static void bots_royale_plan_jump(struct bots_royale_bot *bot, long player_index
 	if (royale_squadmate_of(player_index) != NONE && player_index > royale_squadmate_of(player_index))
 		bot->landing_x += BOTS_ROYALE_MATE_OFFSET;
 	bot->planned = TRUE;
+	return TRUE;
 }
 
 /* the jump button pressed and let go in turn (a press, not a hold) */
@@ -301,15 +301,19 @@ boolean bots_royale_control(long bot_index, long player_index, struct bots_royal
 
 		if (!royale_insertion_pelican_position(player_index, &position, &velocity))
 			return TRUE;
-		if (!bot->planned)
-			bots_royale_plan_jump(bot, player_index, &position, &velocity);
+		if (!bot->planned && !bots_royale_plan_jump(bot, player_index, &position, &velocity))
+			return TRUE;
 		progress = bots_royale_path_progress(bot->path_start_x, bot->path_start_y, bot->path_end_x, bot->path_end_y,
 			position.x, position.y);
 		control->yaw = (real)atan2(bot->landing_y - position.y, bot->landing_x - position.x);
 		control->pitch = -0.6f;
-		/* (at its point, or the path nearly out) */
-		if (progress >= bot->jump_fraction || progress >= 0.93f)
+		/* (at its point over the island, or the island nearly passed) */
+		if (bots_royale_should_jump(progress, bot->jump_fraction,
+			position.x >= bots_royale.box.minimum_x && position.x <= bots_royale.box.maximum_x &&
+			position.y >= bots_royale.box.minimum_y && position.y <= bots_royale.box.maximum_y))
+		{
 			control->flags |= bots_royale_press(FLAG(_unit_control_jump_bit));
+		}
 		return TRUE;
 	}
 

@@ -89,6 +89,11 @@ int main(void)
 		fabsf(x) < 0.01f && fabsf(y - 100) < 0.01f && fabsf(yaw - 100) < 0.01f && fabsf(throttle - 200) < 0.01f);
 	CHECK("chord_misses", !bots_royale_chord(&box, -50, 50, 0, 1, &x, &y, &yaw, &throttle));
 	CHECK("chord_still", !bots_royale_chord(&box, 50, 50, 0, 0, &x, &y, &yaw, &throttle));
+	CHECK("jump_at_point", bots_royale_should_jump(0.5f, 0.4f, 1));
+	CHECK("no_jump_before_point", !bots_royale_should_jump(0.3f, 0.4f, 1));
+	CHECK("no_jump_off_island", !bots_royale_should_jump(0.5f, 0.4f, 0));
+	CHECK("no_jump_before_island", !bots_royale_should_jump(-0.1f, 0.0f, 1));
+	CHECK("jump_island_nearly_passed", bots_royale_should_jump(0.95f, 0.99f, 1));
 	CHECK("progress", fabsf(bots_royale_path_progress(0, 0, 100, 0, 25, 7) - 0.25f) < 0.001f);
 
 	/* the fall: towards the landing, easing off on it */

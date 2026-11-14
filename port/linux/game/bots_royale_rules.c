@@ -177,6 +177,15 @@ float bots_royale_path_progress(float start_x, float start_y, float end_x, float
 	return ((x - start_x) * dx + (y - start_y) * dy) / length2;
 }
 
+int bots_royale_should_jump(float progress, float fraction, int over_island)
+{
+	/* (never off the island, before the way over it starts, nor past it:
+	the Pelican's line in and out of the bounds) */
+	if (!over_island || progress < 0.0f || progress > 1.0f)
+		return 0;
+	return progress >= fraction || progress >= 0.9f;
+}
+
 void bots_royale_fall_steer(float x, float y, float to_x, float to_y, float *yaw, float *throttle)
 {
 	float dx = to_x - x, dy = to_y - y;
