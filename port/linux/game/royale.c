@@ -692,8 +692,9 @@ static void royale_log_changes(
 
 	if (royale.logged_phase != royale.rules.phase)
 	{
-		platform_log("royale: phase %d -> %d at match tick %ld (play began %ld)", royale.logged_phase,
-			royale.rules.phase, royale.rules.match_time, royale.rules.play_start);
+		platform_log("royale: phase %d -> %d at match tick %ld (play began %ld; %ld host states taken, %ld clock fixes)",
+			royale.logged_phase, royale.rules.phase, royale.rules.match_time, royale.rules.play_start,
+			royale.states_taken, royale.clock_corrections);
 		royale.logged_phase = royale.rules.phase;
 	}
 	for (slot = 0; slot < ROYALE_RULES_MAXIMUM_SLOTS; slot++)
