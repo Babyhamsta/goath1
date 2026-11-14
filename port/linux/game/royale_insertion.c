@@ -16,6 +16,7 @@ Who does what:
 */
 
 #include "cseries.h"
+#include "cseries/errors.h"
 #include "effects/material_effects.h"
 #include "effects/player_effects.h"
 #include "game/game.h"
