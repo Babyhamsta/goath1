@@ -53,6 +53,7 @@ What is seen and heard (each machine's own, nothing simulated):
 #include "rasterizer/rasterizer.h"
 #include "render/render.h"
 #include "scenario/scenario.h"
+#include "structures/structure_bsp_definitions.h"
 #include "sound/game_sound.h"
 #include "sound/sound_definitions.h"
 #include "tag_files/tag_groups.h"
@@ -373,6 +374,23 @@ void royale_beam_start(
 	if (!config)
 		return;
 	royale_beam.bounds = config->bounds;
+	if (royale_beam.bounds.maximum.x <= royale_beam.bounds.minimum.x ||
+		royale_beam.bounds.maximum.y <= royale_beam.bounds.minimum.y)
+	{
+		/* (no bounds: the structure BSP's, a sixth in from each edge, as the
+		insertion takes them) */
+		struct structure_bsp *bsp = global_structure_bsp_get();
+		real_rectangle3d world = bsp ? bsp->world_bounds : (real_rectangle3d){ { -60, 60, -60, 60, 0, 30 } };
+		real inset_x = (world.x1 - world.x0) / 6.0f;
+		real inset_y = (world.y1 - world.y0) / 6.0f;
+
+		royale_beam.bounds.minimum.x = world.x0 + inset_x;
+		royale_beam.bounds.maximum.x = world.x1 - inset_x;
+		royale_beam.bounds.minimum.y = world.y0 + inset_y;
+		royale_beam.bounds.maximum.y = world.y1 - inset_y;
+		royale_beam.bounds.minimum.z = world.z0;
+		royale_beam.bounds.maximum.z = world.z1;
+	}
 	royale_beam.stage_count = (short)MIN(config->beam_stage_count, ROYALE_MAXIMUM_BEAM_STAGES);
 	if (royale_beam.stage_count > 0)
 	{
