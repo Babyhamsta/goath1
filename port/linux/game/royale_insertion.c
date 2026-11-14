@@ -96,6 +96,7 @@ static struct
 {
 	boolean started;
 	boolean boarded;
+	boolean creating; /* (royale_insertion_creating) */
 	unsigned long seed;
 	long insertion_ticks;
 	struct royale_bounds bounds;
@@ -613,7 +614,9 @@ static void insertion_board(void)
 			placement.forward = *global_forward3d;
 		placement.up = *global_up3d;
 		SET_FLAG(placement.flags, _new_object_never_automatically_delete_bit, TRUE);
+		insertion.creating = TRUE;
 		pelican->object_index = object_new(&placement);
+		insertion.creating = FALSE;
 		if (pelican->object_index == NONE)
 		{
 			error(_error_log, "royale insertion: Pelican %d not made at %.1f %.1f %.1f", index, position.x,
@@ -939,6 +942,11 @@ boolean royale_insertion_pelican_position(long player_index, real_point3d *posit
 boolean royale_insertion_running(void)
 {
 	return TRUE;
+}
+
+boolean royale_insertion_creating(void)
+{
+	return insertion.creating;
 }
 
 boolean royale_insertion_jump(long player_index)

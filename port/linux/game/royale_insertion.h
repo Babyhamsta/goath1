@@ -29,6 +29,9 @@ jump pressed); FALSE if they are not aboard a Pelican */
 boolean royale_insertion_jump(long player_index);
 /* (core) the insertion lane is linked in */
 boolean royale_insertion_running(void);
+/* (core: game_engine.c's remap) TRUE while the insertion makes its own
+objects (its Pelicans), which the game engine's vehicle set leaves alone */
+boolean royale_insertion_creating(void);
 
 /* ---- the rules (pure: the harness tests them, tools/harness/tests/
 test_royale_insertion.py) */
