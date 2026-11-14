@@ -143,6 +143,9 @@ static long dead_spectate_watched[MAXIMUM_LOCAL_PLAYERS] = { NONE, NONE, NONE, N
 static boolean spectate_teammates(
 	void)
 {
+	/* (Royale: always, royale.c) */
+	if (royale_active())
+		return TRUE;
 	return strcmp(config_string("game.spectate_on_death"), "off") != 0;
 }
 
@@ -357,6 +360,14 @@ long dead_spectate_unit(
 	/* alive: keep `watched`, so the next death starts on the same teammate */
 	if (player->unit_index != NONE || !spectate_game())
 		return NONE;
+	/* (Royale: one in the gulag without a unit watches its fight) */
+	if (royale_active())
+	{
+		long gulag_unit = royale_gulag_spectate_unit(self);
+
+		if (gulag_unit != NONE && object_try_and_get(gulag_unit))
+			return gulag_unit;
+	}
 	if (!spectate_teammate(self, *watched))
 		*watched = next_teammate(self, NONE);
 	else if (next)
