@@ -485,6 +485,37 @@ static void insertion_jump(long player_index, struct insertion_pelican *pelican)
 	insertion_fall_begin(player_index, unit_index);
 }
 
+/* a player into a Pelican's seat. In a free-for-all every rider is every
+other's enemy, and a unit may not sit beside an enemy (unit_can_enter_seat):
+the riders aboard take the boarding unit's team for the moment it sits */
+static boolean insertion_enter_seat(long unit_index, long vehicle_index, short seat_index)
+{
+	short team = object_get(unit_index)->object.owner_team_index;
+	short teams[ROYALE_INSERTION_MAXIMUM_SEATS + 4];
+	long children[ROYALE_INSERTION_MAXIMUM_SEATS + 4];
+	short count = 0;
+	long child_index;
+	boolean entered;
+
+	for (child_index = object_get(vehicle_index)->object.first_child_object_index;
+		child_index != NONE && count < (short)NUMBEROF(children);
+		child_index = object_get(child_index)->object.next_object_index)
+	{
+		struct object_datum *child = object_get(child_index);
+
+		if (TEST_FLAG(_object_mask_unit, child->object.type))
+		{
+			children[count] = child_index;
+			teams[count++] = child->object.owner_team_index;
+			child->object.owner_team_index = team;
+		}
+	}
+	entered = unit_enter_seat(unit_index, vehicle_index, seat_index);
+	while (count-- > 0)
+		object_get(children[count])->object.owner_team_index = teams[count];
+	return entered;
+}
+
 /* the squads' players in the order they board: squad by squad, a squad's
 players together; players of no squad after */
 static short insertion_boarding_order(long *players, short maximum)
@@ -657,9 +688,13 @@ static void insertion_board(void)
 			if (object_get(unit_index)->object.parent_object_index != NONE)
 				unit_exit_seat_end(unit_index);
 			object_set_position(unit_index, &position, NULL, NULL);
-			if (!unit_enter_seat(unit_index, pelican->object_index, seats[seat]))
+			if (!insertion_enter_seat(unit_index, pelican->object_index, seats[seat]))
 			{
-				/* (a seat it can't take: it drops with the Pelican's start) */
+				/* (a seat it can't take: it drops over the play area) */
+				real_point3d point;
+
+				royale_insertion_redeploy_point(&insertion.bounds, insertion.height, &insertion.seed, &point);
+				object_set_position(unit_index, &point, NULL, NULL);
 				insertion_fall_begin(player_index, unit_index);
 				continue;
 			}
