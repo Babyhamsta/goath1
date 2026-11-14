@@ -467,9 +467,10 @@ void bots_royale_goal(long bot_index, long player_index, real_point3d const *pos
 	{
 		long opponent = royale_gulag_opponent(player_index);
 
-		/* (no opponent yet: it waits where it is) */
+		/* (no opponent yet: it waits where it is, not roaming off to the
+		island's loot) */
 		if (opponent == NONE || !bots_royale_player_position(opponent, &goal->point))
-			goal->decision = _bots_royale_decide_default;
+			goal->point = *position;
 		break;
 	}
 	default:
