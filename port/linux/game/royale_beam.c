@@ -38,6 +38,8 @@ What is seen and heard (each machine's own, nothing simulated):
 #include "effects/contrail_definitions.h"
 #include "effects/effect_definitions.h"
 #include "effects/effects.h"
+#include "effects/particle_system_definitions.h"
+#include "effects/particle_systems.h"
 #include "game/game.h"
 #include "game/game_globals.h"
 #include "game/players.h"
@@ -257,6 +259,20 @@ static char const *const royale_beam_blast_names[ROYALE_BEAM_BLAST_EFFECTS] =
 	"vehicles\\pelican\\effects\\pelican explosion",
 	"weapons\\fuel rod gun\\effects\\explosion",
 };
+/* (the explosions' effects all do damage: their particles and sound alone) */
+static char const *const royale_beam_blast_particle_names[] =
+{
+	"effects\\particle systems\\explosion large",
+	"vehicles\\pelican\\effects\\explosion_pelican",
+	"weapons\\fuel rod gun\\effects\\hunter fuel rod explosion",
+	"weapons\\plasma grenade\\effects\\explosion",
+};
+static char const *const royale_beam_blast_sound_names[] =
+{
+	"sound\\sfx\\weapons\\fuel rod gun\\explosion",
+	"sound\\sfx\\weapons\\plasma grenade\\plasmagrenexpl",
+	"sound\\sfx\\impulse\\impacts\\elite_sword_boom",
+};
 static char const *const royale_beam_hum_names[] =
 {
 	"sound\\sfx\\vehicles\\covydrop",
@@ -286,6 +302,8 @@ static struct
 	long contrail;
 	long fire_effect;
 	long blast_effect;
+	long blast_particles;
+	long blast_sound;
 	long hum;
 	long damage;
 	real damage_per_point; /* the damage tag's own, for a multiplier */
@@ -402,7 +420,25 @@ void royale_beam_start(
 		royale_beam.stage_count = (short)NUMBEROF(royale_beam_default_stages);
 		csmemcpy(royale_beam.stages, royale_beam_default_stages, sizeof(royale_beam_default_stages));
 	}
+	/* debug: HALO_ROYALE_BEAM_SPEED runs the stages that many times faster
+	(pictures and clips), HALO_ROYALE_BEAM_SIDE picks the side (0 north, 1
+	east, 2 south, 3 west) */
+	{
+		char const *speed_text = getenv("HALO_ROYALE_BEAM_SPEED");
+		real speed = speed_text && *speed_text ? (real)atof(speed_text) : 1.0f;
+
+		if (speed > 0.0f && speed != 1.0f)
+		{
+			for (index = 0; index < royale_beam.stage_count; index++)
+			{
+				royale_beam.stages[index].delay /= speed;
+				royale_beam.stages[index].duration /= speed;
+			}
+		}
+	}
 	royale_beam.side = royale_beam_choose_side(royale_match_seed(), config->beam_sides);
+	if (getenv("HALO_ROYALE_BEAM_SIDE") && *getenv("HALO_ROYALE_BEAM_SIDE"))
+		royale_beam.side = (short)(atoi(getenv("HALO_ROYALE_BEAM_SIDE")) & 3);
 	royale_beam.ticks_per_second = (real)royale_seconds_to_ticks(100.0f) / 100.0f;
 	if (royale_beam.ticks_per_second <= 0.0f)
 		royale_beam.ticks_per_second = 30.0f;
@@ -412,9 +448,13 @@ void royale_beam_start(
 		royale_beam_contrail_names, (short)NUMBEROF(royale_beam_contrail_names));
 	royale_beam.fire_effect = royale_beam_first_cosmetic_effect(royale_beam_fire_names, ROYALE_BEAM_FIRE_EFFECTS);
 	royale_beam.blast_effect = royale_beam_first_cosmetic_effect(royale_beam_blast_names, ROYALE_BEAM_BLAST_EFFECTS);
+	royale_beam.blast_particles = royale_beam_first_tag(PARTICLE_SYSTEM_DEFINITION_TAG,
+		royale_beam_blast_particle_names, (short)NUMBEROF(royale_beam_blast_particle_names));
+	royale_beam.blast_sound = royale_beam_first_tag(SOUND_DEFINITION_TAG,
+		royale_beam_blast_sound_names, (short)NUMBEROF(royale_beam_blast_sound_names));
 	royale_beam.hum = royale_beam_first_tag(LOOPING_SOUND_DEFINITION_TAG,
 		royale_beam_hum_names, (short)NUMBEROF(royale_beam_hum_names));
-	royale_beam.damage = royale_beam_first_tag(DAMAGE_EFFECT_DEFINITION_TAG,
+	royale_beam.damage =royale_beam_first_tag(DAMAGE_EFFECT_DEFINITION_TAG,
 		royale_beam_damage_names, (short)NUMBEROF(royale_beam_damage_names));
 	royale_beam.damage_per_point = 0.0f;
 	if (royale_beam.damage != NONE)
@@ -437,7 +477,8 @@ void royale_beam_start(
 		royale_beam.bounds.maximum.x, royale_beam.bounds.maximum.y,
 		royale_beam.contrail != NONE ? tag_get_name(royale_beam.contrail) : "none",
 		royale_beam.fire_effect != NONE ? tag_get_name(royale_beam.fire_effect) : "none",
-		royale_beam.blast_effect != NONE ? tag_get_name(royale_beam.blast_effect) : "none",
+		royale_beam.blast_effect != NONE ? tag_get_name(royale_beam.blast_effect) :
+			royale_beam.blast_particles != NONE ? tag_get_name(royale_beam.blast_particles) : "none",
 		royale_beam.hum != NONE ? tag_get_name(royale_beam.hum) : "none");
 }
 
@@ -705,7 +746,8 @@ static void royale_beam_local_tick(
 		royale_beam_spawn_effect(royale_beam.fire_effect, &point);
 	}
 	/* blasts at the columns' feet */
-	if (royale_beam.blast_effect != NONE && royale_beam.ticks % blast_period == 0)
+	if ((royale_beam.blast_effect != NONE || royale_beam.blast_particles != NONE) &&
+		royale_beam.ticks % blast_period == 0)
 	{
 		short column = (short)(royale_beam_next_random() % ROYALE_BEAM_COLUMNS);
 		real across = royale_beam_column_across(column, seconds);
@@ -714,7 +756,27 @@ static void royale_beam_local_tick(
 		point.x = a.x + (b.x - a.x) * across;
 		point.y = a.y + (b.y - a.y) * across;
 		point.z = royale_beam_ground(point.x, point.y, listener.z) + 0.5f;
-		royale_beam_spawn_effect(royale_beam.blast_effect, &point);
+		if (royale_beam.blast_effect != NONE)
+		{
+			royale_beam_spawn_effect(royale_beam.blast_effect, &point);
+		}
+		else
+		{
+			/* (orange-white, three times the size) */
+			real_argb_color color = { 1.0f, 1.0f, 0.62f, 0.25f };
+
+			particle_system_new_unattached(royale_beam.blast_particles, &point, global_zero_vector3d, &color, 3.0f);
+		}
+		if (royale_beam.blast_sound != NONE)
+		{
+			struct sound_location location;
+
+			location.position = point;
+			location.forward = *global_up3d;
+			location.translational_velocity = *global_zero_vector3d;
+			scenario_location_from_point(&location.game_location, &point);
+			unattached_impulse_sound_new(royale_beam.blast_sound, &location, 1.0f);
+		}
 	}
 }
 
