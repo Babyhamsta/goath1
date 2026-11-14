@@ -1050,6 +1050,18 @@ HOST_SENDER) since the tests last asked (network_distributed_batch_bytes) */
 static long distributed_batch_bytes[MAXIMUM_SENDERS];
 /* ... and how many datagrams (network_distributed_batch_datagrams) */
 static long distributed_batch_datagrams[MAXIMUM_SENDERS];
+/* ... and the bytes of each type of message to the clients
+(network_distributed_type_bytes) */
+static long distributed_type_bytes[256];
+
+/* the bytes each type of message took in the datagrams to the clients
+since the tests last asked, by type */
+void network_distributed_type_bytes(
+	long bytes[256])
+{
+	csmemcpy(bytes, distributed_type_bytes, sizeof(distributed_type_bytes));
+	csmemset(distributed_type_bytes, 0, sizeof(distributed_type_bytes));
+}
 
 void network_distributed_batch_datagrams(
 	long *to_host,
@@ -1518,6 +1530,8 @@ static void distributed_batch_append(
 		sizeof(*header) - sizeof(message_header));
 	csmemcpy(batch->data + batch->size + BATCH_MESSAGE_OVERHEAD, entries, entries_size);
 	batch->size += (word)(BATCH_MESSAGE_OVERHEAD + entries_size);
+	if (sender != HOST_SENDER)
+		distributed_type_bytes[header->type] += BATCH_MESSAGE_OVERHEAD + entries_size;
 }
 
 /* where a message's bytes past its message header go: a machine's batch,
