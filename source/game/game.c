@@ -121,6 +121,7 @@ struct game_options;
 #include "cseries/cseries.h"
 #include "game/game.h"
 #include "game_modes.h" /* port: port/linux/game/game_modes.c */
+#include "royale_map.h" /* port: port/linux/game/royale_map.c */
 #include "ai/ai.h"
 #include "bink/bink_playback.h"
 #include "bungie_net/network/transport.h"
@@ -194,7 +195,6 @@ struct game_options;
 #include "profile_sections.h" /* port: port/linux/include/profile_sections.h */
 #include "sim_rate.h" /* port: port/linux/game/sim_rate.c */
 #include "basic_training.h" /* port: port/linux/game/basic_training.c */
-#include "royale_beam.h" /* port: port/linux/game/royale_beam.c */
 #include "demo.h" /* port: port/linux/game/demo.c */
 
 /* network_game_globals.c's */
@@ -376,7 +376,11 @@ static void game_tick_macro_step(
 	/* (the host's actors drive the host's units, which a client of the
 	distributed netcode has from the host: its own would fight the host's
 	positions, and could place objects of their own) */
-	if (!network_game_distributed_client())
+	/* port: a campaign level played as a multiplayer map has no AI
+	(royale_map.c) */
+	if (royale_map_mode())
+		;
+	else if (!network_game_distributed_client())
 		profile_scope(game_tick_ai_section, ai_update();)
 	else
 		profile_scope(game_tick_actors_drive_section, network_actors_drive();)
@@ -427,13 +431,14 @@ static void game_tick_macro_step(
 	profile_scope(game_tick_game_engine_section, game_engine_update();)
 	/* port: Basic Training's steps and chapters (port/linux/game/basic_training.c) */
 	basic_training_tick();
-	/* port: debug, the Royale beam outside a Royale game (royale_beam.c) */
-	royale_beam_preview_tick();
 	profile_scope(game_tick_editor_section, editor_update();)
 	/* port: in network co-op only the host runs the scripts. A client running
 	them would place the map's actors and objects a second time and make
 	decisions that belong to the host. */
-	if (!(network_game_distributed_client() && network_coop_active()))
+	if (!(network_game_distributed_client() && network_coop_active()) &&
+		/* port: nor a campaign level played as a multiplayer map: its
+		scripts are its campaign (royale_map.c) */
+		!royale_map_mode())
 		profile_scope(game_tick_hs_section, hs_update();)
 	profile_scope(game_tick_recorded_animations_section, recorded_animations_update();)
 	profile_scope(game_tick_objects_section, objects_update();)
@@ -743,6 +748,14 @@ boolean game_load(
 void network_distributed_new_game(void);
 void network_objects_placed(void);
 
+/* port: the game's seed, the same on every machine of a network game and
+from run to run (Royale's lanes: port/linux/game/royale.c) */
+unsigned long game_options_random_seed(
+	void)
+{
+	return game_globals ? game_globals->options.random_seed : 0;
+}
+
 void game_initialize_for_new_map(
 	void)
 {
@@ -816,7 +829,7 @@ void game_initialize_for_new_map(
 	game_globals->active = TRUE;
 	halo_load_trace("objects.begin", NULL); /* port: loading measurement */
 	objects_place();
-	if (!game_in_editor())
+	if (!game_in_editor() && !royale_map_mode())
 		ai_place();
 	/* (the map's objects, placed as on the host: a distributed client's own
 	from now on go elsewhere, port/linux/game/network_objects.c) */

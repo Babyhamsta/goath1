@@ -18,9 +18,4 @@ void royale_beam_render(void);
 it, safe); out of the map's bounds counts as behind */
 real royale_beam_depth(real_point3d const *point);
 
-/* debug (HALO_ROYALE_BEAM_PREVIEW): the beam outside a Royale game, ticked
-from game.c and drawn from hud.c; nothing otherwise */
-void royale_beam_preview_tick(void);
-void royale_beam_preview_draw(void);
-
 #endif

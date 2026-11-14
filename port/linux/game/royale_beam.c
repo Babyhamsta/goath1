@@ -29,11 +29,6 @@ What is seen and heard (each machine's own, nothing simulated):
 - a low hum, louder nearer the front;
 - the HUD: "GLASSING IN 0:30" while it holds, "MOVE" and an arrow toward
   safety near or behind the front, and the screen's edge warning.
-
-debug: HALO_ROYALE_BEAM_PREVIEW runs the beam outside a Royale game (any
-map; pictures), as "<side> [<speed>]": the side north/east/south/west, its
-stages <speed> times faster; HALO_ROYALE_BEAM_BOUNDS "<x0> <y0> <x1> <y1>"
-gives its bounds (else 150 world units about the first player).
 */
 
 #include "cseries.h"
@@ -75,11 +70,6 @@ gives its bounds (else 150 world units about the first player).
 
 void platform_log(char const *format, ...);
 void draw_quad(rectangle2d const *bounds, pixel32 color);
-
-/* (core's, royale.h: the game's seed, the same on every machine; until core
-has it, none) */
-unsigned long royale_match_seed(void);
-__attribute__((weak)) unsigned long royale_match_seed(void) { return 0; }
 
 /* ---- the sweep (simulation) */
 
@@ -281,7 +271,6 @@ static char const *const royale_beam_damage_names[] =
 static struct
 {
 	boolean running;
-	boolean preview;
 	struct royale_bounds bounds;
 	short side;
 	short stage_count;
@@ -303,8 +292,6 @@ static struct
 	real column_ground[ROYALE_BEAM_COLUMNS];
 	unsigned long effect_seed;
 } royale_beam;
-
-static void royale_beam_preview_config(struct royale_map_config *config);
 
 static long royale_beam_first_tag(
 	long group,
@@ -601,7 +588,7 @@ static void royale_beam_damage_tick(
 
 		if (player->unit_index == NONE || !unit_try_and_get(player->unit_index))
 			continue;
-		if (!royale_beam.preview && state != ROYALE_PLAYER_ALIVE && state != ROYALE_PLAYER_DOWNED)
+		if (state != ROYALE_PLAYER_ALIVE && state != ROYALE_PLAYER_DOWNED)
 			continue;
 		object_get_origin(player->unit_index, &position);
 		if (royale_beam_depth(&position) <= 0.0f)
@@ -714,7 +701,7 @@ void royale_beam_tick(
 
 	if (!royale_beam.running)
 		return;
-	phase = royale_beam.preview ? ROYALE_PHASE_PLAY : royale_phase();
+	phase = royale_phase();
 	if (phase != ROYALE_PHASE_PLAY && phase != ROYALE_PHASE_ENDGAME)
 	{
 		if (royale_beam.play_start == NONE)
@@ -725,9 +712,9 @@ void royale_beam_tick(
 	if (royale_beam.play_start == NONE)
 	{
 		/* (a machine that joined during PLAY counts from its start) */
-		royale_beam.play_start = royale_beam.preview ? 0 :
+		royale_beam.play_start =
 			royale_match_time() - (phase == ROYALE_PHASE_PLAY ? royale_phase_time() : 0);
-		royale_beam.ticks = royale_beam.preview ? 0 : royale_match_time() - royale_beam.play_start;
+		royale_beam.ticks = royale_match_time() - royale_beam.play_start;
 	}
 	else
 	{
@@ -1196,80 +1183,4 @@ void royale_beam_draw(
 		move.y1 = (short)(center_y + 4);
 		royale_beam_hud_text(&move, depth > 0.0f ? L"MOVE! YOU ARE BEING GLASSED" : L"MOVE", &color);
 	}
-}
-
-/* ---- the preview (debug: any map, no Royale game) */
-
-static void royale_beam_preview_config(
-	struct royale_map_config *config)
-{
-	char const *preview = getenv("HALO_ROYALE_BEAM_PREVIEW");
-	char const *bounds = getenv("HALO_ROYALE_BEAM_BOUNDS");
-	char side_name[16] = "north";
-	float speed = 1.0f;
-	float x0, y0, x1, y1;
-	short index;
-
-	csmemset(config, 0, sizeof(*config));
-	if (preview)
-		sscanf(preview, "%15s %f", side_name, &speed);
-	if (speed <= 0.0f)
-		speed = 1.0f;
-	config->beam_sides = strcmp(side_name, "east") == 0 ? 1L << ROYALE_SIDE_EAST :
-		strcmp(side_name, "south") == 0 ? 1L << ROYALE_SIDE_SOUTH :
-		strcmp(side_name, "west") == 0 ? 1L << ROYALE_SIDE_WEST : 1L << ROYALE_SIDE_NORTH;
-	config->beam_stage_count = (short)NUMBEROF(royale_beam_default_stages);
-	for (index = 0; index < config->beam_stage_count; index++)
-	{
-		config->beam_stages[index] = royale_beam_default_stages[index];
-		config->beam_stages[index].delay /= speed;
-		config->beam_stages[index].duration /= speed;
-	}
-	if (bounds && sscanf(bounds, "%f %f %f %f", &x0, &y0, &x1, &y1) == 4)
-	{
-		config->bounds.minimum.x = x0;
-		config->bounds.minimum.y = y0;
-		config->bounds.maximum.x = x1;
-		config->bounds.maximum.y = y1;
-	}
-	else
-	{
-		real_point3d center = *global_origin3d;
-
-		royale_beam_local_listener(&center);
-		config->bounds.minimum.x = center.x - 150.0f;
-		config->bounds.minimum.y = center.y - 150.0f;
-		config->bounds.maximum.x = center.x + 150.0f;
-		config->bounds.maximum.y = center.y + 150.0f;
-	}
-	config->bounds.minimum.z = -200.0f;
-	config->bounds.maximum.z = 400.0f;
-}
-
-void royale_beam_preview_tick(
-	void)
-{
-	static struct royale_map_config config;
-
-	if (royale_active() || !getenv("HALO_ROYALE_BEAM_PREVIEW"))
-		return;
-	if (!royale_beam.preview)
-	{
-		real_point3d unused;
-
-		/* (started once a player stands somewhere: the bounds are about them) */
-		if (!getenv("HALO_ROYALE_BEAM_BOUNDS") && !royale_beam_local_listener(&unused))
-			return;
-		royale_beam_preview_config(&config);
-		royale_beam_start(&config);
-		royale_beam.preview = TRUE;
-	}
-	royale_beam_tick();
-}
-
-void royale_beam_preview_draw(
-	void)
-{
-	if (royale_beam.preview && !royale_active())
-		royale_beam_draw();
 }

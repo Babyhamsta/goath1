@@ -56,6 +56,7 @@ teammate from behind (coop_spectate.c), as before.
 #include "units/unit_definitions.h"
 
 #include "dead_spectate.h"
+#include "royale.h"
 #include "network_coop.h"
 
 #include <math.h>
@@ -152,6 +153,9 @@ static boolean spectate_game(
 {
 	if (network_coop_active())
 		return TRUE;
+	/* (Royale: the eliminated always watch their squadmate, royale.c) */
+	if (royale_active() && game_connection() != _game_connection_film_playback)
+		return TRUE;
 	if (!spectate_teammates() || game_connection() == _game_connection_film_playback)
 		return FALSE;
 	return game_engine_running() ? game_engine_has_teams() && game_engine_in_play() : TRUE;
@@ -167,6 +171,9 @@ static boolean spectate_teammate(
 
 	if (!player || other == self || player->unit_index == NONE || !object_try_and_get(player->unit_index))
 		return FALSE;
+	/* (Royale: the squadmate) */
+	if (royale_active())
+		return royale_squadmate_of(self) == other;
 	return !game_engine_running() || player->team_index == player_get(self)->team_index;
 }
 
