@@ -225,6 +225,12 @@ void royale_bots_tick(void)
 		bots_royale_report();
 }
 
+/* a player's slot (absolute index) for the log, NONE for none */
+static long bots_royale_slot(long player_index)
+{
+	return player_index == NONE ? NONE : (long)DATUM_INDEX_TO_ABSOLUTE_INDEX(player_index);
+}
+
 void bots_royale_report(void)
 {
 	short winner = royale_winning_squad();
@@ -232,8 +238,9 @@ void bots_royale_report(void)
 	bots_royale.reported = TRUE;
 	platform_log("royale bots: match over: squad %d won (players %ld and %ld), %.1fs, out by the beam %ld, "
 		"in combat %ld, squads %d",
-		(int)winner, winner != NONE ? royale_squad_member(winner, 0) : NONE,
-		winner != NONE ? royale_squad_member(winner, 1) : NONE, bots_royale_seconds(royale_match_time()),
+		(int)winner, bots_royale_slot(winner != NONE ? royale_squad_member(winner, 0) : NONE),
+		bots_royale_slot(winner != NONE ? royale_squad_member(winner, 1) : NONE),
+		bots_royale_seconds(royale_match_time()),
 		bots_royale.out_by_beam, bots_royale.out_by_combat, (int)royale_squad_count());
 }
 

@@ -38,6 +38,8 @@ objects go to clients through the network.
 #include "royale_gulag.h"
 #include "royale_insertion.h"
 
+#include <stdlib.h>
+
 /* ---- the line and the arena (pure: tools/harness/tests/test_royale_gulag_queue.py) */
 
 void royale_gulag_queue_reset(
@@ -218,6 +220,10 @@ static struct
 	boolean redeploy_on_spawn[ROYALE_MAXIMUM_PLAYERS];
 	/* each side's unit given the kit (the host's) */
 	long armed_unit[2];
+	/* (debug) the match second the host kills its first local player, and
+	again 3 s later (HALO_ROYALE_GULAG_KILL_LOCAL: a test's way into the
+	gulag), 0 for never */
+	long debug_kill_ticks;
 } royale_gulag;
 
 static void royale_gulag_arm_fighters(void);
@@ -267,6 +273,11 @@ void royale_gulag_start(
 	csmemset(royale_gulag.redeploy_on_spawn, 0, sizeof(royale_gulag.redeploy_on_spawn));
 	royale_gulag.armed_unit[0] = NONE;
 	royale_gulag.armed_unit[1] = NONE;
+	{
+		char const *value = getenv("HALO_ROYALE_GULAG_KILL_LOCAL");
+
+		royale_gulag.debug_kill_ticks = value && *value ? royale_seconds_to_ticks((real)atol(value)) : 0;
+	}
 	csmemset(&royale_gulag.arena, 0, sizeof(royale_gulag.arena));
 	/* (no arena in the config, or an empty box: no gulag, deaths eliminate) */
 	royale_gulag.have_arena = bounds && bounds->maximum.x > bounds->minimum.x &&
@@ -401,6 +412,16 @@ void royale_gulag_tick(
 	case ROYALE_GULAG_EVENT_TIME_UP:
 		royale_gulag_time_up(event.player[0], event.player[1]);
 		break;
+	}
+	/* (debug: the first local player killed twice, downed then out) */
+	if (royale_gulag.debug_kill_ticks > 0 && royale_gulag_host() &&
+		(royale_match_time() == royale_gulag.debug_kill_ticks ||
+			royale_match_time() == royale_gulag.debug_kill_ticks + royale_seconds_to_ticks(3.0f)))
+	{
+		long unit_index = royale_gulag_living_unit(local_player_get_player_index(0));
+
+		if (unit_index != NONE)
+			unit_kill(unit_index);
 	}
 	if (royale_gulag_host())
 	{
