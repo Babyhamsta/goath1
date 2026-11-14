@@ -1,7 +1,7 @@
 /* royale_loot.h: Royale's loot (port/linux/game/royale_loot.c)
 
 Core calls royale_loot_start, royale_loot_tick and royale_loot_postspawn
-(royale.h); royale_loot_item_tier is the bots'. The plan (what lies at each
+(royale.h: the start kit); royale_loot_item_tier is the bots'. The plan (what lies at each
 loot spot, and each supply pod's time, spot and contents) is a pure function
 of the match's seed and the map config, so every machine draws the same. */
 #ifndef HALO_ROYALE_LOOT_H
@@ -62,8 +62,5 @@ void royale_loot_plan_make(unsigned long seed, short const *spot_tiers, short sp
 	unsigned long available, struct royale_loot_plan *plan);
 /* the plan this game drew (royale_loot_start) */
 struct royale_loot_plan const *royale_loot_plan_get(void);
-
-/* (core) after a player's unit spawns: the start kit, a pistol low on ammo */
-void royale_loot_postspawn(long player_index);
 
 #endif
