@@ -70,4 +70,4 @@ ROYALE_WEAK void royale_loot_postspawn(long player_index) { (void)player_index; 
 
 ROYALE_WEAK boolean royale_insertion_running(void) { return FALSE; }
 ROYALE_WEAK void royale_insertion_redeploy(long player_index) { (void)player_index; }
-ROYALE_WEAK void royale_insertion_jump(long player_index) { (void)player_index; }
+ROYALE_WEAK boolean royale_insertion_jump(long player_index) { (void)player_index; return FALSE; }
