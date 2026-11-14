@@ -1260,8 +1260,7 @@ void royale_beam_draw(
 			(long)MAX(1.0f, royale_beam.ticks_per_second);
 		rectangle2d top = bounds;
 
-		top.y0 = (short)(bounds.y0 + height / 9);
-		top.y1 = (short)(top.y0 + line + 4);
+		royale_hud_row(ROYALE_HUD_ROW_COUNTDOWN, &top.y0, &top.y1);
 		usnprintf(text, NUMBEROF(text) - 1, L"GLASSING IN %ld:%02ld", left / 60, left % 60);
 		text[NUMBEROF(text) - 1] = 0;
 		royale_beam_hud_text(&top, text, left <= 10 ? &hot : &white);
@@ -1270,8 +1269,7 @@ void royale_beam_draw(
 	{
 		rectangle2d top = bounds;
 
-		top.y0 = (short)(bounds.y0 + height / 9);
-		top.y1 = (short)(top.y0 + line + 4);
+		royale_hud_row(ROYALE_HUD_ROW_COUNTDOWN, &top.y0, &top.y1);
 		royale_beam_hud_text(&top, L"GLASSING", &hot);
 	}
 
@@ -1285,21 +1283,27 @@ void royale_beam_draw(
 		real camera_yaw = atan2f(render.camera.forward.j, render.camera.forward.i);
 		real safe_yaw;
 		real relative;
-		short size = (short)MAX(24, height / 12);
+		short row_top, row_bottom, arrow_bottom;
+		short size;
 		short center_x = (short)(bounds.x0 + width / 2);
-		short center_y = (short)(bounds.y0 + height / 4 + line);
+		short center_y;
 		real flash = depth > 0.0f ? 0.6f + 0.4f * sinf(seconds * 10.0f) : 1.0f;
 		real_argb_color color = { flash, 1.0f, depth > 0.0f ? 0.95f : 0.75f, depth > 0.0f ? 0.7f : 0.2f };
 		rectangle2d move = bounds;
 
+		/* (MOVE in its row, the arrow in the two under it) */
+		royale_hud_row(ROYALE_HUD_ROW_MOVE, &row_top, &row_bottom);
+		royale_hud_row(ROYALE_HUD_ROW_MOVE + 2, &move.y0, &arrow_bottom);
+		size = (short)MAX(12, arrow_bottom - row_bottom - 4);
+		center_y = (short)(row_bottom + 2 + size / 2);
 		royale_beam_front_line(royale_beam.status.front, &a, &b, &safe);
 		safe_yaw = atan2f(safe.j, safe.i);
 		relative = safe_yaw - camera_yaw;
 		/* (left of the view's forward is the screen's left) */
-		royale_beam_hud_arrow(center_x, (short)(center_y + size), -sinf(relative), -cosf(relative), size,
+		royale_beam_hud_arrow(center_x, center_y, -sinf(relative), -cosf(relative), size,
 			royale_beam_hud_pixel(1.0f, depth > 0.0f ? 0.95f : 0.75f, depth > 0.0f ? 0.6f : 0.2f, 0.95f * flash));
-		move.y0 = (short)(center_y - line);
-		move.y1 = (short)(center_y + 4);
+		move.y0 = row_top;
+		move.y1 = row_bottom;
 		royale_beam_hud_text(&move, depth > 0.0f ? L"MOVE! YOU ARE BEING GLASSED" : L"MOVE", &color);
 	}
 }

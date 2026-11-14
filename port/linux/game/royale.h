@@ -290,6 +290,18 @@ long royale_beam_ticks_to_move(void);
 /* (bots) insertion lane: an IN_PELICAN player's Pelican, FALSE if none */
 boolean royale_insertion_pelican_position(long player_index, real_point3d *position, real_vector3d *velocity);
 
+/* the HUD's fixed rows at the top of a view, so the lanes' lines never
+overlap: a row's top and bottom in the view's own coordinates (a split
+screen's window's). Row 0 the banner (core's), 1 the beam's countdown, 2 the
+beam's MOVE with its arrow in rows 3-4; a gulag player sees only the
+gulag's lines, in rows 0-1. Nothing else (a floating name tag) draws above
+the bottom of row ROYALE_HUD_ROWS - 1. */
+#define ROYALE_HUD_ROW_BANNER 0
+#define ROYALE_HUD_ROW_COUNTDOWN 1
+#define ROYALE_HUD_ROW_MOVE 2
+#define ROYALE_HUD_ROWS 5
+void royale_hud_row(short row, short *top, short *bottom);
+
 /* (bots) gulag lane: a player's opponent in the gulag, NONE if none */
 long royale_gulag_opponent(long player_index);
 

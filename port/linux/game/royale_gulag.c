@@ -24,6 +24,7 @@ objects go to clients through the network.
 #include "game/players.h"
 #include "interface/hud_messaging.h"
 #include "items/weapons.h"
+#include "items/weapon_definitions.h"
 #include "networking/network_game_globals.h"
 #include "objects/objects.h"
 #include "rasterizer/rasterizer.h"
@@ -215,7 +216,11 @@ static struct
 	/* (by absolute index) a default win's player: spawned in the arena to
 	have a unit, then redeployed */
 	boolean redeploy_on_spawn[ROYALE_MAXIMUM_PLAYERS];
+	/* each side's unit given the kit (the host's) */
+	long armed_unit[2];
 } royale_gulag;
+
+static void royale_gulag_arm_fighters(void);
 
 static boolean royale_gulag_host(
 	void)
@@ -260,6 +265,8 @@ void royale_gulag_start(
 
 	royale_gulag_queue_reset(&royale_gulag.queue);
 	csmemset(royale_gulag.redeploy_on_spawn, 0, sizeof(royale_gulag.redeploy_on_spawn));
+	royale_gulag.armed_unit[0] = NONE;
+	royale_gulag.armed_unit[1] = NONE;
 	csmemset(&royale_gulag.arena, 0, sizeof(royale_gulag.arena));
 	/* (no arena in the config, or an empty box: no gulag, deaths eliminate) */
 	royale_gulag.have_arena = bounds && bounds->maximum.x > bounds->minimum.x &&
@@ -396,7 +403,10 @@ void royale_gulag_tick(
 		break;
 	}
 	if (royale_gulag_host())
+	{
+		royale_gulag_arm_fighters();
 		royale_gulag_walls();
+	}
 }
 
 boolean royale_gulag_player_died(
@@ -479,6 +489,8 @@ static void royale_gulag_equip(
 	struct unit_datum *unit = unit_get(unit_index);
 	long definition_index = game_engine_loadout_weapon_definition(_loadout_weapon_pistol);
 	struct object_placement_data placement;
+	struct weapon_datum *weapon;
+	struct weapon_definition *definition;
 	long weapon_index;
 	short index;
 
@@ -490,11 +502,71 @@ static void royale_gulag_equip(
 	if (definition_index == NONE)
 		definition_index = tag_loaded('weap', "weapons\\pistol\\pistol");
 	if (definition_index == NONE)
+	{
+		error(_error_silent, "royale gulag: no pistol on this map");
 		return;
+	}
 	object_placement_data_new(&placement, definition_index, NONE);
 	weapon_index = object_new(&placement);
-	if (weapon_index != NONE && !unit_add_weapon_to_inventory(unit_index, weapon_index, 2))
+	if (weapon_index == NONE)
+		return;
+	/* (a full magazine and a full reserve) */
+	weapon = weapon_try_and_get(weapon_index);
+	definition = weapon ? weapon_definition_get(weapon->definition_index) : NULL;
+	for (index = 0; definition && index < MIN(definition->weapon.magazines.count, NUMBEROF(weapon->weapon.magazines));
+		index++)
+	{
+		struct weapon_magazine_definition const *magazine =
+			TAG_BLOCK_GET_ELEMENT(&definition->weapon.magazines, index, struct weapon_magazine_definition);
+
+		weapon->weapon.magazines[index].rounds_loaded = magazine->rounds_loaded_maximum;
+		weapon->weapon.magazines[index].rounds_total = magazine->rounds_total_maximum;
+	}
+	if (!unit_add_weapon_to_inventory(unit_index, weapon_index, 2))
+	{
+		error(_error_silent, "royale gulag: the pistol not taken");
 		object_delete(weapon_index);
+	}
+}
+
+/* a unit holds a weapon */
+static boolean royale_gulag_armed(
+	long unit_index)
+{
+	struct unit_datum *unit = unit_get(unit_index);
+	short slot;
+
+	for (slot = 0; slot < MAXIMUM_WEAPONS_PER_UNIT; slot++)
+	{
+		long weapon_index = unit->unit.weapon_object_indices[slot];
+
+		if (weapon_index != NONE && object_try_and_get(weapon_index))
+			return TRUE;
+	}
+	return FALSE;
+}
+
+/* the host keeps each fighter's unit armed: the kit once, again if it has
+no weapon (none taken, or another lane's kit given over it) */
+static void royale_gulag_arm_fighters(
+	void)
+{
+	short side;
+
+	for (side = 0; side < 2; side++)
+	{
+		long unit_index = royale_gulag_living_unit(royale_gulag.queue.fighter[side]);
+
+		if (unit_index == NONE)
+		{
+			royale_gulag.armed_unit[side] = NONE;
+			continue;
+		}
+		if (royale_gulag.armed_unit[side] == unit_index && royale_gulag_armed(unit_index))
+			continue;
+		royale_gulag_equip(unit_index);
+		royale_gulag.armed_unit[side] = unit_index;
+	}
 }
 
 void royale_gulag_postspawn(
@@ -511,7 +583,13 @@ void royale_gulag_postspawn(
 		return;
 	unit_index = royale_gulag_living_unit(player_index);
 	if (unit_index != NONE && royale_gulag_host())
+	{
+		short side = royale_gulag_queue_side(&royale_gulag.queue, player_index);
+
 		royale_gulag_equip(unit_index);
+		if (side != NONE)
+			royale_gulag.armed_unit[side] = unit_index;
+	}
 	/* (a local player's view faces the arena's way, as a spawn's does;
 	object_set_position turns only the body) */
 	player = player_try_and_get(player_index);
@@ -550,19 +628,50 @@ long royale_gulag_opponent(
 	return royale_active() ? royale_gulag_queue_opponent(&royale_gulag.queue, player_index) : NONE;
 }
 
-/* the gulag's line under a local gulag player's view */
+/* a player's name, as wide text */
+static void royale_gulag_name(
+	long player_index,
+	wchar_t *name,
+	short count)
+{
+	struct player_datum *player = player_index != NONE ? player_try_and_get(player_index) : NULL;
+	short index;
+
+	for (index = 0; player && index < (short)NUMBEROF(player->name) && index < count - 1 && player->name[index]; index++)
+		name[index] = player->name[index];
+	name[index] = 0;
+}
+
+static void royale_gulag_text(
+	short row,
+	wchar_t const *text,
+	real_argb_color const *color)
+{
+	long font_index = hud_get_font_index();
+	rectangle2d bounds = render.camera.window_bounds;
+
+	if (font_index == NONE)
+		return;
+	offset_rectangle2d(&bounds, (short)-render.camera.viewport_bounds.x0, (short)-render.camera.viewport_bounds.y0);
+	royale_hud_row(row, &bounds.y0, &bounds.y1);
+	/* draw mode 2: centered */
+	draw_string_set_draw_mode(font_index, NONE, 2, 0, color);
+	rasterizer_draw_unicode_string(&bounds, NULL, NULL, 0, text);
+}
+
+/* a local gulag player's lines, in the HUD's top rows (all a gulag player
+sees of Royale's HUD): the fight's clock and the opponent, or their place
+in line and the fight they watch */
 void royale_gulag_draw(
 	void)
 {
 	long player_index;
-	long font_index;
 	short place;
 	short side;
 	wchar_t text[96];
-	real_argb_color color = *global_real_argb_white;
-	struct font_header *font;
-	rectangle2d bounds;
-	short height;
+	wchar_t name[16];
+	real_argb_color gold = { 1.0f, 1.0f, 0.85f, 0.4f };
+	real_argb_color white = { 1.0f, 1.0f, 1.0f, 1.0f };
 
 	if (!royale_active() || render.local_player_index == NONE)
 		return;
@@ -575,6 +684,12 @@ void royale_gulag_draw(
 			MAX(royale_seconds_to_ticks(1.0f), 1);
 
 		usnprintf(text, NUMBEROF(text) - 1, L"GULAG: WIN TO REDEPLOY   %ld", MAX(seconds, 0L));
+		text[NUMBEROF(text) - 1] = 0;
+		royale_gulag_text(0, text, &gold);
+		royale_gulag_name(royale_gulag.queue.fighter[1 - side], name, NUMBEROF(name));
+		usnprintf(text, NUMBEROF(text) - 1, L"VS %s", name);
+		text[NUMBEROF(text) - 1] = 0;
+		royale_gulag_text(1, text, &white);
 	}
 	else if (place != NONE)
 	{
@@ -582,23 +697,17 @@ void royale_gulag_draw(
 			usnprintf(text, NUMBEROF(text) - 1, L"GULAG: WAITING FOR AN OPPONENT");
 		else
 			usnprintf(text, NUMBEROF(text) - 1, L"GULAG: YOU FIGHT %s", place < 2 ? L"NEXT" : L"SOON");
+		text[NUMBEROF(text) - 1] = 0;
+		royale_gulag_text(0, text, &gold);
+		if (royale_gulag.queue.fighter[0] != NONE)
+		{
+			wchar_t other[16];
+
+			royale_gulag_name(royale_gulag.queue.fighter[0], name, NUMBEROF(name));
+			royale_gulag_name(royale_gulag.queue.fighter[1], other, NUMBEROF(other));
+			usnprintf(text, NUMBEROF(text) - 1, L"WATCHING %s VS %s", name, other);
+			text[NUMBEROF(text) - 1] = 0;
+			royale_gulag_text(1, text, &white);
+		}
 	}
-	else
-	{
-		return;
-	}
-	text[NUMBEROF(text) - 1] = 0;
-	font_index = hud_get_font_index();
-	if (font_index == NONE)
-		return;
-	font = font_definition_get(font_index);
-	height = (short)(font->ascending_height + font->descending_height);
-	bounds = render.camera.window_bounds;
-	offset_rectangle2d(&bounds, (short)-render.camera.viewport_bounds.x0, (short)-render.camera.viewport_bounds.y0);
-	/* (above the bottom's lines: dead_spectate's, three lines up from it) */
-	bounds.y1 = (short)(bounds.y1 - 24 - 3 * height);
-	bounds.y0 = (short)(bounds.y1 - height);
-	/* draw mode 2: centered */
-	draw_string_set_draw_mode(font_index, NONE, 2, 0, &color);
-	rasterizer_draw_unicode_string(&bounds, NULL, NULL, 0, text);
 }

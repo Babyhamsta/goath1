@@ -529,6 +529,9 @@ void dead_spectate_draw(
 
 	if (dead_spectate_eyes_unit(local_player_index) == NONE || watched == NONE)
 		return;
+	/* (Royale: one watching the gulag's fight has the gulag's lines) */
+	if (royale_active() && royale_gulag_spectate_unit(local_player_get_player_index(local_player_index)) != NONE)
+		return;
 	player = player_try_and_get(watched);
 	if (!player)
 		return;

@@ -887,6 +887,18 @@ static rectangle2d royale_window(
 	return window;
 }
 
+void royale_hud_row(
+	short row,
+	short *top,
+	short *bottom)
+{
+	rectangle2d window = royale_window();
+	short line = royale_line_height();
+
+	*top = (short)(window.y0 + line / 2 + row * line);
+	*bottom = (short)(*top + line);
+}
+
 static void royale_bar(
 	rectangle2d const *box,
 	real progress,
@@ -938,6 +950,7 @@ static void royale_draw_squadmate(
 	wchar_t text[48];
 	boolean downed;
 	short size;
+	short reserved_top, reserved_bottom;
 
 	if (unit_index == NONE || royale_living_unit(player_index) == NONE)
 		return;
@@ -962,7 +975,16 @@ static void royale_draw_squadmate(
 	bounds.x1 = (short)(whole.x + 160);
 	bounds.y1 = (short)(whole.y - size - 2);
 	bounds.y0 = (short)(bounds.y1 - royale_line_height());
-	royale_text(&bounds, 2, text, downed ? 1.0f : 0.5f, downed ? 0.4f : 0.85f, downed ? 0.4f : 1.0f, 1.0f);
+	/* (never over the HUD's rows at the top: under the diamond there, or
+	not at all) */
+	royale_hud_row(ROYALE_HUD_ROWS - 1, &reserved_top, &reserved_bottom);
+	if (bounds.y0 < reserved_bottom)
+	{
+		bounds.y0 = (short)(whole.y + size + 2);
+		bounds.y1 = (short)(bounds.y0 + royale_line_height());
+	}
+	if (bounds.y0 >= reserved_bottom)
+		royale_text(&bounds, 2, text, downed ? 1.0f : 0.5f, downed ? 0.4f : 0.85f, downed ? 0.4f : 1.0f, 1.0f);
 	hud_draw_mark_end();
 }
 
@@ -998,8 +1020,7 @@ static void royale_draw_banner(
 	text[NUMBEROF(text) - 1] = 0;
 	bounds.x0 = window.x0;
 	bounds.x1 = window.x1;
-	bounds.y0 = (short)(window.y0 + royale_line_height() / 2);
-	bounds.y1 = (short)(bounds.y0 + royale_line_height());
+	royale_hud_row(ROYALE_HUD_ROW_BANNER, &bounds.y0, &bounds.y1);
 	royale_text(&bounds, 2, text, 1.0f, 0.85f, 0.4f, 1.0f);
 }
 
@@ -1192,6 +1213,13 @@ void royale_draw(
 	if (royale.rules.phase >= ROYALE_RULES_PHASE_RESULTS)
 	{
 		royale_draw_results(player_index);
+		return;
+	}
+	/* (in the gulag: its lines alone; the beam, the squad and the map are
+	not theirs until they win) */
+	if (royale_player_state(player_index) == ROYALE_PLAYER_GULAG)
+	{
+		royale_gulag_draw();
 		return;
 	}
 	royale_draw_squadmate(player_index);
