@@ -11470,6 +11470,16 @@ long game_engine_write_network_state(
 	return sizeof(postgame_state) + written;
 }
 
+/* the distributed netcode: the bytes at the end of the state last written
+that are a clock every machine advances itself (Royale's): left out of the
+host's check for a change, and sent anyway now and then; 0 for none */
+long game_engine_network_state_clock_size(
+	void)
+{
+	return game_engine && game_engine_get_type() == game_engine_slayer && !infection_enabled() && royale_active() ?
+		royale_network_state_clock_size() : 0;
+}
+
 /* a client: the host's */
 void game_engine_read_network_state(
 	byte const *buffer,

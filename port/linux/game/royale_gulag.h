@@ -59,6 +59,15 @@ long royale_gulag_queue_fighter_died(struct royale_gulag_queue *queue, long play
 /* a player left the game: out of line, or out of the fight (their opponent,
 returned, wins); NONE otherwise */
 long royale_gulag_queue_leave(struct royale_gulag_queue *queue, long player_index);
+/* the line and the fight for the host's state: players by absolute index, the
+fight's start as a match time (now: the match time; the fight's ticks are now
+less it); the bytes written, 0 if size is too small */
+long royale_gulag_queue_write(struct royale_gulag_queue const *queue, long now, byte *buffer, long size);
+/* a client's read of it: the bytes read, NONE if not valid; the players
+from their absolute index (player_of_slot, NONE: not here yet, left out),
+fight_start the fight's match time */
+long royale_gulag_queue_read(byte const *buffer, long size, long (*player_of_slot)(long slot),
+	struct royale_gulag_queue *queue, long *fight_start);
 /* a fighter's opponent, NONE if not fighting; the fighter's side (0, 1) or
 NONE; a waiting player's place in line (0 next) or NONE */
 long royale_gulag_queue_opponent(struct royale_gulag_queue const *queue, long player_index);

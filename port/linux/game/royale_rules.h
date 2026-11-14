@@ -80,8 +80,16 @@ struct royale_rules
 	byte squad_count;
 	byte squads_alive;
 	byte winner; /* squad, 0xFF none */
+	/* the clock (ticks): each machine advances it (royale_rules_tick on the
+	host, royale_rules_advance on a client), so it never goes on the wire
+	but as an occasional correction */
 	long phase_time;
 	long match_time;
+	/* the match time the phase began at (phase_time is match_time less
+	it), and the one PLAY began at (NONE before; ENDGAME may begin on the
+	same tick) */
+	long phase_start;
+	long play_start;
 	struct royale_rules_slot slots[ROYALE_RULES_MAXIMUM_SLOTS];
 	/* each squad's place, 1 the winner, 0 still alive */
 	byte placement[ROYALE_RULES_MAXIMUM_SQUADS];
@@ -109,7 +117,12 @@ boolean royale_rules_lethal(struct royale_rules *rules, struct royale_rules_sett
 /* a slot's unit died (killer_slot NONE: no one's): the gulag, else out */
 void royale_rules_died(struct royale_rules *rules, struct royale_rules_settings const *settings, long slot,
 	long killer_slot, royale_rules_gulag_proc gulag);
-/* a lane moves a slot (insertion, gulag) */
+/* the host's rule for a lethal hit: an ALIVE slot whose squadmate stands
+(and is not in the gulag) goes down instead of dying. A client's prediction
+asks the same (royale.c) */
+boolean royale_rules_can_be_downed(struct royale_rules const *rules, long slot);
+/* a lane moves a slot (insertion, gulag). A slot out of the fight or
+downed never comes back through a lane: only a revive stands the downed */
 void royale_rules_set_state(struct royale_rules *rules, struct royale_rules_settings const *settings, long slot,
 	byte state);
 /* the slot's squadmate, NONE if none */
@@ -118,5 +131,31 @@ long royale_rules_squadmate(struct royale_rules const *rules, long slot);
 boolean royale_rules_squad_alive(struct royale_rules const *rules, short squad);
 /* whether the slot is out of the fight for good */
 boolean royale_rules_out(byte state);
+
+/* ---- the network state (royale.c sends it after Slayer's)
+
+Two parts: the discrete one (the phase and when it began, the squads, each
+slot's state, kills, downer and reviver, the placements), which changes only
+with events, so the host sends it when it changes; and the clock (the match
+time, and each downed slot's bleed-out and revive), which every machine
+advances itself, so it rides along as a correction outside the change check.
+Integers little-endian whatever the machine's long. */
+
+/* a client's tick: the clock advanced as the host's royale_rules_tick does
+it, without its decisions (those come from the host) */
+void royale_rules_advance(struct royale_rules *rules, struct royale_rules_settings const *settings);
+/* the parts written: their size, 0 if size is too small */
+long royale_rules_write_discrete(struct royale_rules const *rules, byte *buffer, long size);
+long royale_rules_write_clock(struct royale_rules const *rules, byte *buffer, long size);
+/* the parts read into rules (the clock after the discrete part, whose
+downed slots it follows): the bytes read, NONE if they are not a valid
+state */
+long royale_rules_read_discrete(byte const *buffer, long size, struct royale_rules *rules);
+long royale_rules_read_clock(byte const *buffer, long size, struct royale_rules *rules);
+/* a client takes the host's state: its discrete part whole; its clock only
+where the client's own is more than slack ticks off the host's projected by
+ahead ticks (the message's age), or at once (first) */
+void royale_rules_take(struct royale_rules *local, struct royale_rules const *host, long ahead, long slack,
+	boolean first);
 
 #endif
