@@ -668,6 +668,20 @@ void royale_postspawn(
 	}
 	if (player->unit_index != NONE && royale_gulag_spawn_point(player_index, &position, &facing))
 		object_set_position(player->unit_index, &position, &facing, NULL);
+	/* (the lobby's: stepped off the start they spawned at, in a ring by
+	their slot, so the map's few starts (a campaign level's) stay free for
+	the rest of a big game's players) */
+	else if (player->unit_index != NONE && slot != NONE && royale.rules.phase == ROYALE_RULES_PHASE_LOBBY)
+	{
+		real angle = (real)(slot % 16) * (6.2831853f / 16.0f);
+		real radius = 0.6f + 0.45f * (real)(slot / 16);
+
+		object_get_origin(player->unit_index, &position);
+		position.x += radius * cosf(angle);
+		position.y += radius * sinf(angle);
+		position.z += 0.1f;
+		object_set_position(player->unit_index, &position, NULL, NULL);
+	}
 	royale_loot_postspawn(player_index);
 	royale_gulag_postspawn(player_index);
 }
