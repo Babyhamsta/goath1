@@ -85,10 +85,11 @@ struct royale_beam_status
 	real damage_per_second; /* behind the front */
 };
 
-/* the stages' default damage, by stage, where the config gives none:
-rising so that the last stages are lethal in seconds */
+/* the stages' default damage, by stage, where the config gives none (as
+the config's: a share of a unit's whole health, shields and body, a
+second): rising so that the last stages are lethal in seconds */
 static real const royale_beam_default_damage[ROYALE_MAXIMUM_BEAM_STAGES] =
-	{ 2.0f, 4.0f, 7.0f, 11.0f, 16.0f, 24.0f, 34.0f, 48.0f };
+	{ 0.02f, 0.04f, 0.07f, 0.11f, 0.16f, 0.24f, 0.34f, 0.48f };
 
 /* the stages when the config has none: the island in five sweeps, the
 final area the far 6% */
@@ -616,7 +617,12 @@ static void royale_beam_damage_tick(
 		damage.epicenter = position;
 		damage.direction = *global_down3d;
 		damage.scale = 1.0f;
-		damage.multiplier = royale_beam.damage_per_point > 0.0f ? per_tick / royale_beam.damage_per_point : 0.0f;
+		/* (the tick's share of the unit's whole health, in the damage tag's
+		points) */
+		damage.multiplier = royale_beam.damage_per_point > 0.0f ?
+			per_tick * (object_get_maximum_body_vitality(player->unit_index, TRUE) +
+				object_get_maximum_shield_vitality(player->unit_index, TRUE)) / royale_beam.damage_per_point :
+			0.0f;
 		scenario_location_from_point(&damage.location, &damage.epicenter);
 		object_cause_damage(&damage, player->unit_index, NONE, NONE, NONE, NULL);
 	}
