@@ -32,6 +32,7 @@ machine, from the game's state alone.
 */
 
 #include "cseries.h"
+#include "cseries/errors.h"
 #include "game/game.h"
 #include "game/game_engine.h"
 #include "game/game_globals.h"
