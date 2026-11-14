@@ -443,6 +443,15 @@ boolean royale_map_config_load(
 	{
 		FILE *file = fopen(path, "rb");
 
+		/* (a path of the machine's the game may not see as it is: the file's
+		name in the data folder, the game's own) */
+		if (!file)
+		{
+			char const *name = strrchr(path, '/');
+
+			file = fopen(name ? name + 1 : path, "rb");
+		}
+
 		if (file)
 		{
 			long size;
