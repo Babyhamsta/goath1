@@ -88,6 +88,8 @@ struct insertion_player
 	boolean jump_was_down;
 	boolean falling;
 	long falling_ticks;
+	long ground_ticks; /* on the ground without a break */
+	boolean impact_shown;
 	long unit_index; /* the unit falling */
 };
 
@@ -313,9 +315,9 @@ void royale_insertion_air_control(real_vector3d *velocity, real throttle_forward
 	velocity->j += dj;
 }
 
-boolean royale_insertion_landed(long ticks_falling, boolean airborne)
+boolean royale_insertion_landed(long ticks_falling, long ground_ticks)
 {
-	return ticks_falling > ROYALE_INSERTION_LANDING_GRACE_TICKS && !airborne;
+	return ticks_falling > ROYALE_INSERTION_LANDING_GRACE_TICKS && ground_ticks >= ROYALE_INSERTION_SETTLE_TICKS;
 }
 
 void royale_insertion_safe_area(struct royale_bounds const *bounds, short side, real target_fraction,
@@ -443,6 +445,8 @@ static void insertion_fall_begin(long player_index, long unit_index)
 	state->pelican = NONE;
 	state->falling = TRUE;
 	state->falling_ticks = 0;
+	state->ground_ticks = 0;
+	state->impact_shown = FALSE;
 	state->unit_index = unit_index;
 	state->jump_requested = FALSE;
 	insertion_set_falling_immunity(unit_index, TRUE);
@@ -849,6 +853,8 @@ static void insertion_fall(void)
 		{
 			state->falling = TRUE;
 			state->falling_ticks = 0;
+			state->ground_ticks = 0;
+			state->impact_shown = FALSE;
 			state->unit_index = player->unit_index;
 		}
 		if (!state->falling)
@@ -866,9 +872,17 @@ static void insertion_fall(void)
 		state->falling_ticks++;
 		SET_FLAG(biped->unit.flags, _unit_no_falling_damage_bit, TRUE);
 		airborne = TEST_FLAG(biped->biped.flags, _biped_airborne_bit) != 0;
-		if (royale_insertion_landed(state->falling_ticks, airborne))
+		/* (the impact at the first touch of the ground; the fall ends once
+		they stand: a brush of a ledge or a tree on the way down keeps them
+		falling, and immune) */
+		state->ground_ticks = airborne ? 0 : state->ground_ticks + 1;
+		if (!airborne && !state->impact_shown && state->falling_ticks > ROYALE_INSERTION_LANDING_GRACE_TICKS)
 		{
+			state->impact_shown = TRUE;
 			insertion_landing_impact(iterator.datum_index, state->unit_index);
+		}
+		if (royale_insertion_landed(state->falling_ticks, state->ground_ticks))
+		{
 			insertion_set_falling_immunity(state->unit_index, FALSE);
 			state->falling = FALSE;
 			if (insertion_authority())

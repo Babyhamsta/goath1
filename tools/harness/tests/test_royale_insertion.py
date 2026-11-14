@@ -21,8 +21,9 @@ CONTROLS = [
     ('if (change > step)', 'if (0)', 'air'),
     # (steering with no throttle brakes the jump's carry)
     ('\tif (throttle <= 0.0f)\n\t\treturn;\n', '', 'air'),
-    # (no grace: a jumper lands on the step off the deck)
-    ('return ticks_falling > ROYALE_INSERTION_LANDING_GRACE_TICKS && !airborne;', 'return !airborne;', 'landed'),
+    # (no settling: a brush of a ledge on the way down ends the fall and its immunity)
+    ('return ticks_falling > ROYALE_INSERTION_LANDING_GRACE_TICKS && ground_ticks >= ROYALE_INSERTION_SETTLE_TICKS;',
+     'return ticks_falling > ROYALE_INSERTION_LANDING_GRACE_TICKS && ground_ticks > 0;', 'landed'),
     # (the beam's side read backwards: redeploys into the glass)
     ('case ROYALE_SIDE_NORTH: safe->maximum.y = bounds->maximum.y - size_y * fraction;',
      'case ROYALE_SIDE_NORTH: safe->minimum.y = bounds->minimum.y + size_y * fraction;', 'safe'),

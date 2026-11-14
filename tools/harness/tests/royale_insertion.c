@@ -173,10 +173,14 @@ static void case_air(void)
 in the air */
 static void case_landed(void)
 {
-	CHECK(!royale_insertion_landed(1, FALSE), "landed stepping off");
-	CHECK(!royale_insertion_landed(ROYALE_INSERTION_LANDING_GRACE_TICKS, FALSE), "landed in the grace");
-	CHECK(!royale_insertion_landed(200, TRUE), "landed in the air");
-	CHECK(royale_insertion_landed(200, FALSE), "not landed on the ground");
+	CHECK(!royale_insertion_landed(1, 1), "landed stepping off");
+	CHECK(!royale_insertion_landed(ROYALE_INSERTION_LANDING_GRACE_TICKS, ROYALE_INSERTION_SETTLE_TICKS),
+		"landed in the grace");
+	CHECK(!royale_insertion_landed(200, 0), "landed in the air");
+	/* (a brush of a ledge on the way down: still falling, still immune) */
+	CHECK(!royale_insertion_landed(200, 1), "landed brushing a ledge");
+	CHECK(!royale_insertion_landed(200, ROYALE_INSERTION_SETTLE_TICKS - 1), "landed before settling");
+	CHECK(royale_insertion_landed(200, ROYALE_INSERTION_SETTLE_TICKS), "not landed on the ground");
 }
 
 /* the safe area: what the beam has not reached, and redeploys inside it */
