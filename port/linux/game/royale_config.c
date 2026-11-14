@@ -66,6 +66,11 @@ void platform_log(char const *format, ...);
 #include "royale_maps.inc"
 
 #define ROYALE_CONFIG_MAXIMUM_VALUES 8
+/* the largest number a config takes (world units, seconds): a bigger one,
+or an infinity or a NaN, is a broken file */
+#define ROYALE_CONFIG_MAXIMUM_MAGNITUDE 1.0e6
+/* a scenario's structure BSPs (scenario.h's 32) */
+#define ROYALE_CONFIG_MAXIMUM_STRUCTURE_BSPS 32
 
 enum
 {
@@ -126,8 +131,13 @@ static char const *royale_config_scalar(
 		char *end;
 		double number = strtod(text, &end);
 
-		if (end == text)
+		/* (not number - number == 0: an infinity or a NaN; nor one too large
+		for a real) */
+		if (end == text || number - number != 0.0 || number > ROYALE_CONFIG_MAXIMUM_MAGNITUDE ||
+			number < -ROYALE_CONFIG_MAXIMUM_MAGNITUDE)
+		{
 			return NULL;
+		}
 		value->numbers[value->count++] = (real)number;
 		return end;
 	}
@@ -236,8 +246,12 @@ static boolean royale_config_set(
 		}
 		if (!strcmp(key, "structure_bsp"))
 		{
-			if (!royale_config_number(value, &number))
+			/* (a whole BSP index the scenario can have) */
+			if (!royale_config_number(value, &number) || number != (real)(short)number || number < 0.0f ||
+				number >= ROYALE_CONFIG_MAXIMUM_STRUCTURE_BSPS)
+			{
 				return FALSE;
+			}
 			config->structure_bsp = (short)number;
 			return TRUE;
 		}
@@ -273,8 +287,9 @@ static boolean royale_config_set(
 			return royale_config_point(value, &path->start);
 		if (!strcmp(key, "end"))
 			return royale_config_point(value, &path->end);
+		/* (a speed given is one: none, and the insertion picks its own) */
 		if (!strcmp(key, "speed"))
-			return royale_config_number(value, &path->speed);
+			return royale_config_number(value, &path->speed) && path->speed > 0.0f;
 		return TRUE;
 	}
 	case _section_beam_stage:
@@ -364,6 +379,42 @@ static short royale_config_section(
 	return _section_unknown;
 }
 
+/* a box's minimum is no more than its maximum (all zero: none given) */
+static boolean royale_config_bounds_valid(
+	struct royale_bounds const *bounds)
+{
+	return bounds->minimum.x <= bounds->maximum.x && bounds->minimum.y <= bounds->maximum.y &&
+		bounds->minimum.z <= bounds->maximum.z;
+}
+
+/* the values in range, as a whole (each number is finite already) */
+static boolean royale_config_valid(
+	struct royale_map_config const *config)
+{
+	short index;
+
+	if (!royale_config_bounds_valid(&config->bounds) || !royale_config_bounds_valid(&config->gulag.bounds))
+		return FALSE;
+	for (index = 0; index < config->blocked_entrance_count; index++)
+	{
+		if (!royale_config_bounds_valid(&config->blocked_entrances[index].bounds))
+			return FALSE;
+	}
+	for (index = 0; index < config->beam_stage_count; index++)
+	{
+		struct royale_beam_stage const *stage = &config->beam_stages[index];
+
+		/* (a stage moves over some time, after no negative wait, within the
+		map's length, hurting no less than nothing) */
+		if (!(stage->duration > 0.0f) || stage->delay < 0.0f || stage->start < 0.0f || stage->start > 1.0f ||
+			stage->end < 0.0f || stage->end > 1.0f || stage->damage_per_second < 0.0f)
+		{
+			return FALSE;
+		}
+	}
+	return TRUE;
+}
+
 boolean royale_map_config_parse(
 	char const *text,
 	struct royale_map_config *config)
@@ -422,6 +473,12 @@ boolean royale_map_config_parse(
 			if (section != _section_unknown && !royale_config_set(config, section, key, &value))
 				goto fail;
 		}
+	}
+	if (!royale_config_valid(config))
+	{
+		platform_log("royale: map config: a value out of range");
+		csmemset(config, 0, sizeof(*config));
+		return FALSE;
 	}
 	return TRUE;
 

@@ -66,6 +66,8 @@ void royale_rules_reset(
 	rules->winner = SLOT_NONE;
 	rules->phase_time = 0;
 	rules->match_time = 0;
+	rules->phase_start = 0;
+	rules->play_start = NONE;
 	for (slot = 0; slot < ROYALE_RULES_MAXIMUM_SLOTS; slot++)
 	{
 		struct royale_rules_slot *entry = &rules->slots[slot];
@@ -133,6 +135,9 @@ static void royale_rules_set_phase(
 {
 	rules->phase = phase;
 	rules->phase_time = 0;
+	rules->phase_start = rules->match_time;
+	if ((phase == ROYALE_RULES_PHASE_PLAY || phase == ROYALE_RULES_PHASE_ENDGAME) && rules->play_start == NONE)
+		rules->play_start = rules->match_time;
 }
 
 /* a squad out of the fight is placed; one squad left (or none) wins */
@@ -268,6 +273,23 @@ void royale_rules_leave(
 	royale_rules_count_squads(rules, settings);
 }
 
+boolean royale_rules_can_be_downed(
+	struct royale_rules const *rules,
+	long slot)
+{
+	long mate;
+
+	if (!royale_rules_valid_slot(slot) || rules->phase >= ROYALE_RULES_PHASE_RESULTS ||
+		rules->slots[slot].state != ROYALE_RULES_ALIVE)
+	{
+		return FALSE;
+	}
+	/* (no squadmate standing to revive them: they die) */
+	mate = royale_rules_squadmate(rules, slot);
+	return mate != NONE && royale_rules_standing(rules->slots[mate].state) &&
+		rules->slots[mate].state != ROYALE_RULES_GULAG;
+}
+
 boolean royale_rules_lethal(
 	struct royale_rules *rules,
 	struct royale_rules_settings const *settings,
@@ -275,20 +297,10 @@ boolean royale_rules_lethal(
 	long attacker_slot)
 {
 	struct royale_rules_slot *entry;
-	long mate;
-	boolean can_revive;
 
-	if (!royale_rules_valid_slot(slot) || rules->phase >= ROYALE_RULES_PHASE_RESULTS)
+	if (!royale_rules_can_be_downed(rules, slot))
 		return FALSE;
 	entry = &rules->slots[slot];
-	if (entry->state != ROYALE_RULES_ALIVE)
-		return FALSE;
-	/* (no squadmate standing to revive them: they die) */
-	mate = royale_rules_squadmate(rules, slot);
-	can_revive = mate != NONE && royale_rules_standing(rules->slots[mate].state) &&
-		rules->slots[mate].state != ROYALE_RULES_GULAG;
-	if (!can_revive)
-		return FALSE;
 	entry->state = ROYALE_RULES_DOWNED;
 	entry->downed_by = royale_rules_valid_slot(attacker_slot) && attacker_slot != slot ? (byte)attacker_slot :
 		SLOT_NONE;
@@ -306,6 +318,13 @@ void royale_rules_set_state(
 {
 	if (!royale_rules_valid_slot(slot) || rules->slots[slot].state == ROYALE_RULES_NONE)
 		return;
+	/* (a lane never brings back one out, nor stands one downed: a landing
+	after a down in the air, a stale win) */
+	if (state != ROYALE_RULES_SPECTATING && state != ROYALE_RULES_ELIMINATED &&
+		(royale_rules_out(rules->slots[slot].state) || rules->slots[slot].state == ROYALE_RULES_DOWNED))
+	{
+		return;
+	}
 	if (state == ROYALE_RULES_SPECTATING || state == ROYALE_RULES_ELIMINATED)
 	{
 		if (!royale_rules_out(rules->slots[slot].state))
@@ -473,4 +492,296 @@ void royale_rules_tick(
 	royale_rules_died hears of it: its unit's death is the one death) */
 	(void)gulag;
 	royale_rules_count_squads(rules, settings);
+}
+
+/* ---- the network state */
+
+/* a discrete part's slot: slot, state, squad, kills, downed_by, reviver */
+#define ROYALE_RULES_SLOT_BYTES 6
+/* the discrete part's head: phase, squad_count, squads_alive, winner,
+phase_start, play_start, the slots' count */
+#define ROYALE_RULES_HEAD_BYTES 13
+
+static byte *royale_rules_put_long(
+	byte *cursor,
+	long value)
+{
+	unsigned long bits = (unsigned long)value;
+
+	cursor[0] = (byte)(bits & 0xFF);
+	cursor[1] = (byte)((bits >> 8) & 0xFF);
+	cursor[2] = (byte)((bits >> 16) & 0xFF);
+	cursor[3] = (byte)((bits >> 24) & 0xFF);
+	return cursor + 4;
+}
+
+static byte const *royale_rules_get_long(
+	byte const *cursor,
+	long *value)
+{
+	unsigned long bits = (unsigned long)cursor[0] | ((unsigned long)cursor[1] << 8) |
+		((unsigned long)cursor[2] << 16) | ((unsigned long)cursor[3] << 24);
+
+	/* (sign extended where a long is wider than 32 bits) */
+	*value = (bits & 0x80000000UL) ? -(long)(~bits & 0x7FFFFFFFUL) - 1 : (long)bits;
+	return cursor + 4;
+}
+
+static byte *royale_rules_put_short(
+	byte *cursor,
+	short value)
+{
+	unsigned short bits = (unsigned short)value;
+
+	cursor[0] = (byte)(bits & 0xFF);
+	cursor[1] = (byte)((bits >> 8) & 0xFF);
+	return cursor + 2;
+}
+
+static byte const *royale_rules_get_short(
+	byte const *cursor,
+	short *value)
+{
+	long bits = (long)cursor[0] | ((long)cursor[1] << 8);
+
+	*value = (short)(bits >= 0x8000 ? bits - 0x10000 : bits);
+	return cursor + 2;
+}
+
+void royale_rules_advance(
+	struct royale_rules *rules,
+	struct royale_rules_settings const *settings)
+{
+	long slot;
+
+	rules->match_time++;
+	rules->phase_time = rules->match_time - rules->phase_start;
+	/* (what comes of a revive or a bleed-out is the host's word) */
+	if (rules->phase >= ROYALE_RULES_PHASE_RESULTS)
+		return;
+	for (slot = 0; slot < ROYALE_RULES_MAXIMUM_SLOTS; slot++)
+	{
+		struct royale_rules_slot *entry = &rules->slots[slot];
+
+		if (entry->state != ROYALE_RULES_DOWNED)
+			continue;
+		if (entry->reviver != SLOT_NONE)
+		{
+			if (entry->revive_ticks < settings->revive_ticks)
+				entry->revive_ticks++;
+		}
+		else if (entry->downed_ticks > 0)
+			entry->downed_ticks--;
+	}
+}
+
+long royale_rules_write_discrete(
+	struct royale_rules const *rules,
+	byte *buffer,
+	long size)
+{
+	byte *cursor = buffer;
+	long count = 0;
+	long slot;
+	short squad;
+
+	for (slot = 0; slot < ROYALE_RULES_MAXIMUM_SLOTS; slot++)
+	{
+		if (rules->slots[slot].state != ROYALE_RULES_NONE)
+			count++;
+	}
+	if (size < ROYALE_RULES_HEAD_BYTES + count * ROYALE_RULES_SLOT_BYTES + rules->squad_count)
+		return 0;
+	*cursor++ = rules->phase;
+	*cursor++ = rules->squad_count;
+	*cursor++ = rules->squads_alive;
+	*cursor++ = rules->winner;
+	cursor = royale_rules_put_long(cursor, rules->phase_start);
+	cursor = royale_rules_put_long(cursor, rules->play_start);
+	*cursor++ = (byte)count;
+	for (slot = 0; slot < ROYALE_RULES_MAXIMUM_SLOTS; slot++)
+	{
+		struct royale_rules_slot const *entry = &rules->slots[slot];
+
+		if (entry->state == ROYALE_RULES_NONE)
+			continue;
+		*cursor++ = (byte)slot;
+		*cursor++ = entry->state;
+		*cursor++ = entry->squad;
+		*cursor++ = entry->kills;
+		*cursor++ = entry->downed_by;
+		*cursor++ = entry->reviver;
+	}
+	for (squad = 0; squad < rules->squad_count; squad++)
+		*cursor++ = rules->placement[squad];
+	return (long)(cursor - buffer);
+}
+
+long royale_rules_write_clock(
+	struct royale_rules const *rules,
+	byte *buffer,
+	long size)
+{
+	byte *cursor = buffer;
+	long count = 0;
+	long slot;
+
+	for (slot = 0; slot < ROYALE_RULES_MAXIMUM_SLOTS; slot++)
+	{
+		if (rules->slots[slot].state == ROYALE_RULES_DOWNED)
+			count++;
+	}
+	if (size < 4 + count * 4)
+		return 0;
+	cursor = royale_rules_put_long(cursor, rules->match_time);
+	for (slot = 0; slot < ROYALE_RULES_MAXIMUM_SLOTS; slot++)
+	{
+		if (rules->slots[slot].state != ROYALE_RULES_DOWNED)
+			continue;
+		cursor = royale_rules_put_short(cursor, rules->slots[slot].downed_ticks);
+		cursor = royale_rules_put_short(cursor, rules->slots[slot].revive_ticks);
+	}
+	return (long)(cursor - buffer);
+}
+
+/* a slot's byte: a slot, or none */
+static boolean royale_rules_valid_slot_byte(
+	byte value)
+{
+	return value == SLOT_NONE || value < ROYALE_RULES_MAXIMUM_SLOTS;
+}
+
+long royale_rules_read_discrete(
+	byte const *buffer,
+	long size,
+	struct royale_rules *rules)
+{
+	byte const *cursor = buffer;
+	long count;
+	long index;
+	short squad;
+
+	if (size < ROYALE_RULES_HEAD_BYTES)
+		return NONE;
+	royale_rules_reset(rules);
+	rules->phase = *cursor++;
+	rules->squad_count = *cursor++;
+	rules->squads_alive = *cursor++;
+	rules->winner = *cursor++;
+	cursor = royale_rules_get_long(cursor, &rules->phase_start);
+	cursor = royale_rules_get_long(cursor, &rules->play_start);
+	count = *cursor++;
+	if (rules->phase > ROYALE_RULES_PHASE_OVER || rules->squad_count > ROYALE_RULES_MAXIMUM_SQUADS ||
+		rules->squads_alive > rules->squad_count ||
+		(rules->winner != SLOT_NONE && rules->winner >= rules->squad_count) || count > ROYALE_RULES_MAXIMUM_SLOTS ||
+		rules->phase_start < 0 || rules->play_start < NONE ||
+		size < ROYALE_RULES_HEAD_BYTES + count * ROYALE_RULES_SLOT_BYTES + rules->squad_count)
+	{
+		return NONE;
+	}
+	for (index = 0; index < count; index++)
+	{
+		byte slot = *cursor++;
+		struct royale_rules_slot *entry;
+
+		if (slot >= ROYALE_RULES_MAXIMUM_SLOTS || rules->slots[slot].state != ROYALE_RULES_NONE)
+			return NONE;
+		entry = &rules->slots[slot];
+		entry->state = *cursor++;
+		entry->squad = *cursor++;
+		entry->kills = *cursor++;
+		entry->downed_by = *cursor++;
+		entry->reviver = *cursor++;
+		if (entry->state > ROYALE_RULES_ELIMINATED || (entry->squad != SLOT_NONE && entry->squad >= rules->squad_count) ||
+			!royale_rules_valid_slot_byte(entry->downed_by) || !royale_rules_valid_slot_byte(entry->reviver))
+		{
+			return NONE;
+		}
+	}
+	for (squad = 0; squad < rules->squad_count; squad++)
+	{
+		rules->placement[squad] = *cursor++;
+		if (rules->placement[squad] > rules->squad_count)
+			return NONE;
+	}
+	return (long)(cursor - buffer);
+}
+
+long royale_rules_read_clock(
+	byte const *buffer,
+	long size,
+	struct royale_rules *rules)
+{
+	byte const *cursor = buffer;
+	long count = 0;
+	long slot;
+
+	for (slot = 0; slot < ROYALE_RULES_MAXIMUM_SLOTS; slot++)
+	{
+		if (rules->slots[slot].state == ROYALE_RULES_DOWNED)
+			count++;
+	}
+	if (size < 4 + count * 4)
+		return NONE;
+	cursor = royale_rules_get_long(cursor, &rules->match_time);
+	if (rules->match_time < rules->phase_start || rules->match_time < rules->play_start)
+		return NONE;
+	rules->phase_time = rules->match_time - rules->phase_start;
+	for (slot = 0; slot < ROYALE_RULES_MAXIMUM_SLOTS; slot++)
+	{
+		if (rules->slots[slot].state != ROYALE_RULES_DOWNED)
+			continue;
+		cursor = royale_rules_get_short(cursor, &rules->slots[slot].downed_ticks);
+		cursor = royale_rules_get_short(cursor, &rules->slots[slot].revive_ticks);
+	}
+	return (long)(cursor - buffer);
+}
+
+/* a client's count: its own, unless more than slack off the host's (or
+snapped to it) */
+static long royale_rules_corrected(
+	long local,
+	long host,
+	long slack,
+	boolean snap)
+{
+	return snap || local < host - slack || local > host + slack ? host : local;
+}
+
+void royale_rules_take(
+	struct royale_rules *local,
+	struct royale_rules const *host,
+	long ahead,
+	long slack,
+	boolean first)
+{
+	struct royale_rules previous = *local;
+	long slot;
+
+	if (ahead < 0)
+		ahead = 0;
+	*local = *host;
+	local->match_time = royale_rules_corrected(previous.match_time, host->match_time + ahead, slack, first);
+	/* (the phase's start is the host's: its time follows the clock) */
+	if (local->match_time < local->phase_start)
+		local->match_time = local->phase_start;
+	local->phase_time = local->match_time - local->phase_start;
+	for (slot = 0; slot < ROYALE_RULES_MAXIMUM_SLOTS; slot++)
+	{
+		struct royale_rules_slot const *was = &previous.slots[slot];
+		struct royale_rules_slot *entry = &local->slots[slot];
+		/* (a new down, or a revive begun or let go: the host's counts) */
+		boolean snap = first || was->state != ROYALE_RULES_DOWNED || was->reviver != entry->reviver;
+		long downed = entry->downed_ticks;
+		long revive = entry->revive_ticks;
+
+		if (entry->state != ROYALE_RULES_DOWNED)
+			continue;
+		if (entry->reviver != SLOT_NONE)
+			revive += ahead;
+		else
+			downed = downed > ahead ? downed - ahead : 0;
+		entry->downed_ticks = (short)royale_rules_corrected(was->downed_ticks, downed, slack, snap);
+		entry->revive_ticks = (short)royale_rules_corrected(was->revive_ticks, revive, slack, snap);
+	}
 }

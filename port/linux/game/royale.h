@@ -25,7 +25,8 @@ a clock. With Royale off nothing here does anything. */
 
 /* ---- limits */
 
-#define ROYALE_MAXIMUM_PLAYERS 64
+/* every player the port allows (halo_port_limits.h) */
+#define ROYALE_MAXIMUM_PLAYERS HALO_PORT_MAXIMUM_NETWORK_PLAYERS
 #define ROYALE_SQUAD_SIZE 2
 #define ROYALE_MAXIMUM_SQUADS (ROYALE_MAXIMUM_PLAYERS / ROYALE_SQUAD_SIZE)
 
@@ -50,8 +51,14 @@ enum royale_phase
 enum royale_phase royale_phase(void);
 /* the game ticks spent in the current phase */
 long royale_phase_time(void);
-/* the game ticks since the Royale game began (LOBBY's first tick) */
+/* the game ticks since the Royale game began (LOBBY's first tick). Every
+machine counts them itself, tick by tick (a client's corrected now and then
+by the host's): a lane times things from these, never from game_time_get,
+which differs from machine to machine */
 long royale_match_time(void);
+/* the match time PLAY began at (ENDGAME's too when it came at once), NONE
+before */
+long royale_play_start_time(void);
 
 /* ---- squads
 
@@ -241,8 +248,17 @@ eliminates them. Host/simulation, before core marks them ELIMINATED. */
 boolean royale_gulag_player_died(long player_index, long killer_player_index);
 /* (gulag) where a player spawns: TRUE and core spawns them there */
 boolean royale_gulag_spawn_point(long player_index, real_point3d *position, real_vector3d *facing);
-/* (gulag) after a player's unit spawns (core calls it for every spawn) */
+/* (gulag) after a player's unit spawns (core calls it for every spawn the
+host makes; a client's units come from the network, so what a client must
+see of a spawn (a fighter's view turned the arena's way) the gulag's tick
+does on every machine) */
 void royale_gulag_postspawn(long player_index);
+/* (gulag) its line and fight in the host's state (royale_write_network_state):
+the bytes written, 0 if size is too small; a client's read (the bytes, NONE
+if not valid), taken once the whole state is (take) */
+long royale_gulag_write_network_state(byte *buffer, long size);
+long royale_gulag_read_network_state(byte const *buffer, long size);
+void royale_gulag_take_network_state(void);
 /* (gulag) the unit a GULAG player with no unit watches, NONE if none */
 long royale_gulag_spectate_unit(long player_index);
 /* (gulag, core's) spawn the player's unit at core's next tick, through the
@@ -310,8 +326,8 @@ run (the game options' random_seed); hash it, never draw from the game's
 random in a lane's start */
 unsigned long royale_match_seed(void);
 
-/* (loot) after a player's unit spawns, on every machine, after the game
-engine's loadout and before royale_gulag_postspawn */
+/* (loot) after a player's unit spawns (the host's spawns: the kit is the
+host's), after the game engine's loadout and before royale_gulag_postspawn */
 void royale_loot_postspawn(long player_index);
 
 /* (insertion) the insertion lane is linked in (TRUE from its own
@@ -349,6 +365,10 @@ boolean royale_game_over(void);
 Slayer's and Royale's */
 long royale_write_network_state(byte *buffer, long size);
 boolean royale_read_network_state(byte const *buffer, long size, boolean first);
+/* the bytes at the end of the state last written that are the clock: not
+part of what decides whether the state changed, and sent anyway every few
+seconds (network_distributed.c); 0 when not a Royale game */
+long royale_network_state_clock_size(void);
 /* a lethal hit on an object (damage.c): TRUE if it downs a player instead,
 their unit kept with a little health */
 boolean royale_absorb_lethal_damage(long object_index, long attacker_player_index);

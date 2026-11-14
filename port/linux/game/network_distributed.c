@@ -129,6 +129,7 @@ void network_player_show_pickup(long player_index, short kind, long definition_i
 /* game_engine.c's */
 long game_engine_write_network_state(byte *buffer, long size);
 void game_engine_read_network_state(byte const *buffer, long size);
+long game_engine_network_state_clock_size(void);
 /* physics.c's (world units a tick, each tick) */
 extern real global_gravity;
 /* network_server_manager.c's, cseries_windows.c's, console.c's, p2p.c's */
@@ -214,6 +215,10 @@ enum
 	(the king's and the ball's scores change every tick), but the game's end
 	at once */
 	GAME_STATE_MINIMUM_TICKS = 2 * GAME_STATE_INTERVAL_TICKS,
+	/* ... and a state ending in a clock every machine advances itself
+	(game_engine_network_state_clock_size: Royale's) at least this often,
+	its clock the only change: a correction */
+	GAME_STATE_CLOCK_REFRESH_TICKS = 3 * TICKS_PER_SECOND,
 	MAXIMUM_GAME_STATE_SIZE = 0xF00,
 	MAXIMUM_STATISTICS_PER_MESSAGE = 64,
 	/* the players' pings sent, for the scoreboard */
@@ -6727,7 +6732,9 @@ static void distributed_send_game_state(
 		byte data[MAXIMUM_GAME_STATE_SIZE];
 	} message;
 	long size = game_engine_write_network_state(message.data, sizeof(message.data));
+	long clock_size = game_engine_network_state_clock_size();
 	unsigned long checksum;
+	boolean clock_due;
 
 	if (size <= 0)
 		return;
@@ -6737,8 +6744,13 @@ static void distributed_send_game_state(
 			(word)(sizeof(message.header) + size));
 		return;
 	}
-	checksum = distributed_checksum(message.data, size);
-	if (distributed_game_state_time != NONE &&
+	/* (a clock at the end is no change: it goes with the next change, or
+	every GAME_STATE_CLOCK_REFRESH_TICKS) */
+	clock_size = PIN(clock_size, 0, size);
+	checksum = distributed_checksum(message.data, size - clock_size);
+	clock_due = clock_size > 0 && distributed_game_state_time != NONE &&
+		game_time_get() - distributed_game_state_time >= GAME_STATE_CLOCK_REFRESH_TICKS;
+	if (distributed_game_state_time != NONE && !clock_due &&
 		(checksum == distributed_game_state_checksum ||
 			(game_time_get() - distributed_game_state_time < GAME_STATE_MINIMUM_TICKS &&
 				(size < (long)sizeof(long) ||

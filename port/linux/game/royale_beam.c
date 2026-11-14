@@ -804,17 +804,13 @@ void royale_beam_tick(
 		/* (RESULTS: the beam stays where it was) */
 		return;
 	}
+	/* (from the match clock every machine keeps alike, each tick: PLAY's
+	start is the rules', also when ENDGAME came at once; a client that
+	joined late, or whose clock the host corrected, is right at once) */
+	royale_beam.play_start = royale_play_start_time();
 	if (royale_beam.play_start == NONE)
-	{
-		/* (a machine that joined during PLAY counts from its start) */
-		royale_beam.play_start =
-			royale_match_time() - (phase == ROYALE_PHASE_PLAY ? royale_phase_time() : 0);
-		royale_beam.ticks = royale_match_time() - royale_beam.play_start;
-	}
-	else
-	{
-		royale_beam.ticks++;
-	}
+		return;
+	royale_beam.ticks = MAX(royale_match_time() - royale_beam.play_start, 0);
 	royale_beam_status_at(royale_beam.stages, royale_beam.stage_count, royale_beam.ticks_per_second,
 		royale_beam.ticks, &royale_beam.status);
 	royale_beam_damage_tick();

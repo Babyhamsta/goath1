@@ -92,6 +92,9 @@ struct insertion_player
 	long ground_ticks; /* on the ground without a break */
 	boolean impact_shown;
 	long unit_index; /* the unit falling */
+	/* the unit this machine saw land, until the host's state says it is
+	no longer falling (a client's land comes before the host's ALIVE) */
+	long landed_unit;
 };
 
 static struct
@@ -469,9 +472,11 @@ static void insertion_jump(long player_index, struct insertion_pelican *pelican)
 		return;
 	if (object_get(unit_index)->object.parent_object_index != NONE)
 		unit_exit_seat_end(unit_index);
-	if (pelican->object_index != NONE)
+	/* (the Pelican's handle checked: one gone leaves the jumper where they are) */
+	vehicle = pelican->object_index != NONE ?
+		object_try_and_get_and_verify_type(pelican->object_index, _object_mask_unit) : NULL;
+	if (vehicle)
 	{
-		vehicle = object_get(pelican->object_index);
 		left.i = -vehicle->object.forward.j;
 		left.j = vehicle->object.forward.i;
 		left.k = 0.0f;
@@ -781,7 +786,8 @@ static void insertion_fly(void)
 
 		if (pelican->object_index != NONE && pelican->done)
 		{
-			object_delete(pelican->object_index);
+			if (object_try_and_get_and_verify_type(pelican->object_index, _object_mask_unit))
+				object_delete(pelican->object_index);
 			pelican->object_index = NONE;
 		}
 	}
@@ -854,9 +860,12 @@ static void insertion_fall(void)
 
 		if (!state)
 			continue;
-		/* (a client: falling as the host says) */
+		/* (a client: falling as the host says, but not again for a unit it
+		saw land, before the host's ALIVE comes) */
+		if (royale_player_state(iterator.datum_index) != ROYALE_PLAYER_FALLING)
+			state->landed_unit = NONE;
 		if (!state->falling && royale_player_state(iterator.datum_index) == ROYALE_PLAYER_FALLING &&
-			player->unit_index != NONE)
+			player->unit_index != NONE && player->unit_index != state->landed_unit)
 		{
 			state->falling = TRUE;
 			state->falling_ticks = 0;
@@ -892,7 +901,10 @@ static void insertion_fall(void)
 		{
 			insertion_set_falling_immunity(state->unit_index, FALSE);
 			state->falling = FALSE;
-			if (insertion_authority())
+			state->landed_unit = state->unit_index;
+			/* (a landing stands only the falling: one downed or out on the
+			way down stays so) */
+			if (insertion_authority() && royale_player_state(iterator.datum_index) == ROYALE_PLAYER_FALLING)
 			{
 				royale_set_player_state(iterator.datum_index, ROYALE_PLAYER_ALIVE);
 				error(_error_log, "royale insertion: player %ld landed at %.1f %.1f %.1f after %ld ticks",
@@ -920,6 +932,7 @@ void royale_insertion_start(struct royale_map_config const *config)
 	{
 		insertion.players[index].pelican = NONE;
 		insertion.players[index].unit_index = NONE;
+		insertion.players[index].landed_unit = NONE;
 	}
 	for (index = 0; index < ROYALE_INSERTION_MAXIMUM_PELICANS; index++)
 		insertion.pelicans[index].object_index = NONE;
@@ -1032,7 +1045,10 @@ boolean royale_insertion_pelican_position(long player_index, real_point3d *posit
 	{
 		return FALSE;
 	}
-	object = object_get(insertion.pelicans[state->pelican].object_index);
+	/* (a Pelican destroyed, or its handle stale: none) */
+	object = object_try_and_get_and_verify_type(insertion.pelicans[state->pelican].object_index, _object_mask_unit);
+	if (!object)
+		return FALSE;
 	*position = object->object.position;
 	*velocity = object->object.translational_velocity;
 	return TRUE;
