@@ -1,0 +1,3 @@
+Royale (a game mode: options' mode 4 and its bleed-out, revive and gulag
+options from reserved), and its rules' state after Slayer's in the game engine
+state (royale.c)

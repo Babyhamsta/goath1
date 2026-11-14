@@ -94,6 +94,7 @@ symbols in this file:
 #include "panini.h" /* port: port/linux/game/panini.c */
 #include "near_clip.h" /* port: port/linux/game/near_clip.c */
 #include "world_ao.h" /* port: port/linux/game/world_ao.c */
+#include "royale_beam.h" /* port: port/linux/game/royale_beam.c */
 
 #ifdef HALO_VR
 #include "../../port/linux/src/vr.h"
@@ -628,6 +629,8 @@ static void render_window(
 		render_particles();
 		particle_systems_render();
 		render_contrails_normal();
+		/* port: Royale's glassing beam (port/linux/game/royale_beam.c) */
+		royale_beam_render();
 		/* port: and every effect's (port/linux/game/render_enumerate.c) */
 		render_enumerate_effects();
 		rasterizer_transparent_geometry_draw(TRUE);
