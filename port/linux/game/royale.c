@@ -61,6 +61,10 @@ reads a map config from a file.
 #include "network_standard.h"
 #include "royale.h"
 #include "royale_rules.h"
+#include "royale_audio.h"
+#include "royale_cinema.h"
+#include "royale_fx.h"
+#include "royale_hud.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -455,6 +459,10 @@ static void royale_start_lanes(
 	royale_gulag_start(config);
 	royale_bots_start(config);
 	royale_scale_start(config);
+	royale_cinema_start(config);
+	royale_audio_start(config);
+	royale_fx_start(config);
+	royale_hud_start(config);
 }
 
 void royale_reset(
@@ -484,6 +492,10 @@ void royale_reset(
 	royale_gulag_reset();
 	royale_bots_reset();
 	royale_scale_reset();
+	royale_cinema_reset();
+	royale_audio_reset();
+	royale_fx_reset();
+	royale_hud_reset();
 }
 
 /* ---- the host's rules each tick */
@@ -695,6 +707,10 @@ static void royale_update(
 	royale_gulag_tick();
 	royale_bots_tick();
 	royale_scale_tick();
+	royale_cinema_tick();
+	royale_audio_tick();
+	royale_fx_tick();
+	royale_hud_tick();
 	csmemset(royale.action_held, 0, sizeof(royale.action_held));
 }
 
@@ -1358,4 +1374,7 @@ void royale_draw(
 	royale_insertion_draw();
 	royale_beam_draw();
 	royale_gulag_draw();
+	royale_fx_draw(local_player_index);
+	royale_hud_draw(local_player_index);
+	royale_cinema_draw(local_player_index);
 }
