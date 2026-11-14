@@ -576,7 +576,7 @@ short bots_royale_item_value(long object_index)
 	return bots_royale_tier_value(tier);
 }
 
-long bots_royale_find_pickup(real_point3d const *position, real body, boolean fighting)
+long bots_royale_find_pickup(long player_index, real_point3d const *position, real body, boolean fighting)
 {
 	struct object_iterator iterator;
 	long best_index = NONE;
@@ -605,7 +605,7 @@ long bots_royale_find_pickup(real_point3d const *position, real body, boolean fi
 		}
 		else if (!strstr(name, "camo") && !strstr(name, "shield"))
 			continue;
-		if (!bots_royale_point_safe(&object->object.position))
+		if (!bots_royale_item_allowed(player_index, &object->object.position))
 			continue;
 		distance = bots_royale_distance2d(&object->object.position, position);
 		if (distance < best_distance)
@@ -615,6 +615,19 @@ long bots_royale_find_pickup(real_point3d const *position, real body, boolean fi
 		}
 	}
 	return best_index;
+}
+
+boolean bots_royale_item_allowed(long player_index, real_point3d const *point)
+{
+	struct royale_bounds const *arena;
+
+	if (!royale_active() || !bots_royale.config)
+		return TRUE;
+	if (royale_player_state(player_index) != ROYALE_PLAYER_GULAG)
+		return bots_royale_point_safe(point);
+	arena = &bots_royale.config->gulag.bounds;
+	return point->x >= arena->minimum.x && point->x <= arena->maximum.x && point->y >= arena->minimum.y &&
+		point->y <= arena->maximum.y;
 }
 
 boolean bots_royale_point_safe(real_point3d const *point)

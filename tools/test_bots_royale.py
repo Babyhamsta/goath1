@@ -143,6 +143,9 @@ int main(void)
 	/* the gulag: its fight, whatever else */
 	view = calm(); view.in_gulag = 1; view.margin_now = -50; view.mate_downed = 1;
 	CHECK("gulag_first", bots_royale_decide(&view) == _bots_royale_decide_gulag);
+	CHECK("gulag_in_fight", bots_royale_decision_in_fight(_bots_royale_decide_gulag));
+	view = calm(); view.in_gulag = 1; view.fighting = 1;
+	CHECK("gulag_while_fighting", bots_royale_decide(&view) == _bots_royale_decide_gulag);
 
 	/* loot tiers: worth more up the tiers, nothing for none */
 	CHECK("tier_none", bots_royale_tier_value(-1) == 0);

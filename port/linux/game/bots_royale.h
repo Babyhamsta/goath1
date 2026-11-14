@@ -55,9 +55,12 @@ short bots_royale_item_value(long object_index);
 /* a power-up (camouflage, the overshield) or, its body hurt (body: its
 vitality, 0 to 1), a health pack lying near and clear of the beam, NONE for
 none */
-long bots_royale_find_pickup(real_point3d const *position, real body, boolean fighting);
+long bots_royale_find_pickup(long player_index, real_point3d const *position, real body, boolean fighting);
 /* a place is clear of the beam now (an item there worth going for) */
 boolean bots_royale_point_safe(real_point3d const *point);
+/* an item there is one the player may go for: clear of the beam, and in
+the gulag, inside its arena */
+boolean bots_royale_item_allowed(long player_index, real_point3d const *point);
 
 /* halo.log's line of a Royale game's end, from bots.c's minute line */
 void bots_royale_report(void);

@@ -231,7 +231,10 @@ short bots_royale_decide(struct bots_royale_view const *view)
 
 int bots_royale_decision_in_fight(short decision)
 {
-	return decision == _bots_royale_decide_flee_beam || decision == _bots_royale_decide_move_in;
+	/* (the beam's, and the gulag's: at its opponent, armed or not, never
+	off after the island's loot) */
+	return decision == _bots_royale_decide_flee_beam || decision == _bots_royale_decide_move_in ||
+		decision == _bots_royale_decide_gulag;
 }
 
 short bots_royale_tier_value(short tier)
