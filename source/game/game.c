@@ -194,6 +194,7 @@ struct game_options;
 #include "profile_sections.h" /* port: port/linux/include/profile_sections.h */
 #include "sim_rate.h" /* port: port/linux/game/sim_rate.c */
 #include "basic_training.h" /* port: port/linux/game/basic_training.c */
+#include "royale_beam.h" /* port: port/linux/game/royale_beam.c */
 #include "demo.h" /* port: port/linux/game/demo.c */
 
 /* network_game_globals.c's */
@@ -426,6 +427,8 @@ static void game_tick_macro_step(
 	profile_scope(game_tick_game_engine_section, game_engine_update();)
 	/* port: Basic Training's steps and chapters (port/linux/game/basic_training.c) */
 	basic_training_tick();
+	/* port: debug, the Royale beam outside a Royale game (royale_beam.c) */
+	royale_beam_preview_tick();
 	profile_scope(game_tick_editor_section, editor_update();)
 	/* port: in network co-op only the host runs the scripts. A client running
 	them would place the map's actors and objects a second time and make

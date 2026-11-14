@@ -112,6 +112,7 @@ symbols in this file:
 #include "text/draw_string.h"
 #include "coop_spectate.h" /* port: port/linux/game/coop_spectate.c */
 #include "dead_spectate.h" /* port: port/linux/game/dead_spectate.c */
+#include "royale_beam.h" /* port: port/linux/game/royale_beam.c */
 #include "network_coop.h" /* port: port/linux/game/network_coop.c */
 #include "network_chat.h" /* port: port/linux/game/network_chat.c */
 #include "network_party.h" /* port: port/linux/game/network_party.c */
@@ -1692,6 +1693,8 @@ void hud_draw_screen(
 		network_votekick_draw(render.local_player_index);
 		/* port: Basic Training's step, its progress and its skip buttons */
 		basic_training_draw(render.local_player_index);
+		/* port: debug, the Royale beam outside a Royale game (royale_beam.c) */
+		royale_beam_preview_draw();
 		mcc_hud_view_end(); /* port: no frame choice leaks to another view */
 	}
 
