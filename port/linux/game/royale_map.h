@@ -12,8 +12,8 @@ closes the interior's entrances and keeps the players on the island. */
 
 #include "cseries.h"
 
-/* a game engine on a campaign level: its campaign is not played (the AI,
-scripts and BSP switches are off) */
+/* a Royale game on a campaign level: its campaign is not played (the AI,
+scripts and BSP switches are off). Any other game type keeps them */
 boolean royale_map_mode(void);
 /* game_engine_initialize_for_new_map (before anything reads the globals'
 multiplayer part, and before the scenario's objects are placed): the level

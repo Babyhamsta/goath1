@@ -211,6 +211,10 @@ defaults) if there is none or it does not parse */
 boolean royale_map_config_load(char const *map_name, struct royale_map_config *config);
 /* the same from text (tests) */
 boolean royale_map_config_parse(char const *text, struct royale_map_config *config);
+/* a hash of a config (as loaded: zeroed first, so its padding counts the
+same on every machine): the host's goes in Royale's state, and a client
+whose own differs knows its map config is not the host's */
+unsigned long royale_map_config_hash(struct royale_map_config const *config);
 
 /* ---- rules' timing (game ticks are at game.sim_rate: use these) */
 
@@ -257,6 +261,25 @@ void royale_bots_tick(void);
 
 void royale_scale_start(struct royale_map_config const *config);
 void royale_scale_tick(void);
+
+/* a test's setting (HALO_ROYALE_*: an environment variable), NULL unless
+set and the run is a network test's (network_test.c's network_test_hooks):
+a player's game never takes one */
+char const *royale_test_setting(char const *variable);
+
+/* ---- every game's start and end, Royale or not (game_engine.c's
+game_engine_initialize_for_new_map and game_engine_dispose_from_old_map):
+core's and each lane's state of the last game cleared, so nothing of a
+Royale match (the beam, its tags, the drop, the loot, the gulag's line, the
+bots' tally) is left for the next game, of any game type, on any map */
+void royale_reset(void);
+void royale_map_reset(void);
+void royale_loot_reset(void);
+void royale_insertion_reset(void);
+void royale_beam_reset(void);
+void royale_gulag_reset(void);
+void royale_bots_reset(void);
+void royale_scale_reset(void);
 
 /* ---- hooks other lanes ask core for are added below, each with the lane
 that asked */

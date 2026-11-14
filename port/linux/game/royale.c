@@ -27,8 +27,10 @@ What core does in the game:
   every machine, draw in each local player's HUD (royale_lanes_stub.c gives
   a lane not linked in nothing to do).
 
-Debug: debug.royale_lobby_seconds (and HALO_ROYALE_LOBBY_SECONDS) shortens
-the lobby; HALO_ROYALE_MAP_CONFIG=<file> reads a map config from a file.
+Tests (a network test's run alone: royale_test_setting): HALO_ROYALE_LOBBY_SECONDS
+and HALO_ROYALE_RESULTS_SECONDS shorten the lobby and the results,
+HALO_ROYALE_TEST_END ends the match early, HALO_ROYALE_MAP_CONFIG=<file>
+reads a map config from a file.
 */
 
 #include "cseries.h"
@@ -340,13 +342,30 @@ void royale_request_spawn(
 
 /* ---- the rules' settings and the game's start */
 
+boolean network_test_hooks(void);
+
+char const *royale_test_setting(
+	char const *variable)
+{
+	char const *value = getenv(variable);
+
+	if (!value || !*value)
+		return NULL;
+	if (!network_test_hooks())
+	{
+		platform_log("royale: %s ignored: a test's setting (a network test's run alone)", variable);
+		return NULL;
+	}
+	return value;
+}
+
 static long royale_debug_seconds(
 	char const *variable,
 	long fallback)
 {
-	char const *value = getenv(variable);
+	char const *value = royale_test_setting(variable);
 
-	return value && *value ? MAX(atol(value), 0) : fallback;
+	return value ? MAX(atol(value), 0) : fallback;
 }
 
 static void royale_settings_build(
@@ -424,6 +443,35 @@ static void royale_start_lanes(
 	royale_gulag_start(config);
 	royale_bots_start(config);
 	royale_scale_start(config);
+}
+
+void royale_reset(
+	void)
+{
+	long slot;
+
+	royale_rules_reset(&royale.rules);
+	csmemset(&royale.config, 0, sizeof(royale.config));
+	royale.config_loaded = FALSE;
+	royale.started = FALSE;
+	royale.results_logged = FALSE;
+	royale.test_end_ticks = 0;
+	csmemset(royale.action_held, 0, sizeof(royale.action_held));
+	csmemset(royale.events, 0, sizeof(royale.events));
+	csmemset(royale.spawn_requested, 0, sizeof(royale.spawn_requested));
+	for (slot = 0; slot < ROYALE_RULES_MAXIMUM_SLOTS; slot++)
+	{
+		royale.reviver[slot] = NONE;
+		royale.bled_unit[slot] = NONE;
+		royale.unitless_ticks[slot] = 0;
+	}
+	royale_map_reset();
+	royale_loot_reset();
+	royale_insertion_reset();
+	royale_beam_reset();
+	royale_gulag_reset();
+	royale_bots_reset();
+	royale_scale_reset();
 }
 
 /* ---- the host's rules each tick */

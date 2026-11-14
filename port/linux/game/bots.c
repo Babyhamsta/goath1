@@ -156,6 +156,9 @@ and each bot's kills and deaths; debug.bot_trace logs each bot's state.
 /* source/game/player_queues_new.c */
 void update_server_take_bot_action(long absolute_player_index, struct player_action const *action);
 
+/* port/linux/game/network_test.c */
+boolean network_test_hooks(void);
+
 /* port/linux/src/port_config.c */
 const char *config_string(char const *name);
 long config_integer(char const *name);
@@ -903,8 +906,12 @@ static void bots_settings_read(void)
 	bots_settings.teams = strcmp(config_string("bots.teams"), "against") ? _bots_teams_even : _bots_teams_against;
 	bots_settings.make_room = config_boolean("bots.make_room") != 0;
 	bots_settings.vehicles = config_boolean("bots.vehicles") != 0;
-	bots_settings.bot_player = config_boolean("debug.bot_player") != 0;
-	snprintf(bots_settings.weapon, sizeof(bots_settings.weapon), "%s", config_string("debug.bots_weapon"));
+	/* (tests' settings, which change the game: a network test's run alone,
+	network_test.c's network_test_hooks; the player's bot's own
+	debug.bot_player_* need it on) */
+	bots_settings.bot_player = config_boolean("debug.bot_player") != 0 && network_test_hooks();
+	snprintf(bots_settings.weapon, sizeof(bots_settings.weapon), "%s",
+		network_test_hooks() ? config_string("debug.bots_weapon") : "");
 	snprintf(bots_settings.player_weapon, sizeof(bots_settings.player_weapon), "%s",
 		config_string("debug.bot_player_weapon"));
 	bots_settings.read_at = changes;

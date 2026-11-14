@@ -321,6 +321,17 @@ static boolean network_test_variant(
 	return TRUE;
 }
 
+/* whether a test's settings that change the game's simulation work (the
+HALO_ROYALE_* ones, debug.bot_player's and debug.bots_weapon): in a network
+test's run alone (debug.network_test, as HALO_NETWORK_TEST_QUIT works only
+in one), never in a player's game, where one machine's would part it from
+the others' or give its player what the rules do not */
+boolean network_test_hooks(
+	void)
+{
+	return config_string("debug.network_test")[0] != 0;
+}
+
 static void network_test_read_settings(
 	void)
 {

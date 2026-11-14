@@ -660,3 +660,11 @@ short royale_loot_item_tier(
 	}
 	return NONE;
 }
+
+/* (royale.h) no config, no plan, nothing placed or kitted */
+void royale_loot_reset(
+	void)
+{
+	csmemset(&royale_loot, 0, sizeof(royale_loot));
+	csmemset(royale_loot.kitted_unit, 0xFF, sizeof(royale_loot.kitted_unit));
+}
