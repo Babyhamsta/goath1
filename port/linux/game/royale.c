@@ -493,6 +493,8 @@ void royale_reset(
 	royale.started = FALSE;
 	royale.results_logged = FALSE;
 	royale.test_end_ticks = 0;
+	royale.clock_bytes = 0;
+	royale.clock_taken = FALSE;
 	csmemset(royale.action_held, 0, sizeof(royale.action_held));
 	csmemset(royale.events, 0, sizeof(royale.events));
 	csmemset(royale.spawn_requested, 0, sizeof(royale.spawn_requested));
