@@ -265,10 +265,14 @@ that asked */
 (_game_engine_slayer), free for all, squads kept by core */
 
 /* (bots) reviving: a squadmate holds the action button within this many
-world units of a downed player for ROYALE_REVIVE_SECONDS */
+world units of a downed player for the gametype's revive time
+(royale_revive_ticks; ROYALE_REVIVE_SECONDS by default); a downed player
+bleeds out over royale_bleed_out_ticks */
 #define ROYALE_REVIVE_RADIUS 0.6f
 #define ROYALE_REVIVE_SECONDS 3.0f
 #define ROYALE_BLEED_OUT_SECONDS 30.0f
+long royale_revive_ticks(void);
+long royale_bleed_out_ticks(void);
 
 /* (bots) loot lane: a weapon/item on the ground's tier (enum
 royale_loot_tier), NONE if it is not Royale loot */
@@ -288,5 +292,54 @@ boolean royale_insertion_pelican_position(long player_index, real_point3d *posit
 
 /* (bots) gulag lane: a player's opponent in the gulag, NONE if none */
 long royale_gulag_opponent(long player_index);
+
+/* (loot, beam) the game's seed: the same on every machine and from run to
+run (the game options' random_seed); hash it, never draw from the game's
+random in a lane's start */
+unsigned long royale_match_seed(void);
+
+/* (loot) after a player's unit spawns, on every machine, after the game
+engine's loadout and before royale_gulag_postspawn */
+void royale_loot_postspawn(long player_index);
+
+/* (insertion) the insertion lane is linked in (TRUE from its own
+definition): without it INSERTION is skipped and everyone starts ALIVE where
+they spawned in the lobby */
+boolean royale_insertion_running(void);
+/* (insertion, for gulag and bots) */
+void royale_insertion_redeploy(long player_index);
+void royale_insertion_jump(long player_index);
+
+/* ---- core's hooks in the game (the game's code calls these) */
+
+#define ROYALE_DEFAULT_BLEED_OUT 30
+#define ROYALE_DEFAULT_REVIVE 3
+
+struct game_engine;
+struct unit_control_data;
+
+/* a Royale game may be played here: a GOAT H1 Standard game (or a game of
+this machine alone) */
+boolean royale_game_allowed(void);
+/* Slayer's engine with Royale's rules (game_modes_engine) */
+struct game_engine *royale_engine_get(struct game_engine const *slayer);
+/* a player's unit spawned (game_modes_postspawn) */
+void royale_postspawn(long player_index);
+/* whether the host spawns a player now (game_engine_should_spawn_player) */
+boolean royale_should_spawn(long player_index);
+/* the results shown: the game ends (game_engine_should_end_game) */
+boolean royale_game_over(void);
+/* the state the host sends its clients (game_engine_write_network_state):
+Slayer's and Royale's */
+long royale_write_network_state(byte *buffer, long size);
+boolean royale_read_network_state(byte const *buffer, long size, boolean first);
+/* a lethal hit on an object (damage.c): TRUE if it downs a player instead,
+their unit kept with a little health */
+boolean royale_absorb_lethal_damage(long object_index, long attacker_player_index);
+/* a player's control this tick (players.c, before unit_control): a downed
+player crawls; a held action is seen for revives */
+void royale_player_control(long player_index, struct unit_control_data *control);
+/* each local player's HUD (hud.c): core's, then each lane's draw */
+void royale_draw(short local_player_index);
 
 #endif

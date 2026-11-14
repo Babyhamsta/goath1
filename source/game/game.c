@@ -740,6 +740,14 @@ boolean game_load(
 void network_distributed_new_game(void);
 void network_objects_placed(void);
 
+/* port: the game's seed, the same on every machine of a network game and
+from run to run (Royale's lanes: port/linux/game/royale.c) */
+unsigned long game_options_random_seed(
+	void)
+{
+	return game_globals ? game_globals->options.random_seed : 0;
+}
+
 void game_initialize_for_new_map(
 	void)
 {
