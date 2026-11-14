@@ -610,6 +610,7 @@ struct network_game *network_game_server_get_game(struct network_game_server *se
 #include "server_team_switch.h" /* port: port/linux/game/server_team_switch.c */
 #include "latency_meter.h" /* port: port/linux/game/latency_meter.c */
 #include "touch_postgame.h" /* port: port/linux/game/touch_postgame.c */
+#include "royale.h" /* port: port/linux/game/royale.c */
 
 /* network_game_globals.c's */
 boolean network_game_distributed_client(void);
@@ -5652,8 +5653,12 @@ static void game_engine_build_lighting(
 void game_engine_dispose_from_old_map(
 	void)
 {
+	extern void royale_map_restore(void);
+
 	if (game_engine && game_engine->dispose_from_old_map)
 		game_engine->dispose_from_old_map();
+	/* port: the campaign level's tags as it had them (royale_map.c) */
+	royale_map_restore();
 	/* port: every local player's scoreboard closed (none left pinned open
 	for the next game) */
 	{
@@ -7248,6 +7253,9 @@ boolean game_engine_should_end_game(
 	/* port: Infection's round ends by its own rules (infection.c) */
 	if (infection_enabled())
 		return FALSE;
+	/* port: and Royale's once its results have been shown (royale.c) */
+	if (royale_active())
+		return royale_game_over();
 	/* port: not once bots have left it (the host took them out, or asked
 	for fewer), which may leave one team, or one player, alone: the game
 	goes on to its limits, for bots the host adds back or players who join
@@ -9181,6 +9189,12 @@ void game_engine_initialize(
 void game_engine_initialize_for_new_map(
 	void)
 {
+	/* port: a campaign level under a game engine made a multiplayer map in
+	memory, before anything reads its globals' multiplayer part or places
+	its objects (port/linux/game/royale_map.c) */
+	extern void royale_map_prepare(void);
+
+	royale_map_prepare();
 	if (game_engine)
 	{
 		game_engine_verify_current_map();
@@ -10666,6 +10680,11 @@ static void game_engine_update_item_spawn(
 	/* port: a long counter, for a map's long count */
 	long equipment_index;
 
+	/* port: Royale has no stock netgame items: the loot lane's are its own
+	(port/linux/game/royale.c) */
+	if (royale_active())
+		return;
+
 	/* a client of the distributed netcode has the host's items
 	(port/linux/game/network_distributed.c) */
 	if (network_game_distributed_client())
@@ -10955,7 +10974,9 @@ void game_engine_postspawn_player_update(
 		{
 			game_engine_give_loadout(unit_index);
 		}
-		else if (!TEST_FLAG(global_variant.universal_variant.flags, _game_variant_generic_starting_equipment_bit))
+		/* port: (Royale's starting kit is the loot lane's: royale.c) */
+		else if (!TEST_FLAG(global_variant.universal_variant.flags, _game_variant_generic_starting_equipment_bit) &&
+			!royale_active())
 		{
 			handle_custom_starting_equipment(
 				unit_index,
@@ -11167,6 +11188,11 @@ boolean game_engine_should_spawn_player(
 		else if (basic_training_player_held(player_index))
 		{
 			should_spawn = FALSE;
+		}
+		/* port: Royale's players spawn when its rules say (royale.c) */
+		else if (royale_active())
+		{
+			return royale_should_spawn(player_index);
 		}
 		else if (player->statistics.deaths == 0)
 		{
@@ -11417,6 +11443,7 @@ long game_engine_write_network_state(
 	case game_engine_ctf: written = game_engine_ctf_write_network_state(buffer, size); break;
 	/* port: (Infection's own state: infection.c) */
 	case game_engine_slayer: written = infection_enabled() ? infection_write_network_state(buffer, size) :
+		royale_active() ? royale_write_network_state(buffer, size) :
 		game_engine_slayer_write_network_state(buffer, size); break;
 	case game_engine_oddball: written = game_engine_oddball_write_network_state(buffer, size); break;
 	case game_engine_king: written = game_engine_king_write_network_state(buffer, size); break;
@@ -11445,6 +11472,7 @@ void game_engine_read_network_state(
 	{
 	case game_engine_ctf: read = game_engine_ctf_read_network_state(buffer, size, first); break;
 	case game_engine_slayer: read = infection_enabled() ? infection_read_network_state(buffer, size, first) :
+		royale_active() ? royale_read_network_state(buffer, size, first) :
 		game_engine_slayer_read_network_state(buffer, size, first); break;
 	case game_engine_oddball: read = game_engine_oddball_read_network_state(buffer, size, first); break;
 	case game_engine_king: read = game_engine_king_read_network_state(buffer, size, first); break;

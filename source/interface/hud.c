@@ -121,6 +121,7 @@ symbols in this file:
 #include "text/text_group.h"
 #include "units/unit_definitions.h"
 #include "units/units.h"
+#include "royale.h" /* port: port/linux/game/royale.c */
 #ifdef HALO_VR
 #include "../../port/linux/src/vr.h"
 /* port/linux/game/vr_render.c: the marks over the world (the teammates'
@@ -1692,6 +1693,8 @@ void hud_draw_screen(
 		network_votekick_draw(render.local_player_index);
 		/* port: Basic Training's step, its progress and its skip buttons */
 		basic_training_draw(render.local_player_index);
+		/* port: Royale's HUD and its lanes' (port/linux/game/royale.c) */
+		royale_draw(render.local_player_index);
 		mcc_hud_view_end(); /* port: no frame choice leaks to another view */
 	}
 

@@ -1,59 +1,1129 @@
 /*
 ROYALE.C
 
-Royale, GOAT H1's battle royale (royale.h): the rules, phases, squads and
-player states, and the lanes' calls. (First cut: Royale is never active yet.)
+Royale, GOAT H1's battle royale (royale.h), a mode of free for all Slayer
+(game_modes.c): squads of two, no respawns, downs and revives, the gulag,
+the last squad alive wins.
+
+The rules are royale_rules.c's, run by the host each tick (the game engine's
+update, before the objects move); the host sends its clients the whole state
+after Slayer's (game_engine_write_network_state), so every machine's HUD,
+spectating and lanes read the same phases, squads and player states. A
+player's slot is their absolute player index, as Infection's.
+
+What core does in the game:
+- spawning (game_engine_should_spawn_player): everyone spawns in the LOBBY
+  (and respawns there); after it only a player a lane asked for
+  (royale_request_spawn: the gulag's, insertion's redeploy).
+- a lethal hit (damage.c) on an ALIVE player with a squadmate standing downs
+  them: their unit keeps a little health, no shields, and crawls (crouched,
+  slow, no weapons: royale_player_control); a hit on the downed kills them.
+- a squadmate's held action within ROYALE_REVIVE_RADIUS revives; a downed
+  player not revived in time bleeds out (their unit killed, no one's kill).
+- a death goes to the gulag lane, then the player is out: they watch their
+  squadmate (dead_spectate.c) and the Spartan link shows them their squad.
+- RESULTS: the placements and kills over the screen, then the game ends.
+- the lanes: each one's start on the game's first tick, tick each tick on
+  every machine, draw in each local player's HUD (royale_lanes_stub.c gives
+  a lane not linked in nothing to do).
+
+Debug: debug.royale_lobby_seconds (and HALO_ROYALE_LOBBY_SECONDS) shortens
+the lobby; HALO_ROYALE_MAP_CONFIG=<file> reads a map config from a file.
 */
 
+#include "cseries.h"
+#include "cutscene/cinematics.h"
+#include "game/game.h"
+#include "game/game_engine.h"
+#include "game/players.h"
+#include "interface/hud.h"
+#include "interface/hud_draw.h"
+#include "interface/hud_messaging.h"
+#include "main/main.h"
+#include "math/real_math.h"
+#include "memory/data.h"
+#include "networking/network_game_globals.h"
+#include "objects/objects.h"
+#include "rasterizer/rasterizer.h"
+#include "render/render.h"
+#include "render/render_camera_projection.h"
+#include "text/draw_string.h"
+#include "text/font_group.h"
+#include "text/unicode.h"
+#include "units/units.h"
+#include "units/unit_control_data.h"
+#include "game_modes.h"
+#include "network_standard.h"
 #include "royale.h"
+#include "royale_rules.h"
+
+#include <stdlib.h>
+#include <string.h>
+
+void platform_log(char const *format, ...);
+long game_engine_slayer_write_network_state(byte *buffer, long size);
+boolean game_engine_slayer_read_network_state(byte const *buffer, long size, boolean first);
+unsigned long game_options_random_seed(void);
+
+/* a downed unit's health (of its maximum), and a revived one's */
+#define ROYALE_DOWNED_HEALTH 0.3f
+#define ROYALE_REVIVED_HEALTH 0.5f
+/* how fast the downed crawl (of a walk) */
+#define ROYALE_CRAWL_SPEED 0.3f
+#define ROYALE_LOBBY_SECONDS 20
+#define ROYALE_INSERTION_SECONDS 120
+#define ROYALE_RESULTS_SECONDS 15
+/* ENDGAME at this many squads alive or fewer */
+#define ROYALE_ENDGAME_SQUADS 3
+/* Slayer's score to win, never reached: Royale ends by its own rules */
+#define ROYALE_NO_SCORE_TO_WIN 30000
 
 static struct
 {
-	boolean active;
-	enum royale_phase phase;
-	long phase_time;
-	long match_time;
+	struct game_engine engine;
+	struct game_engine slayer;
+	struct royale_rules rules;
+	struct royale_rules_settings settings;
 	struct royale_map_config config;
+	boolean config_loaded;
+	/* the lanes started (the game's first update) */
+	boolean started;
+	boolean results_logged;
+	/* this tick's: who holds action (players.c), who revives whom, the
+	rules' events */
+	boolean action_held[ROYALE_RULES_MAXIMUM_SLOTS];
+	long reviver[ROYALE_RULES_MAXIMUM_SLOTS];
+	byte events[ROYALE_RULES_MAXIMUM_SLOTS];
+	/* the host's: a spawn asked for (royale_request_spawn), and the unit
+	killed by a bleed-out */
+	boolean spawn_requested[ROYALE_RULES_MAXIMUM_SLOTS];
+	long bled_unit[ROYALE_RULES_MAXIMUM_SLOTS];
 } royale;
 
-boolean royale_active(void) { return royale.active; }
-enum royale_phase royale_phase(void) { return royale.active ? royale.phase : ROYALE_PHASE_NONE; }
-long royale_phase_time(void) { return royale.phase_time; }
-long royale_match_time(void) { return royale.match_time; }
+/* ---- slots and players */
 
-short royale_squad_of(long player_index) { (void)player_index; return NONE; }
-boolean royale_squad_alive(short squad) { (void)squad; return FALSE; }
-long royale_squad_member(short squad, short seat) { (void)squad; (void)seat; return NONE; }
-long royale_squadmate_of(long player_index) { (void)player_index; return NONE; }
-short royale_squad_count(void) { return 0; }
-short royale_squads_alive(void) { return 0; }
-
-enum royale_player_state royale_player_state(long player_index) { (void)player_index; return ROYALE_PLAYER_NONE; }
-void royale_set_player_state(long player_index, enum royale_player_state state) { (void)player_index; (void)state; }
-long royale_downed_ticks_left(long player_index) { (void)player_index; return 0; }
-real royale_revive_progress(long player_index) { (void)player_index; return 0.0f; }
-long royale_spectate_target(long player_index) { (void)player_index; return NONE; }
-
-short royale_squad_placement(short squad) { (void)squad; return 0; }
-short royale_player_kills(long player_index) { (void)player_index; return 0; }
-short royale_winning_squad(void) { return NONE; }
-
-struct royale_map_config const *royale_map_config_get(void) { return royale.active ? &royale.config : NULL; }
-
-boolean royale_map_config_load(char const *map_name, struct royale_map_config *config)
+static long royale_slot(
+	long player_index)
 {
-	(void)map_name;
-	csmemset(config, 0, sizeof(*config));
-	return FALSE;
+	long slot;
+
+	if (player_index == NONE)
+		return NONE;
+	slot = DATUM_INDEX_TO_ABSOLUTE_INDEX(player_index);
+	return VALID_INDEX(slot, ROYALE_RULES_MAXIMUM_SLOTS) ? slot : NONE;
 }
 
-boolean royale_map_config_parse(char const *text, struct royale_map_config *config)
+/* the player of a slot, NONE if none */
+static long royale_player_of_slot(
+	long slot)
 {
-	(void)text;
-	csmemset(config, 0, sizeof(*config));
-	return FALSE;
+	struct data_iterator iterator;
+
+	if (!VALID_INDEX(slot, ROYALE_RULES_MAXIMUM_SLOTS))
+		return NONE;
+	data_iterator_new(&iterator, player_data);
+	while (data_iterator_next(&iterator))
+	{
+		if (DATUM_INDEX_TO_ABSOLUTE_INDEX(iterator.datum_index) == slot)
+			return iterator.datum_index;
+	}
+	return NONE;
 }
 
-long royale_seconds_to_ticks(real seconds) { return (long)(seconds * 30.0f); }
+static struct royale_rules_slot const *royale_entry(
+	long player_index)
+{
+	long slot = royale_slot(player_index);
 
-void royale_request_spawn(long player_index) { (void)player_index; }
+	return slot == NONE ? NULL : &royale.rules.slots[slot];
+}
+
+/* a player's living unit, NONE if none */
+static long royale_living_unit(
+	long player_index)
+{
+	struct player_datum *player = player_index != NONE ? player_try_and_get(player_index) : NULL;
+	struct unit_datum *unit;
+
+	if (!player || player->unit_index == NONE)
+		return NONE;
+	unit = unit_try_and_get(player->unit_index);
+	if (!unit || TEST_FLAG(unit->object.damage_flags, _object_dead_bit))
+		return NONE;
+	return player->unit_index;
+}
+
+/* ---- the interface (royale.h) */
+
+boolean royale_game_allowed(
+	void)
+{
+	/* (a Standard game's host or client, or a game of this machine alone) */
+	return network_standard_simulation_fixes();
+}
+
+boolean royale_active(
+	void)
+{
+	return game_modes_mode() == _game_mode_royale;
+}
+
+enum royale_phase royale_phase(
+	void)
+{
+	if (!royale_active())
+		return ROYALE_PHASE_NONE;
+	return royale.rules.phase >= ROYALE_RULES_PHASE_RESULTS ? ROYALE_PHASE_RESULTS : (enum royale_phase)royale.rules.phase;
+}
+
+long royale_phase_time(void) { return royale_active() ? royale.rules.phase_time : 0; }
+long royale_match_time(void) { return royale_active() ? royale.rules.match_time : 0; }
+
+short royale_squad_of(
+	long player_index)
+{
+	struct royale_rules_slot const *entry = royale_entry(player_index);
+
+	return royale_active() && entry && entry->squad != 0xFF ? entry->squad : NONE;
+}
+
+boolean royale_squad_alive(
+	short squad)
+{
+	return royale_active() && royale_rules_squad_alive(&royale.rules, squad);
+}
+
+long royale_squad_member(
+	short squad,
+	short seat)
+{
+	long slot;
+	short seen = 0;
+
+	if (!royale_active() || squad == NONE)
+		return NONE;
+	for (slot = 0; slot < ROYALE_RULES_MAXIMUM_SLOTS; slot++)
+	{
+		if (royale.rules.slots[slot].squad == squad && seen++ == seat)
+			return royale_player_of_slot(slot);
+	}
+	return NONE;
+}
+
+long royale_squadmate_of(
+	long player_index)
+{
+	long slot = royale_slot(player_index);
+
+	if (!royale_active() || slot == NONE)
+		return NONE;
+	return royale_player_of_slot(royale_rules_squadmate(&royale.rules, slot));
+}
+
+short royale_squad_count(void) { return royale_active() ? royale.rules.squad_count : 0; }
+short royale_squads_alive(void) { return royale_active() ? royale.rules.squads_alive : 0; }
+
+enum royale_player_state royale_player_state(
+	long player_index)
+{
+	struct royale_rules_slot const *entry = royale_entry(player_index);
+
+	if (!royale_active() || !entry || entry->state == ROYALE_RULES_NONE)
+		return ROYALE_PLAYER_NONE;
+	return (enum royale_player_state)entry->state;
+}
+
+void royale_set_player_state(
+	long player_index,
+	enum royale_player_state state)
+{
+	long slot = royale_slot(player_index);
+
+	/* (the host's: its clients take its state) */
+	if (!royale_active() || slot == NONE || network_game_distributed_client() || state < 0 ||
+		state >= NUMBER_OF_ROYALE_PLAYER_STATES)
+	{
+		return;
+	}
+	royale_rules_set_state(&royale.rules, &royale.settings, slot, (byte)state);
+}
+
+long royale_downed_ticks_left(
+	long player_index)
+{
+	struct royale_rules_slot const *entry = royale_entry(player_index);
+
+	return royale_active() && entry && entry->state == ROYALE_RULES_DOWNED ? entry->downed_ticks : 0;
+}
+
+real royale_revive_progress(
+	long player_index)
+{
+	struct royale_rules_slot const *entry = royale_entry(player_index);
+
+	if (!royale_active() || !entry || entry->state != ROYALE_RULES_DOWNED || entry->reviver == 0xFF ||
+		royale.settings.revive_ticks <= 0)
+	{
+		return 0.0f;
+	}
+	return PIN((real)entry->revive_ticks / (real)royale.settings.revive_ticks, 0.0f, 1.0f);
+}
+
+long royale_spectate_target(
+	long player_index)
+{
+	long mate;
+
+	if (royale_player_state(player_index) != ROYALE_PLAYER_SPECTATING)
+		return NONE;
+	mate = royale_squadmate_of(player_index);
+	return royale_living_unit(mate) != NONE ? mate : NONE;
+}
+
+short royale_squad_placement(
+	short squad)
+{
+	return royale_active() && VALID_INDEX(squad, ROYALE_RULES_MAXIMUM_SQUADS) ? royale.rules.placement[squad] : 0;
+}
+
+short royale_player_kills(
+	long player_index)
+{
+	struct royale_rules_slot const *entry = royale_entry(player_index);
+
+	return royale_active() && entry ? entry->kills : 0;
+}
+
+short royale_winning_squad(
+	void)
+{
+	return royale_active() && royale.rules.phase >= ROYALE_RULES_PHASE_RESULTS && royale.rules.winner != 0xFF ?
+		royale.rules.winner : NONE;
+}
+
+struct royale_map_config const *royale_map_config_get(
+	void)
+{
+	return royale_active() ? &royale.config : NULL;
+}
+
+long royale_seconds_to_ticks(
+	real seconds)
+{
+	return (long)(seconds * TICKS_PER_SECOND + 0.5f);
+}
+
+long royale_revive_ticks(void) { return royale.settings.revive_ticks; }
+long royale_bleed_out_ticks(void) { return royale.settings.bleed_out_ticks; }
+
+unsigned long royale_match_seed(
+	void)
+{
+	return game_options_random_seed();
+}
+
+void royale_request_spawn(
+	long player_index)
+{
+	long slot = royale_slot(player_index);
+
+	if (slot != NONE)
+		royale.spawn_requested[slot] = TRUE;
+}
+
+/* ---- the rules' settings and the game's start */
+
+static long royale_debug_seconds(
+	char const *variable,
+	long fallback)
+{
+	char const *value = getenv(variable);
+
+	return value && *value ? MAX(atol(value), 0) : fallback;
+}
+
+static void royale_settings_build(
+	void)
+{
+	struct game_variant_options const *options = game_variant_options_get();
+
+	royale.settings.lobby_ticks = royale_debug_seconds("HALO_ROYALE_LOBBY_SECONDS", ROYALE_LOBBY_SECONDS) *
+		TICKS_PER_SECOND;
+	royale.settings.insertion_ticks = ROYALE_INSERTION_SECONDS * TICKS_PER_SECOND;
+	royale.settings.bleed_out_ticks = (options->royale_bleed_out ? options->royale_bleed_out :
+		ROYALE_DEFAULT_BLEED_OUT) * TICKS_PER_SECOND;
+	royale.settings.revive_ticks = (options->royale_revive ? options->royale_revive : ROYALE_DEFAULT_REVIVE) *
+		TICKS_PER_SECOND;
+	royale.settings.results_ticks = royale_debug_seconds("HALO_ROYALE_RESULTS_SECONDS", ROYALE_RESULTS_SECONDS) *
+		TICKS_PER_SECOND;
+	royale.settings.endgame_squads = ROYALE_ENDGAME_SQUADS;
+	royale.settings.skip_insertion = !royale_insertion_running();
+}
+
+/* the map's name without its folders ("levels\b30\b30": "b30") */
+static char const *royale_map_short_name(
+	void)
+{
+	char const *name = main_get_map_name();
+	char const *last = name;
+
+	if (!name)
+		return "";
+	for (; *name; name++)
+	{
+		if (*name == '\\' || *name == '/')
+			last = name + 1;
+	}
+	return last;
+}
+
+static boolean royale_initialize_for_new_map(
+	void)
+{
+	long slot;
+
+	royale_rules_reset(&royale.rules);
+	royale_settings_build();
+	csmemset(royale.action_held, 0, sizeof(royale.action_held));
+	csmemset(royale.spawn_requested, 0, sizeof(royale.spawn_requested));
+	for (slot = 0; slot < ROYALE_RULES_MAXIMUM_SLOTS; slot++)
+	{
+		royale.reviver[slot] = NONE;
+		royale.bled_unit[slot] = NONE;
+	}
+	royale.started = FALSE;
+	royale.results_logged = FALSE;
+	royale.config_loaded = royale_map_config_load(royale_map_short_name(), &royale.config);
+	platform_log("royale: map %s, config %s, insertion %s", royale_map_short_name(),
+		royale.config_loaded ? "loaded" : "none", royale.settings.skip_insertion ? "skipped" : "on");
+	/* (Royale ends by its own rules, never at Slayer's score) */
+	game_engine_get_variant()->universal_variant.score_to_win = ROYALE_NO_SCORE_TO_WIN;
+	return royale.slayer.initialize_for_new_map ? royale.slayer.initialize_for_new_map() : TRUE;
+}
+
+/* the lanes' starts, once the map's objects are placed (the first update) */
+static void royale_start_lanes(
+	void)
+{
+	struct royale_map_config const *config = &royale.config;
+
+	royale.started = TRUE;
+	royale_map_start(config);
+	royale_loot_start(config);
+	royale_insertion_start(config);
+	royale_beam_start(config);
+	royale_gulag_start(config);
+	royale_bots_start(config);
+	royale_scale_start(config);
+}
+
+/* ---- the host's rules each tick */
+
+static boolean royale_gulag_proc(
+	long slot,
+	long killer_slot)
+{
+	if (!game_variant_options_get()->royale_gulag)
+		return FALSE;
+	return royale_gulag_player_died(royale_player_of_slot(slot), royale_player_of_slot(killer_slot));
+}
+
+/* who revives each downed player this tick: their squadmate, standing on
+foot within reach, holding action */
+static void royale_find_revivers(
+	void)
+{
+	long slot;
+
+	for (slot = 0; slot < ROYALE_RULES_MAXIMUM_SLOTS; slot++)
+	{
+		long mate;
+		long unit_index;
+		long mate_unit_index;
+		real_point3d position;
+		real_point3d mate_position;
+		real dx, dy, dz;
+
+		royale.reviver[slot] = NONE;
+		if (royale.rules.slots[slot].state != ROYALE_RULES_DOWNED)
+			continue;
+		mate = royale_rules_squadmate(&royale.rules, slot);
+		if (mate == NONE || royale.rules.slots[mate].state != ROYALE_RULES_ALIVE || !royale.action_held[mate])
+			continue;
+		unit_index = royale_living_unit(royale_player_of_slot(slot));
+		mate_unit_index = royale_living_unit(royale_player_of_slot(mate));
+		if (unit_index == NONE || mate_unit_index == NONE ||
+			object_get(mate_unit_index)->object.parent_object_index != NONE)
+		{
+			continue;
+		}
+		object_get_origin(unit_index, &position);
+		object_get_origin(mate_unit_index, &mate_position);
+		dx = position.x - mate_position.x;
+		dy = position.y - mate_position.y;
+		dz = position.z - mate_position.z;
+		if (dx * dx + dy * dy + dz * dz <= ROYALE_REVIVE_RADIUS * ROYALE_REVIVE_RADIUS)
+			royale.reviver[slot] = mate;
+	}
+}
+
+static void royale_host_tick(
+	void)
+{
+	struct data_iterator iterator;
+	struct player_datum *player;
+	long slot;
+	byte phase = royale.rules.phase;
+
+	/* (the lobby's players in; any who left out) */
+	data_iterator_new(&iterator, player_data);
+	while ((player = (struct player_datum *)data_iterator_next(&iterator)) != NULL)
+	{
+		slot = royale_slot(iterator.datum_index);
+		if (slot == NONE)
+			continue;
+		if (player->quit_out_of_game)
+			royale_rules_leave(&royale.rules, &royale.settings, slot, royale_gulag_proc);
+		else
+			royale_rules_join(&royale.rules, slot);
+	}
+	for (slot = 0; slot < ROYALE_RULES_MAXIMUM_SLOTS; slot++)
+	{
+		if (royale.rules.slots[slot].state != ROYALE_RULES_NONE && royale_player_of_slot(slot) == NONE)
+			royale_rules_leave(&royale.rules, &royale.settings, slot, royale_gulag_proc);
+	}
+	royale_find_revivers();
+	royale_rules_tick(&royale.rules, &royale.settings, royale.reviver, royale.events, royale_match_seed(),
+		royale_gulag_proc);
+	for (slot = 0; slot < ROYALE_RULES_MAXIMUM_SLOTS; slot++)
+	{
+		long player_index;
+		long unit_index;
+
+		if (!royale.events[slot])
+			continue;
+		player_index = royale_player_of_slot(slot);
+		unit_index = royale_living_unit(player_index);
+		if (royale.events[slot] & ROYALE_RULES_EVENT_REVIVED)
+		{
+			if (unit_index != NONE)
+				object_get(unit_index)->object.body_vitality = ROYALE_REVIVED_HEALTH;
+			platform_log("royale: slot %ld revived", slot);
+		}
+		if (royale.events[slot] & ROYALE_RULES_EVENT_BLED_OUT)
+		{
+			/* (its unit's death is the death: player_killed_player hears it) */
+			if (unit_index == NONE)
+				royale_rules_died(&royale.rules, &royale.settings, slot, NONE, royale_gulag_proc);
+			else if (royale.bled_unit[slot] != unit_index)
+			{
+				royale.bled_unit[slot] = unit_index;
+				unit_kill(unit_index);
+			}
+		}
+	}
+	if (phase != royale.rules.phase)
+		platform_log("royale: phase %d (%d squads alive)", royale.rules.phase, royale.rules.squads_alive);
+}
+
+/* every machine: the downed have no shields */
+static void royale_downed_update(
+	void)
+{
+	long slot;
+
+	for (slot = 0; slot < ROYALE_RULES_MAXIMUM_SLOTS; slot++)
+	{
+		long unit_index;
+		struct object_datum *object;
+
+		if (royale.rules.slots[slot].state != ROYALE_RULES_DOWNED)
+			continue;
+		unit_index = royale_living_unit(royale_player_of_slot(slot));
+		if (unit_index == NONE)
+			continue;
+		object = object_get(unit_index);
+		object->object.shield_vitality = 0.0f;
+	}
+}
+
+static void royale_log_results(
+	void)
+{
+	short squad;
+
+	if (royale.results_logged || royale.rules.phase < ROYALE_RULES_PHASE_RESULTS)
+		return;
+	royale.results_logged = TRUE;
+	platform_log("royale: results: squad %d wins after %ld ticks (%d squads)",
+		royale.rules.winner == 0xFF ? -1 : royale.rules.winner, royale.rules.match_time, royale.rules.squad_count);
+	for (squad = 0; squad < royale.rules.squad_count; squad++)
+	{
+		long a = royale_squad_member(squad, 0);
+		long b = royale_squad_member(squad, 1);
+
+		platform_log("royale: squad %d place %d kills %d+%d", squad, royale.rules.placement[squad],
+			royale_player_kills(a), royale_player_kills(b));
+	}
+}
+
+static void royale_update(
+	void)
+{
+	if (royale.slayer.update)
+		royale.slayer.update();
+	if (!royale.started)
+		royale_start_lanes();
+	if (!network_game_distributed_client())
+		royale_host_tick();
+	royale_downed_update();
+	royale_log_results();
+	/* (the lanes, on every machine, before the objects move) */
+	royale_map_tick();
+	royale_insertion_tick();
+	royale_loot_tick();
+	royale_beam_tick();
+	royale_gulag_tick();
+	royale_bots_tick();
+	royale_scale_tick();
+	csmemset(royale.action_held, 0, sizeof(royale.action_held));
+}
+
+static void royale_player_killed_player(
+	long killing_player_index,
+	long killing_object_index,
+	long dead_player_index,
+	boolean friendly_fire)
+{
+	long slot = royale_slot(dead_player_index);
+
+	if (royale.slayer.player_killed_player)
+		royale.slayer.player_killed_player(killing_player_index, killing_object_index, dead_player_index, friendly_fire);
+	if (slot == NONE)
+		return;
+	royale.bled_unit[slot] = NONE;
+	if (!network_game_distributed_client())
+	{
+		royale_rules_died(&royale.rules, &royale.settings, slot, royale_slot(killing_player_index),
+			royale_gulag_proc);
+	}
+	/* (a client's gulag lane hears each death as the host's does; the state
+	that follows is the host's) */
+	else if (royale.rules.phase != ROYALE_RULES_PHASE_LOBBY && game_variant_options_get()->royale_gulag)
+		royale_gulag_player_died(dead_player_index, killing_player_index);
+}
+
+struct game_engine *royale_engine_get(
+	struct game_engine const *slayer)
+{
+	royale.slayer = *slayer;
+	royale.engine = *slayer;
+	royale.engine.initialize_for_new_map = royale_initialize_for_new_map;
+	royale.engine.update = royale_update;
+	royale.engine.player_killed_player = royale_player_killed_player;
+	return &royale.engine;
+}
+
+/* ---- the game's hooks */
+
+boolean royale_should_spawn(
+	long player_index)
+{
+	long slot = royale_slot(player_index);
+
+	if (slot == NONE || !royale_active())
+		return FALSE;
+	if (royale.rules.phase == ROYALE_RULES_PHASE_LOBBY)
+		return TRUE;
+	return royale.spawn_requested[slot] && !royale_rules_out(royale.rules.slots[slot].state);
+}
+
+void royale_postspawn(
+	long player_index)
+{
+	long slot = royale_slot(player_index);
+	struct player_datum *player = player_get(player_index);
+	real_point3d position;
+	real_vector3d facing;
+
+	if (slot != NONE)
+	{
+		royale.spawn_requested[slot] = FALSE;
+		royale.bled_unit[slot] = NONE;
+	}
+	if (player->unit_index != NONE && royale_gulag_spawn_point(player_index, &position, &facing))
+		object_set_position(player->unit_index, &position, &facing, NULL);
+	royale_loot_postspawn(player_index);
+	royale_gulag_postspawn(player_index);
+}
+
+boolean royale_game_over(
+	void)
+{
+	return royale_active() && royale.rules.phase == ROYALE_RULES_PHASE_OVER;
+}
+
+boolean royale_absorb_lethal_damage(
+	long object_index,
+	long attacker_player_index)
+{
+	struct unit_datum *unit;
+	long player_index;
+	long slot;
+	boolean downed;
+
+	if (!royale_active())
+		return FALSE;
+	unit = (struct unit_datum *)object_try_and_get_and_verify_type(object_index, _object_mask_biped);
+	if (!unit || unit->unit.player_index == NONE)
+		return FALSE;
+	player_index = unit->unit.player_index;
+	slot = royale_slot(player_index);
+	if (slot == NONE)
+		return FALSE;
+	if (network_game_distributed_client())
+	{
+		/* (a client's prediction: the host's state says whether they go
+		down; its kill comes from the host if they die) */
+		downed = royale.rules.slots[slot].state == ROYALE_RULES_ALIVE &&
+			royale_rules_squadmate(&royale.rules, slot) != NONE;
+	}
+	else
+	{
+		downed = royale_rules_lethal(&royale.rules, &royale.settings, slot, royale_slot(attacker_player_index));
+		if (downed)
+			platform_log("royale: slot %ld downed by %ld", slot, royale_slot(attacker_player_index));
+	}
+	if (!downed)
+		return FALSE;
+	unit->object.body_vitality = ROYALE_DOWNED_HEALTH;
+	unit->object.shield_vitality = 0.0f;
+	return TRUE;
+}
+
+void royale_player_control(
+	long player_index,
+	struct unit_control_data *control)
+{
+	long slot = royale_slot(player_index);
+
+	if (!royale_active() || slot == NONE)
+		return;
+	if (TEST_FLAG(control->control_flags, _unit_control_action_bit))
+		royale.action_held[slot] = TRUE;
+	if (royale.rules.slots[slot].state != ROYALE_RULES_DOWNED)
+		return;
+	/* (crawling: crouched, slow, no shots, grenades, melee, jumps, swaps or
+	equipment) */
+	control->control_flags = (word)((control->control_flags & ~(UNIT_CONTROL_GUNNER_MASK |
+		FLAG(_unit_control_jump_bit) | FLAG(_unit_control_use_equipment_bit) | FLAG(_unit_control_action_bit))) |
+		FLAG(_unit_control_crouch_modifier_bit));
+	control->primary_trigger = 0.0f;
+	control->throttle.i *= ROYALE_CRAWL_SPEED;
+	control->throttle.j *= ROYALE_CRAWL_SPEED;
+}
+
+/* ---- the network state: Slayer's (its size first), then the rules */
+
+long royale_write_network_state(
+	byte *buffer,
+	long size)
+{
+	long slayer_size;
+
+	if (size < (long)(sizeof(long) + sizeof(royale.rules)))
+		return 0;
+	slayer_size = game_engine_slayer_write_network_state(buffer + sizeof(long),
+		size - (long)sizeof(long) - (long)sizeof(royale.rules));
+	csmemcpy(buffer, &slayer_size, sizeof(slayer_size));
+	csmemcpy(buffer + sizeof(long) + slayer_size, &royale.rules, sizeof(royale.rules));
+	return (long)sizeof(long) + slayer_size + (long)sizeof(royale.rules);
+}
+
+static boolean royale_rules_valid(
+	struct royale_rules const *rules)
+{
+	long slot;
+
+	if (rules->phase > ROYALE_RULES_PHASE_OVER || rules->squad_count > ROYALE_RULES_MAXIMUM_SQUADS)
+		return FALSE;
+	for (slot = 0; slot < ROYALE_RULES_MAXIMUM_SLOTS; slot++)
+	{
+		struct royale_rules_slot const *entry = &rules->slots[slot];
+
+		if ((entry->state > ROYALE_RULES_ELIMINATED && entry->state != ROYALE_RULES_NONE) ||
+			(entry->squad != 0xFF && entry->squad >= ROYALE_RULES_MAXIMUM_SQUADS))
+		{
+			return FALSE;
+		}
+	}
+	return TRUE;
+}
+
+boolean royale_read_network_state(
+	byte const *buffer,
+	long size,
+	boolean first)
+{
+	long slayer_size;
+	struct royale_rules rules;
+
+	if (!network_game_distributed_client() || size < (long)sizeof(long))
+		return FALSE;
+	csmemcpy(&slayer_size, buffer, sizeof(slayer_size));
+	if (slayer_size < 0 || size != (long)sizeof(long) + slayer_size + (long)sizeof(rules))
+		return FALSE;
+	csmemcpy(&rules, buffer + sizeof(long) + slayer_size, sizeof(rules));
+	if (!royale_rules_valid(&rules))
+		return FALSE;
+	if (!game_engine_slayer_read_network_state(buffer + sizeof(long), slayer_size, first))
+		return FALSE;
+	royale.rules = rules;
+	return TRUE;
+}
+
+/* ---- the HUD */
+
+static void royale_text(
+	rectangle2d const *bounds,
+	short justification,
+	wchar_t const *text,
+	real red,
+	real green,
+	real blue,
+	real alpha)
+{
+	long font_index = hud_get_font_index();
+	real_argb_color color;
+
+	if (font_index == NONE)
+		return;
+	color.alpha = alpha;
+	color.red = red;
+	color.green = green;
+	color.blue = blue;
+	draw_string_set_draw_mode(font_index, NONE, justification, 0, &color);
+	rasterizer_draw_unicode_string(bounds, NULL, NULL, 0, text);
+}
+
+static short royale_line_height(
+	void)
+{
+	long font_index = hud_get_font_index();
+	struct font_header *font;
+
+	if (font_index == NONE)
+		return 16;
+	font = font_definition_get(font_index);
+	return (short)MAX(font->ascending_height + font->descending_height + font->leading_height, 8);
+}
+
+/* the view's window in the view's coordinates */
+static rectangle2d royale_window(
+	void)
+{
+	rectangle2d window = render.camera.window_bounds;
+
+	offset_rectangle2d(&window, -render.camera.viewport_bounds.x0, -render.camera.viewport_bounds.y0);
+	return window;
+}
+
+static void royale_bar(
+	rectangle2d const *box,
+	real progress,
+	pixel32 color)
+{
+	rectangle2d back = *box;
+	rectangle2d fill = *box;
+
+	draw_quad(&back, 0xA0000000);
+	fill.x1 = (short)(fill.x0 + (fill.x1 - fill.x0) * PIN(progress, 0.0f, 1.0f));
+	if (fill.x1 > fill.x0)
+		draw_quad(&fill, color);
+}
+
+static void royale_player_name(
+	long player_index,
+	wchar_t *name,
+	short count)
+{
+	struct player_datum *player = player_index != NONE ? player_try_and_get(player_index) : NULL;
+	short index;
+
+	for (index = 0; player && index < (short)NUMBEROF(player->name) && index < count - 1 && player->name[index];
+		index++)
+	{
+		name[index] = player->name[index];
+	}
+	name[index] = 0;
+	if (!index && count > 1)
+	{
+		name[0] = L'-';
+		name[1] = 0;
+	}
+}
+
+/* the squadmate's diamond over their head, and their name */
+static void royale_draw_squadmate(
+	long player_index)
+{
+	long mate = royale_squadmate_of(player_index);
+	long unit_index = royale_living_unit(mate);
+	real_point3d head;
+	real_point3d view;
+	real_point2d screen;
+	point2d whole;
+	rectangle2d box;
+	rectangle2d bounds;
+	wchar_t name[16];
+	wchar_t text[48];
+	boolean downed;
+	short size;
+
+	if (unit_index == NONE || royale_living_unit(player_index) == NONE)
+		return;
+	object_get_origin(unit_index, &head);
+	head.z += 0.9f;
+	matrix4x3_transform_point(&render.frustum.world_to_view, &head, &view);
+	if (!render_camera_view_to_screen(&render.camera, &render.frustum, &view, &screen))
+		return;
+	hud_draw_mark_begin(screen.x - render.camera.viewport_bounds.x0, screen.y - render.camera.viewport_bounds.y0,
+		&whole);
+	downed = royale_player_state(mate) == ROYALE_PLAYER_DOWNED;
+	size = 5;
+	box.x0 = (short)(whole.x - size);
+	box.x1 = (short)(whole.x + size);
+	box.y0 = (short)(whole.y - size);
+	box.y1 = (short)(whole.y + size);
+	draw_quad(&box, downed ? 0xE0FF4040 : 0xE040C0FF);
+	royale_player_name(mate, name, NUMBEROF(name));
+	usnprintf(text, NUMBEROF(text) - 1, downed ? L"%s  DOWNED" : L"%s", name);
+	text[NUMBEROF(text) - 1] = 0;
+	bounds.x0 = (short)(whole.x - 160);
+	bounds.x1 = (short)(whole.x + 160);
+	bounds.y1 = (short)(whole.y - size - 2);
+	bounds.y0 = (short)(bounds.y1 - royale_line_height());
+	royale_text(&bounds, 2, text, downed ? 1.0f : 0.5f, downed ? 0.4f : 0.85f, downed ? 0.4f : 1.0f, 1.0f);
+	hud_draw_mark_end();
+}
+
+/* the line at the top: the phase, the squads left, the kills */
+static void royale_draw_banner(
+	long player_index)
+{
+	rectangle2d window = royale_window();
+	rectangle2d bounds;
+	wchar_t text[96];
+	long seconds;
+
+	switch (royale.rules.phase)
+	{
+	case ROYALE_RULES_PHASE_LOBBY:
+		seconds = MAX(royale.settings.lobby_ticks - royale.rules.phase_time, 0) / TICKS_PER_SECOND;
+		usnprintf(text, NUMBEROF(text) - 1, L"ROYALE  -  SQUADS DRAWN IN %ld", seconds + 1);
+		break;
+	case ROYALE_RULES_PHASE_INSERTION:
+		usnprintf(text, NUMBEROF(text) - 1, L"DROP  -  %d SQUADS", royale.rules.squads_alive);
+		break;
+	case ROYALE_RULES_PHASE_PLAY:
+		usnprintf(text, NUMBEROF(text) - 1, L"SQUADS LEFT %d   KILLS %d", royale.rules.squads_alive,
+			royale_player_kills(player_index));
+		break;
+	case ROYALE_RULES_PHASE_ENDGAME:
+		usnprintf(text, NUMBEROF(text) - 1, L"FINAL %d SQUADS   KILLS %d", royale.rules.squads_alive,
+			royale_player_kills(player_index));
+		break;
+	default:
+		return;
+	}
+	text[NUMBEROF(text) - 1] = 0;
+	bounds.x0 = window.x0;
+	bounds.x1 = window.x1;
+	bounds.y0 = (short)(window.y0 + royale_line_height() / 2);
+	bounds.y1 = (short)(bounds.y0 + royale_line_height());
+	royale_text(&bounds, 2, text, 1.0f, 0.85f, 0.4f, 1.0f);
+}
+
+/* downed (the bleed-out and a revive's progress), reviving, or out */
+static void royale_draw_state(
+	long player_index)
+{
+	rectangle2d window = royale_window();
+	short line = royale_line_height();
+	short middle_x = (short)((window.x0 + window.x1) / 2);
+	short top = (short)(window.y0 + (window.y1 - window.y0) * 6 / 10);
+	rectangle2d bounds;
+	rectangle2d bar;
+	wchar_t text[96];
+	wchar_t name[16];
+	long mate = royale_squadmate_of(player_index);
+
+	bounds.x0 = window.x0;
+	bounds.x1 = window.x1;
+	bounds.y0 = top;
+	bounds.y1 = (short)(top + line);
+	bar.x0 = (short)(middle_x - 80);
+	bar.x1 = (short)(middle_x + 80);
+	bar.y0 = (short)(top + line + 4);
+	bar.y1 = (short)(bar.y0 + 6);
+	switch (royale_player_state(player_index))
+	{
+	case ROYALE_PLAYER_DOWNED:
+	{
+		long left = royale_downed_ticks_left(player_index);
+		real progress = royale_revive_progress(player_index);
+
+		if (progress > 0.0f)
+		{
+			royale_text(&bounds, 2, L"BEING REVIVED", 0.5f, 1.0f, 0.5f, 1.0f);
+			royale_bar(&bar, progress, 0xFF60FF60);
+		}
+		else
+		{
+			usnprintf(text, NUMBEROF(text) - 1, L"DOWNED  -  BLEEDING OUT %ld", left / TICKS_PER_SECOND + 1);
+			text[NUMBEROF(text) - 1] = 0;
+			royale_text(&bounds, 2, text, 1.0f, 0.35f, 0.35f, 1.0f);
+			royale_bar(&bar, royale.settings.bleed_out_ticks > 0 ?
+				(real)left / (real)royale.settings.bleed_out_ticks : 0.0f, 0xFFFF5050);
+		}
+		break;
+	}
+	case ROYALE_PLAYER_ALIVE:
+		if (royale_player_state(mate) == ROYALE_PLAYER_DOWNED)
+		{
+			real progress = royale_revive_progress(mate);
+
+			royale_player_name(mate, name, NUMBEROF(name));
+			if (progress > 0.0f)
+				usnprintf(text, NUMBEROF(text) - 1, L"REVIVING %s", name);
+			else
+				usnprintf(text, NUMBEROF(text) - 1, L"%s IS DOWN  -  HOLD ACTION BESIDE THEM TO REVIVE", name);
+			text[NUMBEROF(text) - 1] = 0;
+			royale_text(&bounds, 2, text, 0.5f, 1.0f, 0.5f, 1.0f);
+			if (progress > 0.0f)
+				royale_bar(&bar, progress, 0xFF60FF60);
+		}
+		break;
+	case ROYALE_PLAYER_SPECTATING:
+		royale_player_name(mate, name, NUMBEROF(name));
+		usnprintf(text, NUMBEROF(text) - 1, L"ELIMINATED  -  WATCHING %s", name);
+		text[NUMBEROF(text) - 1] = 0;
+		royale_text(&bounds, 2, text, 1.0f, 0.85f, 0.4f, 1.0f);
+		break;
+	case ROYALE_PLAYER_ELIMINATED:
+	{
+		short squad = royale_squad_of(player_index);
+
+		if (squad != NONE && royale_squad_placement(squad))
+			usnprintf(text, NUMBEROF(text) - 1, L"ELIMINATED  -  YOUR SQUAD PLACED #%d", royale_squad_placement(squad));
+		else
+			usnprintf(text, NUMBEROF(text) - 1, L"ELIMINATED");
+		text[NUMBEROF(text) - 1] = 0;
+		royale_text(&bounds, 2, text, 1.0f, 0.85f, 0.4f, 1.0f);
+		break;
+	}
+	case ROYALE_PLAYER_NONE:
+		if (royale.rules.phase != ROYALE_RULES_PHASE_LOBBY)
+			royale_text(&bounds, 2, L"SPECTATING  -  THE NEXT ROYALE STARTS AFTER THIS ONE", 1.0f, 0.85f, 0.4f, 1.0f);
+		break;
+	default:
+		break;
+	}
+}
+
+/* the results: the winner, then each squad by its place with its players
+and their kills */
+static void royale_draw_results(
+	long player_index)
+{
+	rectangle2d window = royale_window();
+	short line = royale_line_height();
+	short width = (short)MIN(window.x1 - window.x0 - 40, 34 * line);
+	short left = (short)((window.x0 + window.x1 - width) / 2);
+	short rows = (short)MIN(royale.rules.squad_count, 10);
+	short top = (short)(window.y0 + (window.y1 - window.y0) / 8);
+	short my_squad = royale_squad_of(player_index);
+	rectangle2d box;
+	rectangle2d bounds;
+	wchar_t text[128];
+	wchar_t a_name[16];
+	wchar_t b_name[16];
+	short place;
+	short row = 0;
+
+	box.x0 = left;
+	box.x1 = (short)(left + width);
+	box.y0 = top;
+	box.y1 = (short)(top + line * (rows + 4) + line / 2);
+	draw_quad(&box, 0xC0000000);
+	bounds.x0 = left;
+	bounds.x1 = (short)(left + width);
+	bounds.y0 = (short)(top + line / 2);
+	bounds.y1 = (short)(bounds.y0 + line);
+	if (royale.rules.winner != 0xFF)
+	{
+		royale_player_name(royale_squad_member(royale.rules.winner, 0), a_name, NUMBEROF(a_name));
+		royale_player_name(royale_squad_member(royale.rules.winner, 1), b_name, NUMBEROF(b_name));
+		usnprintf(text, NUMBEROF(text) - 1, my_squad == royale.rules.winner ? L"VICTORY  -  %s & %s" :
+			L"WINNERS  -  %s & %s", a_name, b_name);
+	}
+	else
+		usnprintf(text, NUMBEROF(text) - 1, L"NO SQUAD LEFT");
+	text[NUMBEROF(text) - 1] = 0;
+	royale_text(&bounds, 2, text, 1.0f, 0.85f, 0.4f, 1.0f);
+	bounds.y0 = (short)(bounds.y0 + line * 2);
+	bounds.y1 = (short)(bounds.y0 + line);
+	bounds.x0 = (short)(left + line);
+	bounds.x1 = (short)(left + width - line);
+	royale_text(&bounds, 0, L"PLACE    SQUAD", 0.7f, 0.7f, 0.7f, 1.0f);
+	royale_text(&bounds, 1, L"KILLS", 0.7f, 0.7f, 0.7f, 1.0f);
+	for (place = 1; place <= royale.rules.squad_count && row < rows; place++)
+	{
+		short squad;
+
+		for (squad = 0; squad < royale.rules.squad_count && row < rows; squad++)
+		{
+			long a;
+			long b;
+			boolean mine;
+
+			if (royale.rules.placement[squad] != place)
+				continue;
+			a = royale_squad_member(squad, 0);
+			b = royale_squad_member(squad, 1);
+			mine = squad == my_squad;
+			royale_player_name(a, a_name, NUMBEROF(a_name));
+			royale_player_name(b, b_name, NUMBEROF(b_name));
+			bounds.y0 = (short)(bounds.y0 + line);
+			bounds.y1 = (short)(bounds.y0 + line);
+			usnprintf(text, NUMBEROF(text) - 1, L"#%-6d %s & %s", place, a_name, b_name);
+			text[NUMBEROF(text) - 1] = 0;
+			royale_text(&bounds, 0, text, 1.0f, mine ? 0.85f : 1.0f, mine ? 0.4f : 1.0f, 1.0f);
+			usnprintf(text, NUMBEROF(text) - 1, L"%d", royale_player_kills(a) + royale_player_kills(b));
+			text[NUMBEROF(text) - 1] = 0;
+			royale_text(&bounds, 1, text, 1.0f, mine ? 0.85f : 1.0f, mine ? 0.4f : 1.0f, 1.0f);
+			row++;
+		}
+	}
+}
+
+void royale_draw(
+	short local_player_index)
+{
+	long player_index = local_player_get_player_index(local_player_index);
+
+	if (!royale_active() || player_index == NONE || cinematic_in_progress())
+		return;
+	if (royale.rules.phase >= ROYALE_RULES_PHASE_RESULTS)
+	{
+		royale_draw_results(player_index);
+		return;
+	}
+	royale_draw_squadmate(player_index);
+	royale_draw_banner(player_index);
+	royale_draw_state(player_index);
+	royale_loot_draw();
+	royale_insertion_draw();
+	royale_beam_draw();
+	royale_gulag_draw();
+}
