@@ -234,10 +234,20 @@ void royale_insertion_draw(void);
 void royale_gulag_start(struct royale_map_config const *config);
 void royale_gulag_tick(void);
 void royale_gulag_draw(void);
-/* a downed player bled out or was finished: may they go to the gulag
-(core asks; then calls royale_gulag_enter) */
-boolean royale_gulag_eligible(long player_index);
-void royale_gulag_enter(long player_index);
+/* (gulag) a player died for good (bled out or finished while downed, or
+killed in the gulag): TRUE takes them to the gulag (core sets GULAG and
+neither eliminates them nor has them spectate their squad); FALSE and core
+eliminates them. Host/simulation, before core marks them ELIMINATED. */
+boolean royale_gulag_player_died(long player_index, long killer_player_index);
+/* (gulag) where a player spawns: TRUE and core spawns them there */
+boolean royale_gulag_spawn_point(long player_index, real_point3d *position, real_vector3d *facing);
+/* (gulag) after a player's unit spawns (core calls it for every spawn) */
+void royale_gulag_postspawn(long player_index);
+/* (gulag) the unit a GULAG player with no unit watches, NONE if none */
+long royale_gulag_spectate_unit(long player_index);
+/* (gulag, core's) spawn the player's unit at core's next tick, through the
+normal spawn path */
+void royale_request_spawn(long player_index);
 
 void royale_map_start(struct royale_map_config const *config);
 void royale_map_tick(void);
@@ -250,5 +260,33 @@ void royale_scale_tick(void);
 
 /* ---- hooks other lanes ask core for are added below, each with the lane
 that asked */
+
+/* (bots) Royale plays as a mode of Slayer: its game engine is Slayer's
+(_game_engine_slayer), free for all, squads kept by core */
+
+/* (bots) reviving: a squadmate holds the action button within this many
+world units of a downed player for ROYALE_REVIVE_SECONDS */
+#define ROYALE_REVIVE_RADIUS 0.6f
+#define ROYALE_REVIVE_SECONDS 3.0f
+#define ROYALE_BLEED_OUT_SECONDS 30.0f
+
+/* (bots) loot lane: a weapon/item on the ground's tier (enum
+royale_loot_tier), NONE if it is not Royale loot */
+short royale_loot_item_tier(long object_index);
+
+/* (bots) beam lane: the side it sweeps from (enum royale_side, NONE before
+it starts); the fraction of the map's length (bounds' x or y, from that
+side) glassed now; the fraction the current stage ends at (while waiting,
+the next stage's); ticks until the front next moves (0 while moving) */
+short royale_beam_side(void);
+real royale_beam_front(void);
+real royale_beam_target(void);
+long royale_beam_ticks_to_move(void);
+
+/* (bots) insertion lane: an IN_PELICAN player's Pelican, FALSE if none */
+boolean royale_insertion_pelican_position(long player_index, real_point3d *position, real_vector3d *velocity);
+
+/* (bots) gulag lane: a player's opponent in the gulag, NONE if none */
+long royale_gulag_opponent(long player_index);
 
 #endif

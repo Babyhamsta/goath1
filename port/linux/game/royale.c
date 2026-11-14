@@ -55,3 +55,5 @@ boolean royale_map_config_parse(char const *text, struct royale_map_config *conf
 }
 
 long royale_seconds_to_ticks(real seconds) { return (long)(seconds * 30.0f); }
+
+void royale_request_spawn(long player_index) { (void)player_index; }
