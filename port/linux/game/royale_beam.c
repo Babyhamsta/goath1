@@ -810,20 +810,6 @@ void royale_beam_tick(
 		royale_beam.play_start =
 			royale_match_time() - (phase == ROYALE_PHASE_PLAY ? royale_phase_time() : 0);
 		royale_beam.ticks = royale_match_time() - royale_beam.play_start;
-		{
-			/* TEMP: the ground's height across the island (for the clip's camera) */
-			short gx, gy;
-
-			for (gy = -60; gy <= 60; gy += 30)
-			{
-				char line[256];
-				int used = 0;
-
-				for (gx = -80; gx <= 100; gx += 20)
-					used += snprintf(line + used, sizeof(line) - used, " %d:%.0f", gx, royale_beam_ground(gx, gy, -999.0f));
-				platform_log("royale beam: ground y %d:%s", gy, line);
-			}
-		}
 	}
 	else
 	{
@@ -1244,7 +1230,7 @@ void royale_beam_draw(
 		{
 			rectangle2d whole = screen;
 
-			draw_quad(&whole, royale_beam_hud_pixel(1.0f, 0.32f, 0.06f, 0.16f + 0.06f * pulse));
+			draw_quad(&whole, royale_beam_hud_pixel(1.0f, 0.32f, 0.06f, 0.11f + 0.05f * pulse));
 		}
 		for (band = 0; band < bands; band++)
 		{
