@@ -878,15 +878,15 @@ void royale_insertion_tick(void)
 		}
 		insertion.insertion_ticks++;
 	}
-	else if (insertion.boarded && insertion_authority())
+	else if (insertion.boarded && insertion.pelican_count > 0 && insertion_authority())
 	{
 		short index;
 
 		/* (the phase over: anyone still aboard out, the Pelicans gone) */
-		insertion_fly();
 		for (index = 0; index < insertion.pelican_count; index++)
 			insertion.pelicans[index].done = TRUE;
 		insertion_fly();
+		insertion.pelican_count = 0;
 	}
 	insertion_fall();
 }
