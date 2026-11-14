@@ -668,6 +668,20 @@ void royale_postspawn(
 	}
 	if (player->unit_index != NONE && royale_gulag_spawn_point(player_index, &position, &facing))
 		object_set_position(player->unit_index, &position, &facing, NULL);
+	/* (the lobby's: stepped off the start they spawned at, in a ring by
+	their slot, so the map's few starts (a campaign level's) stay free for
+	the rest of a big game's players) */
+	else if (player->unit_index != NONE && slot != NONE && royale.rules.phase == ROYALE_RULES_PHASE_LOBBY)
+	{
+		real angle = (real)(slot % 16) * (6.2831853f / 16.0f);
+		real radius = 0.6f + 0.45f * (real)(slot / 16);
+
+		object_get_origin(player->unit_index, &position);
+		position.x += radius * cosf(angle);
+		position.y += radius * sinf(angle);
+		position.z += 0.1f;
+		object_set_position(player->unit_index, &position, NULL, NULL);
+	}
 	royale_loot_postspawn(player_index);
 	royale_gulag_postspawn(player_index);
 }
@@ -1058,6 +1072,7 @@ static void royale_draw_results(
 	short rows = (short)MIN(royale.rules.squad_count, 10);
 	short top = (short)(window.y0 + (window.y1 - window.y0) / 8);
 	short my_squad = royale_squad_of(player_index);
+	short squad_column = (short)(line * 4);
 	rectangle2d box;
 	rectangle2d bounds;
 	wchar_t text[128];
@@ -1090,7 +1105,13 @@ static void royale_draw_results(
 	bounds.y1 = (short)(bounds.y0 + line);
 	bounds.x0 = (short)(left + line);
 	bounds.x1 = (short)(left + width - line);
-	royale_text(&bounds, 0, L"PLACE    SQUAD", 0.7f, 0.7f, 0.7f, 1.0f);
+	royale_text(&bounds, 0, L"PLACE", 0.7f, 0.7f, 0.7f, 1.0f);
+	{
+		rectangle2d header = bounds;
+
+		header.x0 = (short)(bounds.x0 + squad_column);
+		royale_text(&header, 0, L"SQUAD", 0.7f, 0.7f, 0.7f, 1.0f);
+	}
 	royale_text(&bounds, 1, L"KILLS", 0.7f, 0.7f, 0.7f, 1.0f);
 	for (place = 1; place <= royale.rules.squad_count && row < rows; place++)
 	{
@@ -1111,9 +1132,18 @@ static void royale_draw_results(
 			royale_player_name(b, b_name, NUMBEROF(b_name));
 			bounds.y0 = (short)(bounds.y0 + line);
 			bounds.y1 = (short)(bounds.y0 + line);
-			usnprintf(text, NUMBEROF(text) - 1, L"#%-6d %s & %s", place, a_name, b_name);
+			usnprintf(text, NUMBEROF(text) - 1, L"#%d", place);
 			text[NUMBEROF(text) - 1] = 0;
 			royale_text(&bounds, 0, text, 1.0f, mine ? 0.85f : 1.0f, mine ? 0.4f : 1.0f, 1.0f);
+			{
+				/* (the squad's column, under SQUAD's header) */
+				rectangle2d names = bounds;
+
+				names.x0 = (short)(bounds.x0 + squad_column);
+				usnprintf(text, NUMBEROF(text) - 1, L"%s & %s", a_name, b_name);
+				text[NUMBEROF(text) - 1] = 0;
+				royale_text(&names, 0, text, 1.0f, mine ? 0.85f : 1.0f, mine ? 0.4f : 1.0f, 1.0f);
+			}
 			usnprintf(text, NUMBEROF(text) - 1, L"%d", royale_player_kills(a) + royale_player_kills(b));
 			text[NUMBEROF(text) - 1] = 0;
 			royale_text(&bounds, 1, text, 1.0f, mine ? 0.85f : 1.0f, mine ? 0.4f : 1.0f, 1.0f);

@@ -9355,6 +9355,11 @@ real game_engine_get_starting_location_rating(
 	{
 		return 0.0f;
 	}
+	/* port: Royale's lobby takes any start, near others or not: each player
+	is stepped off it at once (royale_postspawn), so a campaign level's few
+	starts take every player of a big game */
+	if (royale_active())
+		return 1.0f;
 
 	if (nearby_vehicle(player_index, starting_location))
 		return 0.0f;
