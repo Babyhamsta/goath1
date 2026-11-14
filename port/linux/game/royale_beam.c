@@ -44,6 +44,7 @@ gives its bounds (else 150 world units about the first player).
 #include "effects/effect_definitions.h"
 #include "effects/effects.h"
 #include "game/game.h"
+#include "game/game_globals.h"
 #include "game/players.h"
 #include "interface/hud_messaging.h"
 #include "math/real_math.h"
