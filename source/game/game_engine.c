@@ -5652,8 +5652,12 @@ static void game_engine_build_lighting(
 void game_engine_dispose_from_old_map(
 	void)
 {
+	extern void royale_map_restore(void);
+
 	if (game_engine && game_engine->dispose_from_old_map)
 		game_engine->dispose_from_old_map();
+	/* port: the campaign level's tags as it had them (royale_map.c) */
+	royale_map_restore();
 	/* port: every local player's scoreboard closed (none left pinned open
 	for the next game) */
 	{
@@ -9181,6 +9185,12 @@ void game_engine_initialize(
 void game_engine_initialize_for_new_map(
 	void)
 {
+	/* port: a campaign level under a game engine made a multiplayer map in
+	memory, before anything reads its globals' multiplayer part or places
+	its objects (port/linux/game/royale_map.c) */
+	extern void royale_map_prepare(void);
+
+	royale_map_prepare();
 	if (game_engine)
 	{
 		game_engine_verify_current_map();
