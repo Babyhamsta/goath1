@@ -532,7 +532,11 @@ boolean bots_royale_is_enemy(long player_index, long other_index)
 	other_state = royale_player_state(other_index);
 	/* (the gulag: its opponent only) */
 	if (state == ROYALE_PLAYER_GULAG)
-		return royale_gulag_opponent(player_index) == other_index;
+	{
+		long opponent = royale_gulag_opponent(player_index);
+
+		return opponent != NONE && DATUM_INDEX_TO_ABSOLUTE_INDEX(opponent) == DATUM_INDEX_TO_ABSOLUTE_INDEX(other_index);
+	}
 	if (state != ROYALE_PLAYER_ALIVE)
 		return FALSE;
 	squad = royale_squad_of(player_index);
