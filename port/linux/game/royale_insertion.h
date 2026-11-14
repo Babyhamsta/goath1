@@ -25,8 +25,8 @@ FALLING. Host/simulation, once per gulag win. */
 void royale_insertion_redeploy(long player_index);
 
 /* (bots) an IN_PELICAN player jumps at the next tick over the play area (as
-jump pressed); nothing if they are not aboard a Pelican */
-void royale_insertion_jump(long player_index);
+jump pressed); FALSE if they are not aboard a Pelican */
+boolean royale_insertion_jump(long player_index);
 /* (core) the insertion lane is linked in */
 boolean royale_insertion_running(void);
 

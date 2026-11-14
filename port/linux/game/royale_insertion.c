@@ -916,12 +916,14 @@ boolean royale_insertion_running(void)
 	return TRUE;
 }
 
-void royale_insertion_jump(long player_index)
+boolean royale_insertion_jump(long player_index)
 {
 	struct insertion_player *state = insertion_player_get(player_index);
 
-	if (state && state->pelican != NONE)
-		state->jump_requested = TRUE;
+	if (!state || state->pelican == NONE)
+		return FALSE;
+	state->jump_requested = TRUE;
+	return TRUE;
 }
 
 void royale_insertion_redeploy(long player_index)
