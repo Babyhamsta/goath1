@@ -33,6 +33,7 @@ objects go to clients through the network.
 #include "units/units.h"
 #include "royale.h"
 #include "royale_gulag.h"
+#include "royale_insertion.h"
 
 /* ---- the line and the arena (pure: tools/harness/tests/test_royale_gulag_queue.py) */
 
@@ -200,15 +201,6 @@ long royale_gulag_queue_leave(
 }
 
 /* ---- the game's side */
-
-/* insertion's (royale_insertion.h), a no-op until that lane is in: the
-winner, alive in the arena with a pistol, goes back over the island */
-void royale_insertion_redeploy(long player_index);
-__attribute__((weak)) void royale_insertion_redeploy(
-	long player_index)
-{
-	(void)player_index;
-}
 
 /* a fighter this far past the arena's bounds goes back to their spawn */
 #define ROYALE_GULAG_BOUNDS_SLACK 0.25f

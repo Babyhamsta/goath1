@@ -911,6 +911,11 @@ boolean royale_insertion_pelican_position(long player_index, real_point3d *posit
 	return TRUE;
 }
 
+boolean royale_insertion_running(void)
+{
+	return TRUE;
+}
+
 boolean royale_insertion_jump(long player_index)
 {
 	struct insertion_player *state = insertion_player_get(player_index);
