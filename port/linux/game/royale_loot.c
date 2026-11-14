@@ -32,6 +32,7 @@ A pod's crate and effects are every machine's own, at the same ticks.
 */
 
 #include "cseries.h"
+#include "cseries/errors.h"
 #include "effects/effects.h"
 #include "game/game.h"
 #include "game/players.h"
