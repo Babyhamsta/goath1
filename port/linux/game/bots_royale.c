@@ -175,13 +175,13 @@ void royale_bots_tick(void)
 	data_iterator_new(&iterator, player_data);
 	while ((player = (struct player_datum *)data_iterator_next(&iterator)) != NULL)
 	{
-		long slot = DATUM_INDEX_TO_ABSOLUTE_INDEX(iterator.index);
+		long slot = DATUM_INDEX_TO_ABSOLUTE_INDEX(iterator.datum_index);
 		enum royale_player_state state;
 		enum royale_player_state last;
 
 		if (slot < 0 || slot >= (long)NUMBEROF(bots_royale.last_state))
 			continue;
-		state = royale_player_state(iterator.index);
+		state = royale_player_state(iterator.datum_index);
 		last = (enum royale_player_state)bots_royale.last_state[slot];
 		if (state != last)
 		{
@@ -191,7 +191,7 @@ void royale_bots_tick(void)
 
 				/* (where they stood at their last tick standing: the unit
 				may be gone) */
-				bots_royale.down_in_beam[slot] = bots_royale_player_position(iterator.index, &position) &&
+				bots_royale.down_in_beam[slot] = bots_royale_player_position(iterator.datum_index, &position) &&
 					bots_royale_margin(&position, FALSE) < 0.0f;
 			}
 			if ((state == ROYALE_PLAYER_SPECTATING || state == ROYALE_PLAYER_ELIMINATED) &&
