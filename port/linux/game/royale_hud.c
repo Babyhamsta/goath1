@@ -15,6 +15,7 @@ shows what the host's does. */
 #include "cseries.h"
 #include "bitmaps/bitmap_color_conversion.h"
 #include "bitmaps/bitmap_group.h"
+#include "bitmaps/bitmaps.h"
 #include "cache/texture_cache.h"
 #include "game/game_engine.h"
 #include "game/players.h"
@@ -49,6 +50,8 @@ void draw_quad(rectangle2d *rectangle, pixel32 color);
 /* ---- the HUD's own types (hud_draw.c's; each HUD file keeps a copy) */
 
 #define ROYALE_HUD_NUMBER_TAG 'hud#'
+/* interface.c's blend for its bitmaps (interface_draw_bitmap's) */
+#define ROYALE_HUD_BLEND_ALPHA_MULTIPLY_ADD 7
 
 struct royale_hud_number_element
 {
@@ -446,7 +449,7 @@ static void royale_hud_draw_mate_triangle(
 	else
 		color = 0xFFFFFFFF;
 	interface_draw_bitmap_modulated_p32(bitmap, &position, &clip, mcc_hud_bitmap_scale(bitmap_group), 0.0f, color,
-		_shader_framebuffer_blend_function_alpha_blend);
+		ROYALE_HUD_BLEND_ALPHA_MULTIPLY_ADD);
 	/* (their name over it, as hud.c draws an ally's: the HUD's text colour,
 	fading to 0.4 from 15 to 75 world units; DOWNED in the alarm's red) */
 	{
