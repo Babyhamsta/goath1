@@ -19,6 +19,13 @@ void platform_log(char const *format, ...)
 	(void)format;
 }
 
+/* (royale.c's: a test's file setting, none here) */
+static char const *royale_test_setting(char const *variable)
+{
+	(void)variable;
+	return NULL;
+}
+
 #include "royale_config.inc"
 
 static struct royale_map_config config;
