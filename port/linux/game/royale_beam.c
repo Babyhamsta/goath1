@@ -1182,6 +1182,7 @@ void royale_beam_draw(
 	rectangle2d screen;
 	real_point3d eye;
 	real depth;
+	real target_depth = -1.0e9f;
 	real seconds;
 	long font_index;
 	short line;
@@ -1214,6 +1215,7 @@ void royale_beam_draw(
 		{
 			object_get_origin(player->unit_index, &eye);
 			depth = royale_beam_depth(&eye);
+			target_depth = royale_beam_depth_at(&royale_beam.bounds, royale_beam.side, royale_beam.status.target, eye.x, eye.y);
 		}
 	}
 	/* (in the view's own coordinates: a split screen's lower window's too) */
@@ -1287,8 +1289,10 @@ void royale_beam_draw(
 		royale_beam_hud_text(&top, L"GLASSING", &hot);
 	}
 
-	/* MOVE, and the way to safety, near or behind the front */
-	if (depth > -60.0f)
+	/* MOVE, and the way to safety: behind the front, or on the ground this
+	stage glasses once it moves (or within 20 seconds of its moving) */
+	if (depth > 0.0f || (target_depth > 0.0f && (royale_beam.status.moving ||
+		royale_beam.status.ticks_to_move < (long)(20.0f * royale_beam.ticks_per_second))))
 	{
 		real_point2d a, b;
 		real_vector2d safe;
@@ -1299,7 +1303,7 @@ void royale_beam_draw(
 		short center_x = (short)(bounds.x0 + width / 2);
 		short center_y = (short)(bounds.y0 + height / 4 + line);
 		real flash = depth > 0.0f ? 0.6f + 0.4f * sinf(seconds * 10.0f) : 1.0f;
-		real_argb_color color = { flash, 1.0f, depth > 0.0f ? 0.3f : 0.75f, 0.2f };
+		real_argb_color color = { flash, 1.0f, depth > 0.0f ? 0.95f : 0.75f, depth > 0.0f ? 0.7f : 0.2f };
 		rectangle2d move = bounds;
 
 		royale_beam_front_line(royale_beam.status.front, &a, &b, &safe);
@@ -1307,7 +1311,7 @@ void royale_beam_draw(
 		relative = safe_yaw - camera_yaw;
 		/* (left of the view's forward is the screen's left) */
 		royale_beam_hud_arrow(center_x, (short)(center_y + size), -sinf(relative), -cosf(relative), size,
-			royale_beam_hud_pixel(1.0f, depth > 0.0f ? 0.35f : 0.75f, 0.2f, 0.9f * flash));
+			royale_beam_hud_pixel(1.0f, depth > 0.0f ? 0.95f : 0.75f, depth > 0.0f ? 0.6f : 0.2f, 0.95f * flash));
 		move.y0 = (short)(center_y - line);
 		move.y1 = (short)(center_y + 4);
 		royale_beam_hud_text(&move, depth > 0.0f ? L"MOVE! YOU ARE BEING GLASSED" : L"MOVE", &color);
