@@ -71,7 +71,8 @@ static struct
 {
 	struct royale_map_config const *config;
 	struct bots_royale_box box;
-	struct bots_royale_bot bots[BOTS_MAXIMUM];
+	/* (and debug.bot_player's, the first player's own bot: BOTS_MAXIMUM) */
+	struct bots_royale_bot bots[BOTS_MAXIMUM + 1];
 	/* the tally (every machine): each player's state last tick, and
 	whether they went down in the beam */
 	signed char last_state[ROYALE_MAXIMUM_PLAYERS * 2];
@@ -148,7 +149,7 @@ static struct bots_royale_bot *bots_royale_bot(long bot_index)
 {
 	struct bots_royale_bot *bot;
 
-	if (bot_index < 0 || bot_index >= BOTS_MAXIMUM)
+	if (bot_index < 0 || bot_index > BOTS_MAXIMUM)
 		return NULL;
 	bot = &bots_royale.bots[bot_index];
 	if (!bot->random)

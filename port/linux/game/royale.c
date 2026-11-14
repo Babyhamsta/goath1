@@ -1212,6 +1212,9 @@ void royale_draw(
 
 	if (!royale_active() || player_index == NONE || cinematic_in_progress())
 		return;
+	/* (once over, the game's own end of game scoreboard alone) */
+	if (royale.rules.phase >= ROYALE_RULES_PHASE_OVER)
+		return;
 	if (royale.rules.phase >= ROYALE_RULES_PHASE_RESULTS)
 	{
 		royale_draw_results(player_index);
