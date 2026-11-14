@@ -31,6 +31,7 @@ objects go to clients through the network.
 #include "text/draw_string.h"
 #include "text/font_group.h"
 #include "text/unicode.h"
+#include "tag_files/tag_groups.h"
 #include "units/units.h"
 #include "royale.h"
 #include "royale_gulag.h"
@@ -484,6 +485,10 @@ static void royale_gulag_equip(
 	royale_gulag_delete_weapons(unit_index);
 	for (index = 0; index < NUMBER_OF_UNIT_GRENADE_TYPES; index++)
 		unit->unit.grenade_counts[index] = 0;
+	/* (a campaign level played as a map has no multiplayer loadout list:
+	the pistol's tag, as the loot lane finds it) */
+	if (definition_index == NONE)
+		definition_index = tag_loaded('weap', "weapons\\pistol\\pistol");
 	if (definition_index == NONE)
 		return;
 	object_placement_data_new(&placement, definition_index, NONE);
@@ -497,6 +502,9 @@ void royale_gulag_postspawn(
 {
 	long slot = DATUM_INDEX_TO_ABSOLUTE_INDEX(player_index);
 	boolean redeploy = VALID_INDEX(slot, ROYALE_MAXIMUM_PLAYERS) && royale_gulag.redeploy_on_spawn[slot];
+	struct player_datum *player;
+	real_point3d position;
+	real_vector3d facing;
 	long unit_index;
 
 	if (!royale_active() || (!redeploy && royale_gulag_queue_side(&royale_gulag.queue, player_index) == NONE))
@@ -504,6 +512,14 @@ void royale_gulag_postspawn(
 	unit_index = royale_gulag_living_unit(player_index);
 	if (unit_index != NONE && royale_gulag_host())
 		royale_gulag_equip(unit_index);
+	/* (a local player's view faces the arena's way, as a spawn's does;
+	object_set_position turns only the body) */
+	player = player_try_and_get(player_index);
+	if (unit_index != NONE && player && player->local_player_index != NONE &&
+		royale_gulag_spawn_point(player_index, &position, &facing))
+	{
+		player_control_set_facing(player->local_player_index, &facing);
+	}
 	if (redeploy)
 	{
 		royale_gulag.redeploy_on_spawn[slot] = FALSE;
@@ -579,8 +595,9 @@ void royale_gulag_draw(
 	height = (short)(font->ascending_height + font->descending_height);
 	bounds = render.camera.window_bounds;
 	offset_rectangle2d(&bounds, (short)-render.camera.viewport_bounds.x0, (short)-render.camera.viewport_bounds.y0);
-	bounds.y1 = (short)(bounds.y0 + 3 * height + 24);
-	bounds.y0 = (short)(bounds.y0 + 24 + 2 * height);
+	/* (above the bottom's lines: dead_spectate's, three lines up from it) */
+	bounds.y1 = (short)(bounds.y1 - 24 - 3 * height);
+	bounds.y0 = (short)(bounds.y1 - height);
 	/* draw mode 2: centered */
 	draw_string_set_draw_mode(font_index, NONE, 2, 0, &color);
 	rasterizer_draw_unicode_string(&bounds, NULL, NULL, 0, text);
