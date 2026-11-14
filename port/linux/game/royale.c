@@ -27,8 +27,10 @@ What core does in the game:
   every machine, draw in each local player's HUD (royale_lanes_stub.c gives
   a lane not linked in nothing to do).
 
-Debug: debug.royale_lobby_seconds (and HALO_ROYALE_LOBBY_SECONDS) shortens
-the lobby; HALO_ROYALE_MAP_CONFIG=<file> reads a map config from a file.
+Tests (a network test's run alone: royale_test_setting): HALO_ROYALE_LOBBY_SECONDS
+and HALO_ROYALE_RESULTS_SECONDS shorten the lobby and the results,
+HALO_ROYALE_TEST_END ends the match early, HALO_ROYALE_MAP_CONFIG=<file>
+reads a map config from a file.
 */
 
 #include "cseries.h"
@@ -59,6 +61,10 @@ the lobby; HALO_ROYALE_MAP_CONFIG=<file> reads a map config from a file.
 #include "network_standard.h"
 #include "royale.h"
 #include "royale_rules.h"
+#include "royale_audio.h"
+#include "royale_cinema.h"
+#include "royale_fx.h"
+#include "royale_hud.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -116,6 +122,10 @@ static struct
 	byte logged_phase;
 	long states_taken;
 	long clock_corrections;
+	/* the hash of this machine's map config (royale_map_config_hash): the
+	host's goes in the state; a client's that differs is told once */
+	unsigned long config_hash;
+	boolean config_mismatch_told;
 } royale;
 
 /* (the rules, the gulag and the lanes by player slot: every player the
@@ -356,13 +366,30 @@ void royale_request_spawn(
 
 /* ---- the rules' settings and the game's start */
 
+boolean network_test_hooks(void);
+
+char const *royale_test_setting(
+	char const *variable)
+{
+	char const *value = getenv(variable);
+
+	if (!value || !*value)
+		return NULL;
+	if (!network_test_hooks())
+	{
+		platform_log("royale: %s ignored: a test's setting (a network test's run alone)", variable);
+		return NULL;
+	}
+	return value;
+}
+
 static long royale_debug_seconds(
 	char const *variable,
 	long fallback)
 {
-	char const *value = getenv(variable);
+	char const *value = royale_test_setting(variable);
 
-	return value && *value ? MAX(atol(value), 0) : fallback;
+	return value ? MAX(atol(value), 0) : fallback;
 }
 
 static void royale_settings_build(
@@ -425,6 +452,7 @@ static boolean royale_initialize_for_new_map(
 	royale.states_taken = 0;
 	royale.clock_corrections = 0;
 	royale.config_loaded = royale_map_config_load(royale_map_short_name(), &royale.config);
+	royale.config_hash = royale_map_config_hash(&royale.config);
 	platform_log("royale: map %s, config %s, insertion %s", royale_map_short_name(),
 		royale.config_loaded ? "loaded" : "none", royale.settings.skip_insertion ? "skipped" : "on");
 	/* (Royale ends by its own rules, never at Slayer's score) */
@@ -446,6 +474,45 @@ static void royale_start_lanes(
 	royale_gulag_start(config);
 	royale_bots_start(config);
 	royale_scale_start(config);
+	royale_cinema_start(config);
+	royale_audio_start(config);
+	royale_fx_start(config);
+	royale_hud_start(config);
+}
+
+void royale_reset(
+	void)
+{
+	long slot;
+
+	royale_rules_reset(&royale.rules);
+	csmemset(&royale.config, 0, sizeof(royale.config));
+	royale.config_loaded = FALSE;
+	royale.config_hash = 0;
+	royale.config_mismatch_told = FALSE;
+	royale.started = FALSE;
+	royale.results_logged = FALSE;
+	royale.test_end_ticks = 0;
+	csmemset(royale.action_held, 0, sizeof(royale.action_held));
+	csmemset(royale.events, 0, sizeof(royale.events));
+	csmemset(royale.spawn_requested, 0, sizeof(royale.spawn_requested));
+	for (slot = 0; slot < ROYALE_RULES_MAXIMUM_SLOTS; slot++)
+	{
+		royale.reviver[slot] = NONE;
+		royale.bled_unit[slot] = NONE;
+		royale.unitless_ticks[slot] = 0;
+	}
+	royale_map_reset();
+	royale_loot_reset();
+	royale_insertion_reset();
+	royale_beam_reset();
+	royale_gulag_reset();
+	royale_bots_reset();
+	royale_scale_reset();
+	royale_cinema_reset();
+	royale_audio_reset();
+	royale_fx_reset();
+	royale_hud_reset();
 }
 
 /* ---- the host's rules each tick */
@@ -686,6 +753,10 @@ static void royale_update(
 	royale_gulag_tick();
 	royale_bots_tick();
 	royale_scale_tick();
+	royale_cinema_tick();
+	royale_audio_tick();
+	royale_fx_tick();
+	royale_hud_tick();
 	csmemset(royale.action_held, 0, sizeof(royale.action_held));
 }
 
@@ -866,6 +937,27 @@ state, and at least every few seconds (network_distributed.c). */
 is put right; nearer, it keeps its own steady count */
 #define ROYALE_CLOCK_SLACK_TICKS (TICKS_PER_SECOND / 4)
 
+/* (a client) the host's map config's hash against this machine's: the host's
+config rules (its bounds, beam and gulag are the game's: the host decides
+every death); a client whose own differs draws and predicts by a wrong one,
+which its player is told, once a game */
+static void royale_config_check(
+	unsigned long host_hash)
+{
+	short local_player_index;
+
+	if (host_hash == royale.config_hash || royale.config_mismatch_told)
+		return;
+	royale.config_mismatch_told = TRUE;
+	platform_log("royale: this machine's map config (%08lx) is not the host's (%08lx): the host's rules hold, "
+		"this machine's beam, bounds and gulag may show wrong", royale.config_hash, host_hash);
+	for (local_player_index = 0; local_player_index < MAXIMUM_NUMBER_OF_LOCAL_PLAYERS; local_player_index++)
+	{
+		if (local_player_get_player_index(local_player_index) != NONE)
+			hud_print_message(local_player_index, L"Your Royale map data differs from the host's: update the game.");
+	}
+}
+
 long royale_write_network_state(
 	byte *buffer,
 	long size)
@@ -897,6 +989,12 @@ long royale_write_network_state(
 	if (!gulag_size)
 		return 0;
 	cursor += gulag_size;
+	/* (the host's map config's hash: a client's own that differs is told,
+	royale_config_check) */
+	if (end - cursor < (long)sizeof(royale.config_hash))
+		return 0;
+	csmemcpy(cursor, &royale.config_hash, sizeof(royale.config_hash));
+	cursor += sizeof(royale.config_hash);
 	/* (more of the discrete part goes here: the clock stays last) */
 	clock_size = royale_rules_write_clock(&royale.rules, cursor, (long)(end - cursor));
 	if (!clock_size)
@@ -921,6 +1019,7 @@ boolean royale_read_network_state(
 	long slayer_size;
 	long read;
 	struct royale_rules rules;
+	unsigned long host_config_hash;
 	byte const *cursor;
 	byte const *end = buffer + size;
 
@@ -938,6 +1037,10 @@ boolean royale_read_network_state(
 	if (read == NONE)
 		return FALSE;
 	cursor += read;
+	if (end - cursor < (long)sizeof(host_config_hash))
+		return FALSE;
+	csmemcpy(&host_config_hash, cursor, sizeof(host_config_hash));
+	cursor += sizeof(host_config_hash);
 	read = royale_rules_read_clock(cursor, (long)(end - cursor), &rules);
 	if (read == NONE || cursor + read != end)
 		return FALSE;
@@ -960,6 +1063,7 @@ boolean royale_read_network_state(
 	}
 	royale.clock_taken = TRUE;
 	royale_gulag_take_network_state();
+	royale_config_check(host_config_hash);
 	return TRUE;
 }
 
@@ -1360,4 +1464,7 @@ void royale_draw(
 	royale_insertion_draw();
 	royale_beam_draw();
 	royale_gulag_draw();
+	royale_fx_draw(local_player_index);
+	royale_hud_draw(local_player_index);
+	royale_cinema_draw(local_player_index);
 }

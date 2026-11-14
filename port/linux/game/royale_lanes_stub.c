@@ -49,6 +49,14 @@ ROYALE_WEAK void royale_bots_tick(void) {}
 ROYALE_WEAK void royale_scale_start(struct royale_map_config const *config) { (void)config; }
 ROYALE_WEAK void royale_scale_tick(void) {}
 
+ROYALE_WEAK void royale_map_reset(void) {}
+ROYALE_WEAK void royale_loot_reset(void) {}
+ROYALE_WEAK void royale_insertion_reset(void) {}
+ROYALE_WEAK void royale_beam_reset(void) {}
+ROYALE_WEAK void royale_gulag_reset(void) {}
+ROYALE_WEAK void royale_bots_reset(void) {}
+ROYALE_WEAK void royale_scale_reset(void) {}
+
 ROYALE_WEAK short royale_loot_item_tier(long object_index) { (void)object_index; return NONE; }
 
 ROYALE_WEAK short royale_beam_side(void) { return NONE; }

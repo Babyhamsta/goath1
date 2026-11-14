@@ -645,3 +645,9 @@ boolean bots_royale_point_safe(real_point3d const *point)
 	return bots_royale_margin(point, FALSE) >= BOTS_ROYALE_FLEE_MARGIN + 2.0f &&
 		bots_royale_margin(point, TRUE) >= 0.0f;
 }
+
+/* (royale.h) no config, no tally */
+void royale_bots_reset(void)
+{
+	royale_bots_start(NULL);
+}

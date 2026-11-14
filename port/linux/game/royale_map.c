@@ -336,7 +336,9 @@ static void royale_map_keep_player(long player_index, struct player_datum const 
 
 boolean royale_map_mode(void)
 {
-	return global_scenario && global_scenario->type == _scenario_type_solo && game_engine_running();
+	/* (Royale's alone: any other game type on a campaign level keeps its
+	AI, scripts and BSP switches) */
+	return global_scenario && global_scenario->type == _scenario_type_solo && royale_active();
 }
 
 void royale_map_prepare(void)
@@ -409,4 +411,12 @@ void royale_map_tick(void)
 	data_iterator_new(&iterator, player_data);
 	while ((player = (struct player_datum *)data_iterator_next(&iterator)) != NULL)
 		royale_map_keep_player(iterator.datum_index, player);
+}
+
+/* (royale.h) the game's part: no config, no safe points (the level's tags
+are royale_map_restore's) */
+void royale_map_reset(void)
+{
+	royale_map.config = NULL;
+	csmemset(royale_map.safe_valid, 0, sizeof(royale_map.safe_valid));
 }

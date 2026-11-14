@@ -5657,8 +5657,10 @@ void game_engine_dispose_from_old_map(
 
 	if (game_engine && game_engine->dispose_from_old_map)
 		game_engine->dispose_from_old_map();
-	/* port: the campaign level's tags as it had them (royale_map.c) */
+	/* port: the campaign level's tags as it had them (royale_map.c), and
+	nothing of a Royale match left for the next game (royale.c) */
 	royale_map_restore();
+	royale_reset();
 	/* port: every local player's scoreboard closed (none left pinned open
 	for the next game) */
 	{
@@ -9194,6 +9196,8 @@ void game_engine_initialize_for_new_map(
 	its objects (port/linux/game/royale_map.c) */
 	extern void royale_map_prepare(void);
 
+	/* (and nothing of a last Royale match: royale.c) */
+	royale_reset();
 	royale_map_prepare();
 	if (game_engine)
 	{

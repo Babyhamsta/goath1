@@ -1096,3 +1096,18 @@ void royale_insertion_redeploy(long player_index)
 	object_get(unit_index)->object.translational_velocity = *global_zero_vector3d;
 	insertion_fall_begin(player_index, unit_index);
 }
+
+/* (royale.h) not started: no Pelicans, no one aboard or falling */
+void royale_insertion_reset(void)
+{
+	short index;
+
+	csmemset(&insertion, 0, sizeof(insertion));
+	for (index = 0; index < (short)NUMBEROF(insertion.players); index++)
+	{
+		insertion.players[index].pelican = NONE;
+		insertion.players[index].unit_index = NONE;
+	}
+	for (index = 0; index < ROYALE_INSERTION_MAXIMUM_PELICANS; index++)
+		insertion.pelicans[index].object_index = NONE;
+}

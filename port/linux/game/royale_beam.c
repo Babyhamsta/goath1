@@ -426,12 +426,12 @@ void royale_beam_start(
 		royale_beam.stage_count = (short)NUMBEROF(royale_beam_default_stages);
 		csmemcpy(royale_beam.stages, royale_beam_default_stages, sizeof(royale_beam_default_stages));
 	}
-	/* debug: HALO_ROYALE_BEAM_SPEED runs the stages that many times faster
+	/* tests (royale_test_setting): HALO_ROYALE_BEAM_SPEED runs the stages that many times faster
 	(pictures and clips), HALO_ROYALE_BEAM_SIDE picks the side (0 north, 1
 	east, 2 south, 3 west) */
 	{
-		char const *speed_text = getenv("HALO_ROYALE_BEAM_SPEED");
-		real speed = speed_text && *speed_text ? (real)atof(speed_text) : 1.0f;
+		char const *speed_text = royale_test_setting("HALO_ROYALE_BEAM_SPEED");
+		real speed = speed_text ? (real)atof(speed_text) : 1.0f;
 
 		if (speed > 0.0f && speed != 1.0f)
 		{
@@ -443,8 +443,8 @@ void royale_beam_start(
 		}
 	}
 	royale_beam.side = royale_beam_choose_side(royale_match_seed(), config->beam_sides);
-	if (getenv("HALO_ROYALE_BEAM_SIDE") && *getenv("HALO_ROYALE_BEAM_SIDE"))
-		royale_beam.side = (short)(atoi(getenv("HALO_ROYALE_BEAM_SIDE")) & 3);
+	if (royale_test_setting("HALO_ROYALE_BEAM_SIDE"))
+		royale_beam.side = (short)(atoi(royale_test_setting("HALO_ROYALE_BEAM_SIDE")) & 3);
 	royale_beam.ticks_per_second = (real)royale_seconds_to_ticks(100.0f) / 100.0f;
 	if (royale_beam.ticks_per_second <= 0.0f)
 		royale_beam.ticks_per_second = 30.0f;
@@ -1021,8 +1021,12 @@ void royale_beam_render(
 	short column;
 	short point;
 
-	if (!royale_beam_sweeping() || royale_beam.contrail == NONE || royale_beam.status.front <= 0.0f)
+	/* (Royale's alone: the render calls it in every game) */
+	if (!royale_active() || !royale_beam_sweeping() || royale_beam.contrail == NONE ||
+		royale_beam.status.front <= 0.0f)
+	{
 		return;
+	}
 	seconds = (real)royale_beam.ticks / royale_beam.ticks_per_second;
 	royale_beam_front_line(royale_beam.status.front, &a, &b, &safe);
 	line_length = sqrtf((b.x - a.x) * (b.x - a.x) + (b.y - a.y) * (b.y - a.y));
@@ -1313,4 +1317,19 @@ void royale_beam_draw(
 		move.y1 = row_bottom;
 		royale_beam_hud_text(&move, depth > 0.0f ? L"MOVE! YOU ARE BEING GLASSED" : L"MOVE", &color);
 	}
+}
+
+/* (royale.h) not running, no play start, none of the last map's tags */
+void royale_beam_reset(
+	void)
+{
+	csmemset(&royale_beam, 0, sizeof(royale_beam));
+	royale_beam.play_start = NONE;
+	royale_beam.contrail = NONE;
+	royale_beam.fire_effect = NONE;
+	royale_beam.blast_effect = NONE;
+	royale_beam.blast_particles = NONE;
+	royale_beam.blast_sound = NONE;
+	royale_beam.hum = NONE;
+	royale_beam.damage = NONE;
 }

@@ -365,9 +365,9 @@ void royale_gulag_start(
 	royale_gulag.armed_unit[0] = NONE;
 	royale_gulag.armed_unit[1] = NONE;
 	{
-		char const *value = getenv("HALO_ROYALE_GULAG_KILL_LOCAL");
+		char const *value = royale_test_setting("HALO_ROYALE_GULAG_KILL_LOCAL");
 
-		royale_gulag.debug_kill_ticks = value && *value ? royale_seconds_to_ticks((real)atol(value)) : 0;
+		royale_gulag.debug_kill_ticks = value ? royale_seconds_to_ticks((real)atol(value)) : 0;
 	}
 	csmemset(&royale_gulag.arena, 0, sizeof(royale_gulag.arena));
 	/* (no arena in the config, or an empty box: no gulag, deaths eliminate) */
@@ -916,4 +916,14 @@ void royale_gulag_draw(
 			royale_gulag_text(1, text, &white);
 		}
 	}
+}
+
+/* (royale.h) no arena, an empty line, no fighters */
+void royale_gulag_reset(
+	void)
+{
+	csmemset(&royale_gulag, 0, sizeof(royale_gulag));
+	royale_gulag_queue_reset(&royale_gulag.queue);
+	royale_gulag.armed_unit[0] = NONE;
+	royale_gulag.armed_unit[1] = NONE;
 }

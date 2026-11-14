@@ -3,8 +3,8 @@ ROYALE_CONFIG.C
 
 A Royale map's config (royale.h's struct royale_map_config), from
 port/assets/royale/<map>.toml: built into the game (royale_maps.inc, written
-by tools/royale_maps.py from those files), or for fast iteration read from
-the file HALO_ROYALE_MAP_CONFIG names.
+by tools/royale_maps.py from those files), or for fast iteration (a network
+test's run alone) read from the file HALO_ROYALE_MAP_CONFIG names.
 
 The files are a small part of TOML: comments (#), key = value lines, [table]
 and [[array of tables]] headers; a value is a number, a "string", or an
@@ -492,7 +492,8 @@ boolean royale_map_config_load(
 	char const *map_name,
 	struct royale_map_config *config)
 {
-	char const *path = getenv("HALO_ROYALE_MAP_CONFIG");
+	/* (a test's file: royale_test_setting) */
+	char const *path = royale_test_setting("HALO_ROYALE_MAP_CONFIG");
 	short index;
 
 	csmemset(config, 0, sizeof(*config));
@@ -539,4 +540,17 @@ boolean royale_map_config_load(
 			return royale_map_config_parse(royale_maps[index].text, config);
 	}
 	return FALSE;
+}
+
+unsigned long royale_map_config_hash(
+	struct royale_map_config const *config)
+{
+	byte const *bytes = (byte const *)config;
+	unsigned long hash = 2166136261UL;
+	unsigned long index;
+
+	/* (FNV-1a) */
+	for (index = 0; index < (unsigned long)sizeof(*config); index++)
+		hash = ((hash ^ bytes[index]) * 16777619UL) & 0xFFFFFFFFUL;
+	return hash;
 }
