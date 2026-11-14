@@ -649,6 +649,8 @@ static void royale_player_killed_player(
 	royale.bled_unit[slot] = NONE;
 	if (!network_game_distributed_client())
 	{
+		platform_log("royale: slot %ld died (state %d) to slot %ld at tick %ld", slot,
+			royale.rules.slots[slot].state, royale_slot(killing_player_index), royale.rules.match_time);
 		royale_rules_died(&royale.rules, &royale.settings, slot, royale_slot(killing_player_index),
 			royale_gulag_proc);
 	}
@@ -1227,6 +1229,9 @@ void royale_draw(
 	long player_index = local_player_get_player_index(local_player_index);
 
 	if (!royale_active() || player_index == NONE || cinematic_in_progress())
+		return;
+	/* (once over, the game's own end of game scoreboard alone) */
+	if (royale.rules.phase >= ROYALE_RULES_PHASE_OVER)
 		return;
 	if (royale.rules.phase >= ROYALE_RULES_PHASE_RESULTS)
 	{

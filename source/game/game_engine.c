@@ -11085,6 +11085,10 @@ boolean game_engine_get_state_message(
 			player->state_message = NONE;
 		}
 
+		/* port: Royale's players with no unit have its own lines (down,
+		the gulag, spectating, eliminated: royale.c), never a respawn's */
+		if (player->unit_index == NONE && royale_active())
+			return FALSE;
 		if (player->unit_index == NONE)
 		{
 			state_message_parameter = 0;
