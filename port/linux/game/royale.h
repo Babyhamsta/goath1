@@ -310,6 +310,10 @@ boolean royale_insertion_running(void);
 void royale_insertion_redeploy(long player_index);
 boolean royale_insertion_jump(long player_index);
 
+/* (insertion) TRUE while the insertion lane makes its own objects (its
+Pelicans): the game engine's remap leaves them as they are */
+boolean royale_insertion_creating(void);
+
 /* ---- core's hooks in the game (the game's code calls these) */
 
 #define ROYALE_DEFAULT_BLEED_OUT 30
