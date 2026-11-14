@@ -178,12 +178,18 @@ int main(int argc, char **argv)
 	{
 		/* a spot's tier changes only its own loot: each spot takes as much
 		of the seed */
+		/* (the first spots common, some of them empty, then legendary,
+		never empty) */
 		tiers_mixed();
+		for (index = 0; index < 20; index++)
+			tiers[index] = ROYALE_LOOT_COMMON;
 		royale_loot_plan_make(99, tiers, 200, 4, b30, &first);
-		tiers[0] = ROYALE_LOOT_LEGENDARY;
-		tiers[1] = ROYALE_LOOT_COMMON;
+		for (index = 0; index < 20; index++)
+			CHECK(index < 19 || memchr(first.spot_kinds, ROYALE_LOOT_KIND_NONE, 20), "no empty spot to test with");
+		for (index = 0; index < 20; index++)
+			tiers[index] = ROYALE_LOOT_LEGENDARY;
 		royale_loot_plan_make(99, tiers, 200, 4, b30, &second);
-		CHECK(!memcmp(first.spot_kinds + 2, second.spot_kinds + 2, 198), "a tier changed shifts later spots' loot");
+		CHECK(!memcmp(first.spot_kinds + 20, second.spot_kinds + 20, 180), "a tier changed shifts later spots' loot");
 		CHECK(!memcmp(first.pods, second.pods, sizeof(first.pods)), "a tier changed shifts the pods");
 		return 0;
 	}
