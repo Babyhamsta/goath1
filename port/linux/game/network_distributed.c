@@ -94,7 +94,6 @@ machine (their datum identifiers need not be).
 #include "network_markers.h"
 #include "network_shield_effects.h"
 #include "network_substeps.h"
-#include "bots.h"
 #include "sim_rate.h"
 #include "network_standard.h"
 #include "network_riding_map.h"
@@ -5769,20 +5768,6 @@ static word distributed_substep_state_read(
 	return (word)(cursor - buffer);
 }
 
-/* (the host) whether a player is a bot the host plays (bots.c): its
-controls hold through its tick's sub-steps, which every OpenH1 machine
-steps alike from the tick's input, so its state of a sub-step tells a
-client nothing its tick's state does not (NETCODE.md's "Bots in network
-games"); a game of many bots near a client spent most of its bytes on them */
-static boolean distributed_player_is_bot(
-	short player_index)
-{
-	struct player_datum const *player = distributed_player(player_index);
-
-	return player && player->local_player_index == NONE &&
-		bots_machine_is_bot(player->network_player_data.machine_index);
-}
-
 /* (the host) whether a player's state of a sub-step goes to a client: one
 its last tick's plan sends the client every tick or every second tick (not
 its own), alive and on foot, whose sub-steps the host runs from their
@@ -5841,11 +5826,8 @@ void network_distributed_host_substep_ended(
 				byte entry[1 + DISTRIBUTED_UNIT_STATE_MAXIMUM_SIZE];
 				byte period = distributed_forward_periods[machine_index][player_index];
 
-				if (!period || period > 2 || !distributed_player(player_index) ||
-					distributed_player_is_bot(player_index))
-				{
+				if (!period || period > 2 || !distributed_player(player_index))
 					continue;
-				}
 				/* (as of the end of the tick it is in: the client's tick it
 				runs of a client's player, as the tick's own state names) */
 				if (!made[player_index])
