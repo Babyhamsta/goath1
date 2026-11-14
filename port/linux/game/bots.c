@@ -4022,6 +4022,15 @@ static void bots_choose_goal(struct bots_bot *bot, long player_index, real_point
 		long item_index;
 
 		bot->item_check_tick = now + TICKS_PER_SECOND;
+		/* (Royale: a power-up near, or health when hurt: the loot's,
+		bots_royale.h) */
+		if (royale_active() && !bot->smooth)
+		{
+			long pickup = bots_royale_find_pickup(position, own_unit->object.body_vitality, fighting);
+
+			if (pickup != NONE && bots_set_item_goal(bot, pickup))
+				return;
+		}
 		/* (hurt: a health pack near; a power item, looked for every two
 		seconds) */
 		if (!bot->smooth && own_unit->object.body_vitality < 0.5f &&

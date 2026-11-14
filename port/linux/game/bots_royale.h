@@ -52,6 +52,10 @@ boolean bots_royale_roam(long bot_index, real_point3d const *position, real_poin
 boolean bots_royale_is_enemy(long player_index, long other_index);
 /* a ground weapon's worth more for its loot tier (bots.c's values) */
 short bots_royale_item_value(long object_index);
+/* a power-up (camouflage, the overshield) or, its body hurt (body: its
+vitality, 0 to 1), a health pack lying near and clear of the beam, NONE for
+none */
+long bots_royale_find_pickup(real_point3d const *position, real body, boolean fighting);
 /* a place is clear of the beam now (an item there worth going for) */
 boolean bots_royale_point_safe(real_point3d const *point);
 

@@ -33,6 +33,7 @@ beam or in a fight (where they were as they went down), and the game's end.
 #include "objects/objects.h"
 #include "units/units.h"
 #include "networking/network_game_globals.h"
+#include "tag_files/tag_groups.h"
 
 #include "royale.h"
 #include "bots.h"
@@ -47,6 +48,10 @@ void platform_log(char const *format, ...);
 #define BOTS_ROYALE_MATE_OFFSET 3.0f
 /* (the squads aboard a Pelican jump in this many shares of its way) */
 #define BOTS_ROYALE_JUMP_SHARES 4
+/* (the loot kinds whose tiers are kept) */
+#define BOTS_ROYALE_TIER_KINDS 64
+/* (a power-up within this is gone for; health when hurt) */
+#define BOTS_ROYALE_PICKUP_DISTANCE 25.0f
 /* (a roam spot reached within this) */
 #define BOTS_ROYALE_ROAM_REACHED 3.0f
 
@@ -73,6 +78,11 @@ static struct
 	boolean down_in_beam[ROYALE_MAXIMUM_PLAYERS * 2];
 	long out_by_beam, out_by_combat;
 	boolean reported;
+	/* each loot kind's tier, as the ground's items told it (the loot lane
+	tells only an item lying there: a weapon in hand is worth its kind's) */
+	long tier_definitions[BOTS_ROYALE_TIER_KINDS];
+	short tier_values[BOTS_ROYALE_TIER_KINDS];
+	short tier_kind_count;
 } bots_royale;
 
 /* ---------- small helpers */
@@ -529,9 +539,73 @@ boolean bots_royale_is_enemy(long player_index, long other_index)
 
 short bots_royale_item_value(long object_index)
 {
+	struct object_datum *object;
+	short tier, kind;
+
 	if (!royale_active())
 		return 0;
-	return bots_royale_tier_value(royale_loot_item_tier(object_index));
+	object = (struct object_datum *)object_try_and_get_and_verify_type(object_index,
+		_object_mask_weapon | _object_mask_equipment);
+	if (!object)
+		return 0;
+	tier = royale_loot_item_tier(object_index);
+	for (kind = 0; kind < bots_royale.tier_kind_count; kind++)
+	{
+		if (bots_royale.tier_definitions[kind] == object->definition_index)
+		{
+			if (tier == NONE)
+				tier = bots_royale.tier_values[kind];
+			break;
+		}
+	}
+	if (tier != NONE && kind == bots_royale.tier_kind_count && kind < BOTS_ROYALE_TIER_KINDS)
+	{
+		bots_royale.tier_definitions[kind] = object->definition_index;
+		bots_royale.tier_values[kind] = tier;
+		bots_royale.tier_kind_count++;
+	}
+	return bots_royale_tier_value(tier);
+}
+
+long bots_royale_find_pickup(real_point3d const *position, real body, boolean fighting)
+{
+	struct object_iterator iterator;
+	long best_index = NONE;
+	real best_distance = fighting ? 8.0f : BOTS_ROYALE_PICKUP_DISTANCE;
+
+	if (!royale_active() || !bots_royale.config)
+		return NONE;
+	object_iterator_new(&iterator, _object_mask_equipment, 0);
+	while (object_iterator_next(&iterator))
+	{
+		struct object_datum *object = object_get(iterator.index);
+		char const *name = tag_get_name(object->definition_index);
+		real distance;
+
+		if (object->object.parent_object_index != NONE || !name ||
+			!TEST_FLAG(object->object.flags, _object_connected_to_map_bit))
+		{
+			continue;
+		}
+		/* (health only hurt; the power-ups, camouflage and the overshield,
+		always; nothing else: grenades are walked over) */
+		if (strstr(name, "health"))
+		{
+			if (body >= 0.75f)
+				continue;
+		}
+		else if (!strstr(name, "camo") && !strstr(name, "shield"))
+			continue;
+		if (!bots_royale_point_safe(&object->object.position))
+			continue;
+		distance = bots_royale_distance2d(&object->object.position, position);
+		if (distance < best_distance)
+		{
+			best_distance = distance;
+			best_index = iterator.index;
+		}
+	}
+	return best_index;
 }
 
 boolean bots_royale_point_safe(real_point3d const *point)
