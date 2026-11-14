@@ -1041,20 +1041,6 @@ void royale_hud_row(
 	*bottom = (short)(*top + line);
 }
 
-static void royale_bar(
-	rectangle2d const *box,
-	real progress,
-	pixel32 color)
-{
-	rectangle2d back = *box;
-	rectangle2d fill = *box;
-
-	draw_quad(&back, 0xA0000000);
-	fill.x1 = (short)(fill.x0 + (fill.x1 - fill.x0) * PIN(progress, 0.0f, 1.0f));
-	if (fill.x1 > fill.x0)
-		draw_quad(&fill, color);
-}
-
 static void royale_player_name(
 	long player_index,
 	wchar_t *name,
@@ -1074,60 +1060,6 @@ static void royale_player_name(
 		name[0] = L'-';
 		name[1] = 0;
 	}
-}
-
-/* the squadmate's diamond over their head, and their name */
-static void royale_draw_squadmate(
-	long player_index)
-{
-	long mate = royale_squadmate_of(player_index);
-	long unit_index = royale_living_unit(mate);
-	real_point3d head;
-	real_point3d view;
-	real_point2d screen;
-	point2d whole;
-	rectangle2d box;
-	rectangle2d bounds;
-	wchar_t name[16];
-	wchar_t text[48];
-	boolean downed;
-	short size;
-	short reserved_top, reserved_bottom;
-
-	if (unit_index == NONE || royale_living_unit(player_index) == NONE)
-		return;
-	object_get_origin(unit_index, &head);
-	head.z += 0.9f;
-	matrix4x3_transform_point(&render.frustum.world_to_view, &head, &view);
-	if (!render_camera_view_to_screen(&render.camera, &render.frustum, &view, &screen))
-		return;
-	hud_draw_mark_begin(screen.x - render.camera.viewport_bounds.x0, screen.y - render.camera.viewport_bounds.y0,
-		&whole);
-	downed = royale_player_state(mate) == ROYALE_PLAYER_DOWNED;
-	size = 5;
-	box.x0 = (short)(whole.x - size);
-	box.x1 = (short)(whole.x + size);
-	box.y0 = (short)(whole.y - size);
-	box.y1 = (short)(whole.y + size);
-	draw_quad(&box, downed ? 0xE0FF4040 : 0xE040C0FF);
-	royale_player_name(mate, name, NUMBEROF(name));
-	usnprintf(text, NUMBEROF(text) - 1, downed ? L"%s  DOWNED" : L"%s", name);
-	text[NUMBEROF(text) - 1] = 0;
-	bounds.x0 = (short)(whole.x - 160);
-	bounds.x1 = (short)(whole.x + 160);
-	bounds.y1 = (short)(whole.y - size - 2);
-	bounds.y0 = (short)(bounds.y1 - royale_line_height());
-	/* (never over the HUD's rows at the top: under the diamond there, or
-	not at all) */
-	royale_hud_row(ROYALE_HUD_ROWS - 1, &reserved_top, &reserved_bottom);
-	if (bounds.y0 < reserved_bottom)
-	{
-		bounds.y0 = (short)(whole.y + size + 2);
-		bounds.y1 = (short)(bounds.y0 + royale_line_height());
-	}
-	if (bounds.y0 >= reserved_bottom)
-		royale_text(&bounds, 2, text, downed ? 1.0f : 0.5f, downed ? 0.4f : 0.85f, downed ? 0.4f : 1.0f, 1.0f);
-	hud_draw_mark_end();
 }
 
 /* the line at the top: the phase, the squads left, the kills */
@@ -1164,93 +1096,6 @@ static void royale_draw_banner(
 	bounds.x1 = window.x1;
 	royale_hud_row(ROYALE_HUD_ROW_BANNER, &bounds.y0, &bounds.y1);
 	royale_text(&bounds, 2, text, 1.0f, 0.85f, 0.4f, 1.0f);
-}
-
-/* downed (the bleed-out and a revive's progress), reviving, or out */
-static void royale_draw_state(
-	long player_index)
-{
-	rectangle2d window = royale_window();
-	short line = royale_line_height();
-	short middle_x = (short)((window.x0 + window.x1) / 2);
-	short top = (short)(window.y0 + (window.y1 - window.y0) * 6 / 10);
-	rectangle2d bounds;
-	rectangle2d bar;
-	wchar_t text[96];
-	wchar_t name[16];
-	long mate = royale_squadmate_of(player_index);
-
-	bounds.x0 = window.x0;
-	bounds.x1 = window.x1;
-	bounds.y0 = top;
-	bounds.y1 = (short)(top + line);
-	bar.x0 = (short)(middle_x - 80);
-	bar.x1 = (short)(middle_x + 80);
-	bar.y0 = (short)(top + line + 4);
-	bar.y1 = (short)(bar.y0 + 6);
-	switch (royale_player_state(player_index))
-	{
-	case ROYALE_PLAYER_DOWNED:
-	{
-		long left = royale_downed_ticks_left(player_index);
-		real progress = royale_revive_progress(player_index);
-
-		if (progress > 0.0f)
-		{
-			royale_text(&bounds, 2, L"BEING REVIVED", 0.5f, 1.0f, 0.5f, 1.0f);
-			royale_bar(&bar, progress, 0xFF60FF60);
-		}
-		else
-		{
-			usnprintf(text, NUMBEROF(text) - 1, L"DOWNED  -  BLEEDING OUT %ld", left / TICKS_PER_SECOND + 1);
-			text[NUMBEROF(text) - 1] = 0;
-			royale_text(&bounds, 2, text, 1.0f, 0.35f, 0.35f, 1.0f);
-			royale_bar(&bar, royale.settings.bleed_out_ticks > 0 ?
-				(real)left / (real)royale.settings.bleed_out_ticks : 0.0f, 0xFFFF5050);
-		}
-		break;
-	}
-	case ROYALE_PLAYER_ALIVE:
-		if (royale_player_state(mate) == ROYALE_PLAYER_DOWNED)
-		{
-			real progress = royale_revive_progress(mate);
-
-			royale_player_name(mate, name, NUMBEROF(name));
-			if (progress > 0.0f)
-				usnprintf(text, NUMBEROF(text) - 1, L"REVIVING %s", name);
-			else
-				usnprintf(text, NUMBEROF(text) - 1, L"%s IS DOWN  -  HOLD ACTION BESIDE THEM TO REVIVE", name);
-			text[NUMBEROF(text) - 1] = 0;
-			royale_text(&bounds, 2, text, 0.5f, 1.0f, 0.5f, 1.0f);
-			if (progress > 0.0f)
-				royale_bar(&bar, progress, 0xFF60FF60);
-		}
-		break;
-	case ROYALE_PLAYER_SPECTATING:
-		royale_player_name(mate, name, NUMBEROF(name));
-		usnprintf(text, NUMBEROF(text) - 1, L"ELIMINATED  -  WATCHING %s", name);
-		text[NUMBEROF(text) - 1] = 0;
-		royale_text(&bounds, 2, text, 1.0f, 0.85f, 0.4f, 1.0f);
-		break;
-	case ROYALE_PLAYER_ELIMINATED:
-	{
-		short squad = royale_squad_of(player_index);
-
-		if (squad != NONE && royale_squad_placement(squad))
-			usnprintf(text, NUMBEROF(text) - 1, L"ELIMINATED  -  YOUR SQUAD PLACED #%d", royale_squad_placement(squad));
-		else
-			usnprintf(text, NUMBEROF(text) - 1, L"ELIMINATED");
-		text[NUMBEROF(text) - 1] = 0;
-		royale_text(&bounds, 2, text, 1.0f, 0.85f, 0.4f, 1.0f);
-		break;
-	}
-	case ROYALE_PLAYER_NONE:
-		if (royale.rules.phase != ROYALE_RULES_PHASE_LOBBY)
-			royale_text(&bounds, 2, L"SPECTATING  -  THE NEXT ROYALE STARTS AFTER THIS ONE", 1.0f, 0.85f, 0.4f, 1.0f);
-		break;
-	default:
-		break;
-	}
 }
 
 /* the results: the winner, then each squad by its place with its players
@@ -1367,9 +1212,9 @@ void royale_draw(
 		royale_gulag_draw();
 		return;
 	}
-	royale_draw_squadmate(player_index);
+	/* (the squadmate, the downed/out lines and the counts are the HUD's:
+	royale_hud.c) */
 	royale_draw_banner(player_index);
-	royale_draw_state(player_index);
 	royale_loot_draw();
 	royale_insertion_draw();
 	royale_beam_draw();
