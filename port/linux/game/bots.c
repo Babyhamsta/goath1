@@ -145,6 +145,8 @@ and each bot's kills and deaths; debug.bot_trace logs each bot's state.
 #include "bots_profile.h"
 #include "bots_vehicles.h"
 #include "bots_objectives.h"
+#include "royale.h"
+#include "bots_royale.h"
 
 #include <math.h>
 #include <stdio.h>
@@ -1199,6 +1201,27 @@ static long bots_surface_below(real_point3d const *point, real_point3d *ground)
 	return NONE;
 }
 
+/* a Royale goal's ground (bots_royale.h: a loot spot, a place in from the
+beam, a squadmate): searched down from it, else from above and below it (its
+height a guess where the land rises and falls), NONE for none */
+static long bots_royale_ground(real_point3d const *point, real_point3d *ground)
+{
+	static real const heights[] = { 0.0f, 5.0f, 11.0f, 17.0f, 23.0f, -5.0f, -11.0f };
+	short index;
+
+	for (index = 0; index < (short)NUMBEROF(heights); index++)
+	{
+		real_point3d above = *point;
+		long surface_index;
+
+		above.z += heights[index];
+		surface_index = bots_surface_below(&above, ground);
+		if (surface_index != NONE)
+			return surface_index;
+	}
+	return NONE;
+}
+
 /* the surface a unit stands on (a biped's support surface), and its point */
 static long bots_unit_surface(long unit_index, real_point3d *point)
 {
@@ -1515,7 +1538,7 @@ static long bots_find_item(struct bots_bot *bot, struct unit_datum *unit, real_p
 	long current = bots_current_weapon(unit);
 	/* (an empty one is worth nothing: any other, or its own rounds) */
 	short current_value = current != NONE && !bots_weapon_empty(current) ?
-		bots_weapon_value(weapon_get(current)->definition_index) : 0;
+		bots_weapon_value(weapon_get(current)->definition_index) + bots_royale_item_value(current) : 0;
 	/* (debug.bot_player_weapon: the first player's bot goes for that weapon
 	wherever it lies, and keeps it; debug.bots_weapon every bot) */
 	char const *preferred = bots_weapon_wanted(bot);
@@ -1552,8 +1575,11 @@ static long bots_find_item(struct bots_bot *bot, struct unit_datum *unit, real_p
 		{
 			continue;
 		}
+		/* (Royale: none in the beam; a loot tier worth more) */
+		if (!bots_royale_point_safe(&item->object.position))
+			continue;
 		distance = bots_distance3d(&item->object.position, position);
-		value = bots_weapon_value(item->definition_index);
+		value = bots_weapon_value(item->definition_index) + bots_royale_item_value(iterator.index);
 		if (*preferred && tag_get_name(item->definition_index) && strstr(tag_get_name(item->definition_index), preferred))
 			value += 20;
 		else if (distance > maximum_distance)
@@ -2791,6 +2817,13 @@ static boolean bots_is_enemy(struct player_datum *player, struct player_datum *o
 {
 	if (player == other || other->unit_index == NONE)
 		return FALSE;
+	/* (Royale: another squad's player on the island, or its gulag
+	opponent: bots_royale.h) */
+	if (royale_active())
+	{
+		return player->unit_index != NONE && bots_royale_is_enemy(player_index_from_unit_index(player->unit_index),
+			player_index_from_unit_index(other->unit_index));
+	}
 	if (game_engine_has_teams() && player->team_index == other->team_index)
 		return FALSE;
 	return TRUE;
@@ -3116,6 +3149,21 @@ static void bots_pick_roam_goal(struct bots_bot *bot, real_point3d const *positi
 {
 	long tries;
 
+	/* (Royale: the loot ahead of the beam, bots_royale.h) */
+	if (royale_active())
+	{
+		real_point3d point, ground;
+		long surface_index;
+
+		if (bots_royale_roam(bot->index, position, &point) &&
+			(surface_index = bots_royale_ground(&point, &ground)) != NONE)
+		{
+			bot->hunting = FALSE;
+			bot->roam_index = NONE;
+			bots_set_goal(bot, _bots_goal_roam, &ground, surface_index);
+			return;
+		}
+	}
 	if (bots_globals.roam_point_count <= 0)
 		return;
 	bot->hunting = FALSE;
@@ -3646,6 +3694,23 @@ static boolean bots_set_tactic_goal(struct bots_bot *bot, real_point3d const *po
 	if (bot->goal_kind == _bots_goal_tactic && bots_distance3d(&bot->tactic_point, point) < 1.5f)
 		return TRUE;
 	surface_index = bots_point_ground(point, &ground);
+	if (surface_index == NONE)
+		return FALSE;
+	bots_set_goal(bot, _bots_goal_tactic, &ground, surface_index);
+	bot->tactic_point = *point;
+	return TRUE;
+}
+
+/* Royale's goal (bots_royale.h) at a point, a tactic's goal kept while the
+point stays near; FALSE where no ground is found */
+static boolean bots_royale_set_goal(struct bots_bot *bot, real_point3d const *point)
+{
+	real_point3d ground;
+	long surface_index;
+
+	if (bot->goal_kind == _bots_goal_tactic && bots_distance3d(&bot->tactic_point, point) < 1.5f)
+		return TRUE;
+	surface_index = bots_royale_ground(point, &ground);
 	if (surface_index == NONE)
 		return FALSE;
 	bots_set_goal(bot, _bots_goal_tactic, &ground, surface_index);
@@ -6762,9 +6827,11 @@ static boolean bots_bot_ordered(struct bots_bot *bot, long bot_index, struct bot
 static void bots_bot_update(struct bots_bot *bot, long bot_index, struct player_action *action)
 {
 	struct bots_tick tick;
+	struct bots_royale_goal royale_goal;
 	real vitality;
 
 	csmemset(&tick, 0, sizeof(tick));
+	csmemset(&royale_goal, 0, sizeof(royale_goal));
 	tick.skill = &bots_skills[bots_globals.skill];
 	/* (basic training's order may give it a skill of its own) */
 	if (bot_index < BOTS_MAXIMUM && bots_training.orders[bot_index].skill >= 0 &&
@@ -6782,6 +6849,39 @@ static void bots_bot_update(struct bots_bot *bot, long bot_index, struct player_
 	action->desired_zoom_level = NONE;
 	action->desired_facing.yaw = bot->yaw;
 	action->desired_facing.pitch = bot->pitch;
+
+	/* (Royale: aboard a Pelican, falling, downed or out, its controls are
+	Royale's, bots_royale.h; on its feet again, as if spawned) */
+	if (royale_active())
+	{
+		struct bots_royale_control control;
+
+		csmemset(&control, 0, sizeof(control));
+		control.yaw = bot->yaw;
+		control.pitch = bot->pitch;
+		if (bots_royale_control(bot_index, bot->player_index, &control))
+		{
+			bot->yaw = bots_angle_difference(control.yaw, 0.0f);
+			bot->pitch = PIN(control.pitch, -1.4f, 1.4f);
+			action->desired_facing.yaw = bot->yaw;
+			action->desired_facing.pitch = bot->pitch;
+			if (control.moving)
+			{
+				real relative = bots_angle_difference(control.move_yaw, bot->yaw);
+
+				action->throttle.i = (real)cos(relative) * control.throttle;
+				action->throttle.j = (real)sin(relative) * control.throttle;
+			}
+			action->control_flags = control.flags;
+			bot->unit_index = NONE;
+			bot->target_player_index = NONE;
+			bot->path.valid = FALSE;
+			bot->goal_kind = _bots_goal_none;
+			bot->fighting = FALSE;
+			bot->previous_control_flags = control.flags;
+			return;
+		}
+	}
 
 	if (tick.player->unit_index == NONE)
 	{
@@ -6972,10 +7072,24 @@ static void bots_bot_update(struct bots_bot *bot, long bot_index, struct player_
 		bots_bot_vehicle(bot, &tick);
 	else
 	{
-		/* the goal, and the path to it: its fall back to recharge, else its
-		own (while fighting, only a weapon close by or its team's falling
-		back: towards it, still facing the enemy) */
-		if (!bots_bot_recharge(bot, &tick))
+		/* the goal, and the path to it: Royale's first (the beam, its
+		squadmate, the gulag: bots_royale.h; the beam's even in a fight),
+		its fall back to recharge, else its own (while fighting, only a
+		weapon close by or its team's falling back: towards it, still
+		facing the enemy) */
+		if (royale_active())
+		{
+			long last_enemy_tick = MAX(bot->target_seen_tick, bot->hurt_tick);
+
+			bots_royale_goal(bot_index, bot->player_index, &tick.position, tick.fighting,
+				tick.now - last_enemy_tick, &royale_goal);
+		}
+		if (royale_goal.decision && (!tick.fighting || royale_goal.in_fight) &&
+			bots_royale_set_goal(bot, &royale_goal.point))
+		{
+			tick.goal_in_fight = royale_goal.in_fight;
+		}
+		else if (!bots_bot_recharge(bot, &tick))
 		{
 			if (!tick.fighting || bot->goal_kind == _bots_goal_item || bot->smooth || bots_unit_out_of_ammo(tick.unit))
 				bots_choose_goal(bot, bot->player_index, &tick.position, tick.fighting);
@@ -7002,6 +7116,22 @@ static void bots_bot_update(struct bots_bot *bot, long bot_index, struct player_
 		/* (a vehicle to get into: the last of the way, the action button) */
 		if (!bot->smooth && bot->goal_kind == _bots_goal_vehicle)
 			bots_bot_board(bot, &tick);
+		/* (Royale: the last steps to a downed squadmate straight at them,
+		the action held over them to revive them) */
+		if (royale_goal.direct && !tick.fighting)
+		{
+			real distance = bots_distance2d(&royale_goal.point, &tick.position);
+
+			tick.moving = distance > 0.3f;
+			tick.move_direction = (real)atan2(royale_goal.point.y - tick.position.y,
+				royale_goal.point.x - tick.position.x);
+			tick.throttle_scale = distance > 1.0f ? 1.0f : 0.5f;
+		}
+		if (royale_goal.hold_action && !tick.fighting)
+		{
+			tick.moving = FALSE;
+			tick.flags |= FLAG(_unit_control_action_bit);
+		}
 	}
 	bot->fighting = tick.fighting;
 	bots_bot_weapons(bot, &tick);
