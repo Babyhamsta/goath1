@@ -79,6 +79,8 @@ unsigned long game_options_random_seed(void);
 #define ROYALE_ENDGAME_SQUADS 3
 /* Slayer's score to win, never reached: Royale ends by its own rules */
 #define ROYALE_NO_SCORE_TO_WIN 30000
+/* a player in the fight with no unit this long after the drop is out */
+#define ROYALE_UNITLESS_SECONDS 5
 
 static struct
 {
@@ -101,6 +103,8 @@ static struct
 	killed by a bleed-out */
 	boolean spawn_requested[ROYALE_RULES_MAXIMUM_SLOTS];
 	long bled_unit[ROYALE_RULES_MAXIMUM_SLOTS];
+	/* the host's: ticks a player in the fight has had no unit */
+	long unitless_ticks[ROYALE_RULES_MAXIMUM_SLOTS];
 } royale;
 
 /* ---- slots and players */
@@ -394,6 +398,7 @@ static boolean royale_initialize_for_new_map(
 	{
 		royale.reviver[slot] = NONE;
 		royale.bled_unit[slot] = NONE;
+		royale.unitless_ticks[slot] = 0;
 	}
 	royale.started = FALSE;
 	royale.results_logged = FALSE;
@@ -506,6 +511,31 @@ static void royale_host_tick(
 				royale_rules_leave(&royale.rules, &royale.settings, slot, royale_gulag_proc);
 		}
 		platform_log("royale: test end");
+	}
+	/* (a player in the fight with no unit for ROYALE_UNITLESS_SECONDS, once
+	the drop is over, is out: a unit lost without a death, or a seat never
+	taken, would keep their squad alive for ever. Not the gulag's, whose
+	lane spawns them) */
+	for (slot = 0; slot < ROYALE_RULES_MAXIMUM_SLOTS; slot++)
+	{
+		byte state = royale.rules.slots[slot].state;
+		boolean in_fight = state == ROYALE_RULES_IN_PELICAN || state == ROYALE_RULES_FALLING ||
+			state == ROYALE_RULES_ALIVE || state == ROYALE_RULES_DOWNED;
+
+		if (!in_fight || royale.rules.phase < ROYALE_RULES_PHASE_PLAY ||
+			royale.rules.phase >= ROYALE_RULES_PHASE_RESULTS ||
+			royale_living_unit(royale_player_of_slot(slot)) != NONE || royale.spawn_requested[slot])
+		{
+			royale.unitless_ticks[slot] = 0;
+			continue;
+		}
+		if (++royale.unitless_ticks[slot] >= ROYALE_UNITLESS_SECONDS * TICKS_PER_SECOND)
+		{
+			platform_log("royale: slot %ld out: no unit for %d seconds (state %d)", slot, ROYALE_UNITLESS_SECONDS,
+				state);
+			royale.unitless_ticks[slot] = 0;
+			royale_rules_died(&royale.rules, &royale.settings, slot, NONE, royale_gulag_proc);
+		}
 	}
 	royale_find_revivers();
 	royale_rules_tick(&royale.rules, &royale.settings, royale.reviver, royale.events, royale_match_seed(),
