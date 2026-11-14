@@ -2821,8 +2821,8 @@ static boolean bots_is_enemy(struct player_datum *player, struct player_datum *o
 	opponent: bots_royale.h) */
 	if (royale_active())
 	{
-		return player->unit_index != NONE && bots_royale_is_enemy(player_index_from_unit_index(player->unit_index),
-			player_index_from_unit_index(other->unit_index));
+		return player->unit_index != NONE && bots_royale_is_enemy(unit_get(player->unit_index)->unit.player_index,
+			unit_get(other->unit_index)->unit.player_index);
 	}
 	if (game_engine_has_teams() && player->team_index == other->team_index)
 		return FALSE;
