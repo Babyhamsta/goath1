@@ -25,6 +25,7 @@ Who does what:
 #include "math/real_math.h"
 #include "networking/network_game_globals.h"
 #include "objects/damage.h"
+#include "objects/damage_effect_definitions.h"
 #include "objects/objects.h"
 #include "scenario/scenario.h"
 #include "cache/cache_files.h"
@@ -804,9 +805,15 @@ static void insertion_landing_impact(long player_index, long unit_index)
 			player_get(player_index)->local_player_index != NONE)
 		{
 			struct damage_data damage;
+			struct damage_effect_definition *definition = damage_effect_definition_get(falling->falling_damage.index);
+			struct screen_flash_definition flash = definition->screen_flash;
 
+			/* (its shake, impulse and thud, not its red flash: a safe
+			landing is no hurt one) */
 			damage_data_new(&damage, falling->falling_damage.index);
+			csmemset(&definition->screen_flash, 0, sizeof(definition->screen_flash));
 			player_effect_start(player_index, &damage, global_down3d, LANDING_SHAKE_SCALE, 0.0f);
+			definition->screen_flash = flash;
 		}
 	}
 	/* the dust: the biped's jump-land effect in a ring about the feet */
@@ -886,7 +893,12 @@ static void insertion_fall(void)
 			insertion_set_falling_immunity(state->unit_index, FALSE);
 			state->falling = FALSE;
 			if (insertion_authority())
+			{
 				royale_set_player_state(iterator.datum_index, ROYALE_PLAYER_ALIVE);
+				error(_error_log, "royale insertion: player %ld landed at %.1f %.1f %.1f after %ld ticks",
+					DATUM_INDEX_TO_ABSOLUTE_INDEX(iterator.datum_index), biped->object.position.x,
+					biped->object.position.y, biped->object.position.z, state->falling_ticks);
+			}
 			continue;
 		}
 		if (airborne)
