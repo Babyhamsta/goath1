@@ -27,7 +27,6 @@ Who does what:
 #include "objects/damage.h"
 #include "objects/objects.h"
 #include "scenario/scenario.h"
-#include "structures/structure_bsp_definitions.h"
 #include "cache/cache_files.h"
 #include "tag_files/tag_files.h"
 #include "tag_files/tag_groups.h"
@@ -97,6 +96,7 @@ static struct
 	boolean started;
 	boolean boarded;
 	boolean creating; /* (royale_insertion_creating) */
+	boolean bounds_from_players;
 	unsigned long seed;
 	long insertion_ticks;
 	struct royale_bounds bounds;
@@ -106,6 +106,9 @@ static struct
 	struct insertion_pelican pelicans[ROYALE_INSERTION_MAXIMUM_PELICANS];
 	struct insertion_player players[HALO_PORT_MAXIMUM_NETWORK_PLAYERS];
 } insertion;
+
+static void insertion_log_area(char const *from);
+static void insertion_bounds_from_players(long const *players, short player_count);
 
 /* ---------- the rules (pure) */
 
@@ -531,6 +534,8 @@ static void insertion_board(void)
 	short config_path_count = 0;
 
 	insertion.boarded = TRUE;
+	if (insertion.bounds_from_players)
+		insertion_bounds_from_players(players, player_count);
 	/* the map's paths with a length, shuffled */
 	if (insertion.config)
 	{
@@ -867,29 +872,62 @@ void royale_insertion_start(struct royale_map_config const *config)
 		insertion.bounds = config->bounds;
 		insertion.height = config->drop_height;
 	}
-	if (insertion.bounds.maximum.x <= insertion.bounds.minimum.x ||
-		insertion.bounds.maximum.y <= insertion.bounds.minimum.y)
+	/* (a map with no config: the play area is where the players stand when
+	they board, insertion_bounds_from_players; the BSP's own box can be far
+	larger than the level, out where nothing is drawn) */
+	insertion.bounds_from_players = insertion.bounds.maximum.x <= insertion.bounds.minimum.x ||
+		insertion.bounds.maximum.y <= insertion.bounds.minimum.y;
+	if (!insertion.bounds_from_players)
 	{
-		/* (no bounds: the structure BSP's, a sixth in from each edge) */
-		struct structure_bsp *bsp = global_structure_bsp_get();
-		real_rectangle3d world = bsp ? bsp->world_bounds : (real_rectangle3d){ { -60, 60, -60, 60, 0, 30 } };
-		real inset_x = (world.x1 - world.x0) / 6.0f;
-		real inset_y = (world.y1 - world.y0) / 6.0f;
-
-		insertion.bounds.minimum.x = world.x0 + inset_x;
-		insertion.bounds.maximum.x = world.x1 - inset_x;
-		insertion.bounds.minimum.y = world.y0 + inset_y;
-		insertion.bounds.maximum.y = world.y1 - inset_y;
-		insertion.bounds.minimum.z = world.z0;
-		insertion.bounds.maximum.z = world.z1;
+		if (!(insertion.height > insertion.bounds.minimum.z))
+			insertion.height = insertion.bounds.minimum.z + ROYALE_INSERTION_DEFAULT_HEIGHT_ABOVE_PLAYERS;
+		insertion_log_area("map config");
 	}
-	/* (no height: just under the world's top, inside the BSP, where the
-	Pelicans and the falling are drawn) */
-	if (!(insertion.height > insertion.bounds.minimum.z))
-		insertion.height = insertion.bounds.maximum.z - ROYALE_INSERTION_DEFAULT_HEIGHT_BELOW_TOP;
-	error(_error_log, "royale insertion: play area %.1f..%.1f x %.1f..%.1f, drop height %.1f",
+}
+
+static void insertion_log_area(char const *from)
+{
+	error(_error_log, "royale insertion: play area %.1f..%.1f x %.1f..%.1f, drop height %.1f (%s)",
 		insertion.bounds.minimum.x, insertion.bounds.maximum.x, insertion.bounds.minimum.y,
-		insertion.bounds.maximum.y, insertion.height);
+		insertion.bounds.maximum.y, insertion.height, from);
+}
+
+/* the play area from the players' units (they stood at the level's spawns),
+widened by the margin, and the height above the highest of them */
+static void insertion_bounds_from_players(long const *players, short player_count)
+{
+	short index;
+	boolean any = FALSE;
+
+	for (index = 0; index < player_count; index++)
+	{
+		long unit_index = insertion_player_unit(players[index]);
+		real_point3d const *p;
+
+		if (unit_index == NONE)
+			continue;
+		p = &object_get(unit_index)->object.position;
+		if (!any)
+		{
+			insertion.bounds.minimum = *p;
+			insertion.bounds.maximum = *p;
+			any = TRUE;
+		}
+		insertion.bounds.minimum.x = MIN(insertion.bounds.minimum.x, p->x);
+		insertion.bounds.minimum.y = MIN(insertion.bounds.minimum.y, p->y);
+		insertion.bounds.minimum.z = MIN(insertion.bounds.minimum.z, p->z);
+		insertion.bounds.maximum.x = MAX(insertion.bounds.maximum.x, p->x);
+		insertion.bounds.maximum.y = MAX(insertion.bounds.maximum.y, p->y);
+		insertion.bounds.maximum.z = MAX(insertion.bounds.maximum.z, p->z);
+	}
+	if (!any)
+		return;
+	insertion.bounds.minimum.x -= ROYALE_INSERTION_PLAYERS_MARGIN;
+	insertion.bounds.minimum.y -= ROYALE_INSERTION_PLAYERS_MARGIN;
+	insertion.bounds.maximum.x += ROYALE_INSERTION_PLAYERS_MARGIN;
+	insertion.bounds.maximum.y += ROYALE_INSERTION_PLAYERS_MARGIN;
+	insertion.height = insertion.bounds.maximum.z + ROYALE_INSERTION_DEFAULT_HEIGHT_ABOVE_PLAYERS;
+	insertion_log_area("the players' spawns");
 }
 
 void royale_insertion_tick(void)
