@@ -236,6 +236,12 @@ enum
 	ROYALE_BEAM_BLAST_EFFECTS = 4,
 };
 
+/* the beam's damage's scale (damage.h: its flash, shake and sound by it; the
+amount is the multiplier's) */
+#define ROYALE_BEAM_DAMAGE_SCALE 0.08f
+/* how far past the HUD's bounds the screen's edge is, a share of its size */
+#define ROYALE_BEAM_HUD_EDGE 0.087f
+
 /* the beam's tags, the first of each list the map has (b30's first) */
 static char const *const royale_beam_contrail_names[] =
 {
@@ -462,7 +468,10 @@ void royale_beam_start(
 		struct damage_definition const *damage =
 			&((struct damage_effect_definition *)tag_get(DAMAGE_EFFECT_DEFINITION_TAG, royale_beam.damage))->damage;
 
-		royale_beam.damage_per_point = 0.5f * (damage->damage_lower_bound + damage->damage_upper_bound);
+		/* (what one hit of it does at ROYALE_BEAM_DAMAGE_SCALE: the scale
+		keeps its screen flash and shake faint) */
+		royale_beam.damage_per_point = (1.0f - ROYALE_BEAM_DAMAGE_SCALE) * damage->damage_minimum +
+			ROYALE_BEAM_DAMAGE_SCALE * 0.5f * (damage->damage_lower_bound + damage->damage_upper_bound);
 		platform_log("royale beam: damage %s (%.2f..%.2f, minimum %.2f)", tag_get_name(royale_beam.damage),
 			damage->damage_lower_bound, damage->damage_upper_bound, damage->damage_minimum);
 	}
@@ -657,7 +666,7 @@ static void royale_beam_damage_tick(
 		damage.origin = position;
 		damage.epicenter = position;
 		damage.direction = *global_down3d;
-		damage.scale = 1.0f;
+		damage.scale = ROYALE_BEAM_DAMAGE_SCALE;
 		/* (the tick's share of the unit's whole health, in the damage tag's
 		points) */
 		damage.multiplier = royale_beam.damage_per_point > 0.0f ?
@@ -801,6 +810,20 @@ void royale_beam_tick(
 		royale_beam.play_start =
 			royale_match_time() - (phase == ROYALE_PHASE_PLAY ? royale_phase_time() : 0);
 		royale_beam.ticks = royale_match_time() - royale_beam.play_start;
+		{
+			/* TEMP: the ground's height across the island (for the clip's camera) */
+			short gx, gy;
+
+			for (gy = -60; gy <= 60; gy += 30)
+			{
+				char line[256];
+				int used = 0;
+
+				for (gx = -80; gx <= 100; gx += 20)
+					used += snprintf(line + used, sizeof(line) - used, " %d:%.0f", gx, royale_beam_ground(gx, gy, -999.0f));
+				platform_log("royale beam: ground y %d:%s", gy, line);
+			}
+		}
 	}
 	else
 	{
@@ -1156,6 +1179,7 @@ void royale_beam_draw(
 	void)
 {
 	rectangle2d bounds;
+	rectangle2d screen;
 	real_point3d eye;
 	real depth;
 	real seconds;
@@ -1177,13 +1201,32 @@ void royale_beam_draw(
 		line = (short)(font->ascending_height + font->descending_height);
 	}
 	seconds = (real)royale_beam.ticks / royale_beam.ticks_per_second;
-	eye = render.camera.position;
-	depth = royale_beam_depth(&eye);
+	/* the warnings are for a player standing in the world (alive or downed),
+	from where their unit is; the countdown for everyone */
+	{
+		long player_index = local_player_get_player_index(render.local_player_index);
+		struct player_datum *player = player_index != NONE ? player_try_and_get(player_index) : NULL;
+		enum royale_player_state state = player_index != NONE ? royale_player_state(player_index) : ROYALE_PLAYER_NONE;
+
+		depth = -1.0e9f;
+		if (player && player->unit_index != NONE && object_header_try_and_get(player->unit_index) &&
+			(state == ROYALE_PLAYER_ALIVE || state == ROYALE_PLAYER_DOWNED))
+		{
+			object_get_origin(player->unit_index, &eye);
+			depth = royale_beam_depth(&eye);
+		}
+	}
 	/* (in the view's own coordinates: a split screen's lower window's too) */
 	bounds = render.camera.window_bounds;
 	offset_rectangle2d(&bounds, (short)-render.camera.viewport_bounds.x0, (short)-render.camera.viewport_bounds.y0);
 	width = (short)(bounds.x1 - bounds.x0);
 	height = (short)(bounds.y1 - bounds.y0);
+	/* (the HUD's canvas is drawn inset from the window's edges, by about
+	7.4% on each side: the screen's edge is that far out of its bounds) */
+	screen.x0 = (short)(bounds.x0 - width * ROYALE_BEAM_HUD_EDGE);
+	screen.x1 = (short)(bounds.x1 + width * ROYALE_BEAM_HUD_EDGE);
+	screen.y0 = (short)(bounds.y0 - height * ROYALE_BEAM_HUD_EDGE);
+	screen.y1 = (short)(bounds.y1 + height * ROYALE_BEAM_HUD_EDGE);
 
 	/* behind the front: the world's light orange-red, the screen's edges
 	burning; near it, the edges only, fainter */
@@ -1193,11 +1236,11 @@ void royale_beam_draw(
 		real strength = depth > 0.0f ? 1.0f : 1.0f + depth / 40.0f;
 		short band;
 		short const bands = 8;
-		short const thickness = (short)MAX(4, height / 60);
+		short const thickness = (short)MAX(4, height / 50);
 
 		if (depth > 0.0f)
 		{
-			rectangle2d whole = bounds;
+			rectangle2d whole = screen;
 
 			draw_quad(&whole, royale_beam_hud_pixel(1.0f, 0.32f, 0.06f, 0.16f + 0.06f * pulse));
 		}
@@ -1208,16 +1251,16 @@ void royale_beam_draw(
 			rectangle2d edge;
 			short inset = (short)(band * thickness);
 
-			edge.x0 = bounds.x0; edge.x1 = bounds.x1;
-			edge.y0 = (short)(bounds.y0 + inset); edge.y1 = (short)(edge.y0 + thickness);
+			edge.x0 = screen.x0; edge.x1 = screen.x1;
+			edge.y0 = (short)(screen.y0 + inset); edge.y1 = (short)(edge.y0 + thickness);
 			draw_quad(&edge, color);
-			edge.y1 = (short)(bounds.y1 - inset); edge.y0 = (short)(edge.y1 - thickness);
+			edge.y1 = (short)(screen.y1 - inset); edge.y0 = (short)(edge.y1 - thickness);
 			draw_quad(&edge, color);
-			edge.y0 = (short)(bounds.y0 + (band + 1) * thickness);
-			edge.y1 = (short)(bounds.y1 - (band + 1) * thickness);
-			edge.x0 = (short)(bounds.x0 + inset); edge.x1 = (short)(edge.x0 + thickness);
+			edge.y0 = (short)(screen.y0 + (band + 1) * thickness);
+			edge.y1 = (short)(screen.y1 - (band + 1) * thickness);
+			edge.x0 = (short)(screen.x0 + inset); edge.x1 = (short)(edge.x0 + thickness);
 			draw_quad(&edge, color);
-			edge.x1 = (short)(bounds.x1 - inset); edge.x0 = (short)(edge.x1 - thickness);
+			edge.x1 = (short)(screen.x1 - inset); edge.x0 = (short)(edge.x1 - thickness);
 			draw_quad(&edge, color);
 		}
 	}
