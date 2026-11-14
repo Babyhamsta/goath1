@@ -50,6 +50,12 @@ signed random number (-1 to 1) times spread, then kept inside the box */
 void bots_royale_landing(float start_x, float start_y, float end_x, float end_y, float fraction,
 	float side_random, float spread, struct bots_royale_box const *box, float *x, float *y);
 
+/* a Pelican's way over the box: where the line through (x, y) along
+(velocity_x, velocity_y) goes in and out of it; FALSE when it does not
+cross it, or stands still */
+int bots_royale_chord(struct bots_royale_box const *box, float x, float y, float velocity_x, float velocity_y,
+	float *start_x, float *start_y, float *end_x, float *end_y);
+
 /* how far a point (x, y) is along the path from start to end (0 at start,
 1 at end; beyond, outside 0 to 1) */
 float bots_royale_path_progress(float start_x, float start_y, float end_x, float end_y, float x, float y);

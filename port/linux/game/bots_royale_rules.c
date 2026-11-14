@@ -120,6 +120,53 @@ void bots_royale_landing(float start_x, float start_y, float end_x, float end_y,
 	*y = bots_royale_clamp(py, box->minimum_y + BOTS_ROYALE_EDGE, box->maximum_y - BOTS_ROYALE_EDGE);
 }
 
+int bots_royale_chord(struct bots_royale_box const *box, float x, float y, float velocity_x, float velocity_y,
+	float *start_x, float *start_y, float *end_x, float *end_y)
+{
+	float low = -1.0e30f, high = 1.0e30f;
+	float origin[2], velocity[2], least[2], most[2];
+	int axis;
+
+	origin[0] = x; origin[1] = y;
+	velocity[0] = velocity_x; velocity[1] = velocity_y;
+	least[0] = box->minimum_x; least[1] = box->minimum_y;
+	most[0] = box->maximum_x; most[1] = box->maximum_y;
+	if (velocity_x * velocity_x + velocity_y * velocity_y < 0.000001f)
+		return 0;
+	/* (the slabs: each axis's span of the line inside the box) */
+	for (axis = 0; axis < 2; axis++)
+	{
+		if (fabs(velocity[axis]) < 0.000001f)
+		{
+			if (origin[axis] < least[axis] || origin[axis] > most[axis])
+				return 0;
+		}
+		else
+		{
+			float a = (least[axis] - origin[axis]) / velocity[axis];
+			float b = (most[axis] - origin[axis]) / velocity[axis];
+
+			if (a > b)
+			{
+				float swap = a;
+				a = b;
+				b = swap;
+			}
+			if (a > low)
+				low = a;
+			if (b < high)
+				high = b;
+		}
+	}
+	if (low > high)
+		return 0;
+	*start_x = x + velocity_x * low;
+	*start_y = y + velocity_y * low;
+	*end_x = x + velocity_x * high;
+	*end_y = y + velocity_y * high;
+	return 1;
+}
+
 float bots_royale_path_progress(float start_x, float start_y, float end_x, float end_y, float x, float y)
 {
 	float dx = end_x - start_x, dy = end_y - start_y;

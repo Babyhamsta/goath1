@@ -83,6 +83,12 @@ int main(void)
 	CHECK("landing_on_path", fabsf(y - 100) < 0.01f);
 	bots_royale_landing(0, 190, 100, 190, 0.5f, 1.0f, 40.0f, &box, &x, &y);
 	CHECK("landing_in_box", y <= 200 - 4 + 0.01f);
+	CHECK("chord_crosses", bots_royale_chord(&box, 50, 100, 1, 0, &x, &y, &yaw, &throttle) &&
+		fabsf(x) < 0.01f && fabsf(y - 100) < 0.01f && fabsf(yaw - 100) < 0.01f && fabsf(throttle - 100) < 0.01f);
+	CHECK("chord_from_outside", bots_royale_chord(&box, -50, 50, 1, 1, &x, &y, &yaw, &throttle) &&
+		fabsf(x) < 0.01f && fabsf(y - 100) < 0.01f && fabsf(yaw - 100) < 0.01f && fabsf(throttle - 200) < 0.01f);
+	CHECK("chord_misses", !bots_royale_chord(&box, -50, 50, 0, 1, &x, &y, &yaw, &throttle));
+	CHECK("chord_still", !bots_royale_chord(&box, 50, 50, 0, 0, &x, &y, &yaw, &throttle));
 	CHECK("progress", fabsf(bots_royale_path_progress(0, 0, 100, 0, 25, 7) - 0.25f) < 0.001f);
 
 	/* the fall: towards the landing, easing off on it */

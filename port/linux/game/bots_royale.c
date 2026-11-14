@@ -45,6 +45,8 @@ void platform_log(char const *format, ...);
 #define BOTS_ROYALE_LANDING_SPREAD 40.0f
 /* (squadmates land this far apart) */
 #define BOTS_ROYALE_MATE_OFFSET 3.0f
+/* (the squads aboard a Pelican jump in this many shares of its way) */
+#define BOTS_ROYALE_JUMP_SHARES 4
 /* (a roam spot reached within this) */
 #define BOTS_ROYALE_ROAM_REACHED 3.0f
 
@@ -53,7 +55,7 @@ struct bots_royale_bot
 	unsigned long random;
 	/* its squad's jump: the path, the fraction, the landing (planned) */
 	boolean planned;
-	short path_index;
+	real path_start_x, path_start_y, path_end_x, path_end_y;
 	real jump_fraction;
 	real landing_x, landing_y;
 	/* the loot spot it roams to (NONE: none yet) */
@@ -228,43 +230,28 @@ void bots_royale_report(void)
 
 /* its squad's jump: the path nearest its Pelican, its squad's share of
 it, the landing beside it (ahead of the beam's first stage) */
-static void bots_royale_plan_jump(struct bots_royale_bot *bot, long player_index, real_point3d const *pelican)
+static void bots_royale_plan_jump(struct bots_royale_bot *bot, long player_index, real_point3d const *pelican,
+	real_vector3d const *velocity)
 {
-	struct royale_map_config const *config = bots_royale.config;
 	short squad = royale_squad_of(player_index);
 	unsigned long squad_random = bots_royale_mix(0xA511E9B3UL * (unsigned long)(squad + 2) ^
 		(unsigned long)network_game_get_random_seed());
-	short path, best = 0, squads_per_path;
-	real best_distance = REAL_MAX;
-	struct royale_flight_path const *flight;
 	real fraction_random, side_random;
 
-	for (path = 0; path < config->flight_path_count; path++)
+	/* (its Pelican's way over the island: where its line crosses the
+	bounds; standing still, the place it is) */
+	if (!bots_royale_chord(&bots_royale.box, pelican->x, pelican->y, velocity->i, velocity->j,
+		&bot->path_start_x, &bot->path_start_y, &bot->path_end_x, &bot->path_end_y))
 	{
-		struct royale_flight_path const *candidate = &config->flight_paths[path];
-		real t = bots_royale_path_progress(candidate->start.x, candidate->start.y, candidate->end.x,
-			candidate->end.y, pelican->x, pelican->y);
-		real px, py, distance;
-
-		t = t < 0.0f ? 0.0f : t > 1.0f ? 1.0f : t;
-		px = candidate->start.x + (candidate->end.x - candidate->start.x) * t - pelican->x;
-		py = candidate->start.y + (candidate->end.y - candidate->start.y) * t - pelican->y;
-		distance = px * px + py * py;
-		if (distance < best_distance)
-		{
-			best_distance = distance;
-			best = path;
-		}
+		bot->path_start_x = bot->path_end_x = pelican->x;
+		bot->path_start_y = bot->path_end_y = pelican->y;
 	}
-	flight = &config->flight_paths[best];
-	squads_per_path = (short)((royale_squad_count() + MAX(config->flight_path_count, 1) - 1) /
-		MAX(config->flight_path_count, 1));
 	fraction_random = bots_royale_unit_random(&squad_random);
 	side_random = bots_royale_unit_random(&squad_random) * 2.0f - 1.0f;
-	bot->path_index = best;
-	bot->jump_fraction = bots_royale_jump_fraction(squad < 0 ? 0 : (short)(squad / MAX(config->flight_path_count, 1)),
-		squads_per_path, fraction_random);
-	bots_royale_landing(flight->start.x, flight->start.y, flight->end.x, flight->end.y, bot->jump_fraction,
+	/* (the squads aboard, numbered together, spread over its shares) */
+	bot->jump_fraction = bots_royale_jump_fraction(squad < 0 ? (short)0 : (short)(squad % BOTS_ROYALE_JUMP_SHARES),
+		BOTS_ROYALE_JUMP_SHARES, fraction_random);
+	bots_royale_landing(bot->path_start_x, bot->path_start_y, bot->path_end_x, bot->path_end_y, bot->jump_fraction,
 		side_random, BOTS_ROYALE_LANDING_SPREAD, &bots_royale.box, &bot->landing_x, &bot->landing_y);
 	/* (squadmates a little apart: its seat's side) */
 	if (royale_squadmate_of(player_index) != NONE && player_index > royale_squadmate_of(player_index))
@@ -300,15 +287,13 @@ boolean bots_royale_control(long bot_index, long player_index, struct bots_royal
 	case ROYALE_PLAYER_IN_PELICAN:
 	{
 		real_vector3d velocity;
-		struct royale_flight_path const *flight;
 		real progress;
 
 		if (!royale_insertion_pelican_position(player_index, &position, &velocity))
 			return TRUE;
 		if (!bot->planned)
-			bots_royale_plan_jump(bot, player_index, &position);
-		flight = &bots_royale.config->flight_paths[bot->path_index];
-		progress = bots_royale_path_progress(flight->start.x, flight->start.y, flight->end.x, flight->end.y,
+			bots_royale_plan_jump(bot, player_index, &position, &velocity);
+		progress = bots_royale_path_progress(bot->path_start_x, bot->path_start_y, bot->path_end_x, bot->path_end_y,
 			position.x, position.y);
 		control->yaw = (real)atan2(bot->landing_y - position.y, bot->landing_x - position.x);
 		control->pitch = -0.6f;
