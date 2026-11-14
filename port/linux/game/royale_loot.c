@@ -465,6 +465,21 @@ static void royale_loot_delete_weapons(
 	}
 }
 
+/* whether the unit holds any weapon */
+static boolean royale_loot_unit_armed(
+	long unit_index)
+{
+	struct unit_datum *unit = unit_try_and_get(unit_index);
+	short slot;
+
+	for (slot = 0; unit && slot < MAXIMUM_WEAPONS_PER_UNIT; slot++)
+	{
+		if (unit->unit.weapon_object_indices[slot] != NONE)
+			return TRUE;
+	}
+	return FALSE;
+}
+
 /* the start kit: the unit's weapons and grenades gone, a pistol low on
 rounds */
 static void royale_loot_give_kit(
@@ -479,7 +494,15 @@ static void royale_loot_give_kit(
 
 	if (!royale_loot.started || network_game_distributed_client() || !player ||
 		!VALID_INDEX(slot, HALO_PORT_MAXIMUM_NETWORK_PLAYERS) || player->quit_out_of_game ||
-		player->unit_index == NONE || royale_loot.kitted_unit[slot] == player->unit_index)
+		player->unit_index == NONE)
+	{
+		return;
+	}
+	/* (kitted once a unit; but a Pelican's seat drops what its rider holds
+	(the purge then deletes it), so a rider out of it falls with none: the
+	kit again then) */
+	if (royale_loot.kitted_unit[slot] == player->unit_index &&
+		(royale_player_state(player_index) != ROYALE_PLAYER_FALLING || royale_loot_unit_armed(player->unit_index)))
 	{
 		return;
 	}
