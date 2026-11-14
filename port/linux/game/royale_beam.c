@@ -402,7 +402,25 @@ void royale_beam_start(
 		royale_beam.stage_count = (short)NUMBEROF(royale_beam_default_stages);
 		csmemcpy(royale_beam.stages, royale_beam_default_stages, sizeof(royale_beam_default_stages));
 	}
+	/* debug: HALO_ROYALE_BEAM_SPEED runs the stages that many times faster
+	(pictures and clips), HALO_ROYALE_BEAM_SIDE picks the side (0 north, 1
+	east, 2 south, 3 west) */
+	{
+		char const *speed_text = getenv("HALO_ROYALE_BEAM_SPEED");
+		real speed = speed_text && *speed_text ? (real)atof(speed_text) : 1.0f;
+
+		if (speed > 0.0f && speed != 1.0f)
+		{
+			for (index = 0; index < royale_beam.stage_count; index++)
+			{
+				royale_beam.stages[index].delay /= speed;
+				royale_beam.stages[index].duration /= speed;
+			}
+		}
+	}
 	royale_beam.side = royale_beam_choose_side(royale_match_seed(), config->beam_sides);
+	if (getenv("HALO_ROYALE_BEAM_SIDE") && *getenv("HALO_ROYALE_BEAM_SIDE"))
+		royale_beam.side = (short)(atoi(getenv("HALO_ROYALE_BEAM_SIDE")) & 3);
 	royale_beam.ticks_per_second = (real)royale_seconds_to_ticks(100.0f) / 100.0f;
 	if (royale_beam.ticks_per_second <= 0.0f)
 		royale_beam.ticks_per_second = 30.0f;
