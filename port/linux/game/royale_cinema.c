@@ -23,6 +23,7 @@ every machine shows the same moment from its own copy of the game.
 #include "cutscene/cinematics.h"
 #include "game/players.h"
 #include "interface/hud.h"
+#include "interface/hud_messaging.h"
 #include "math/real_math.h"
 #include "objects/objects.h"
 #include "physics/collisions.h"
@@ -385,7 +386,7 @@ void royale_cinema_object_lighting(
 		return;
 	/* (the Pelican, or a rider in it, or what a rider carries) */
 	vehicle_index = object_index;
-	while (vehicle_index != NONE && object_get(vehicle_index)->object.definition_index != cinema.pelican_definition)
+	while (vehicle_index != NONE && object_get(vehicle_index)->definition_index != cinema.pelican_definition)
 		vehicle_index = object_get(vehicle_index)->object.parent_object_index;
 	if (vehicle_index == NONE)
 		return;
