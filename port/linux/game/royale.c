@@ -815,21 +815,18 @@ static long royale_get_player_score(
 	return score;
 }
 
-/* the scoreboard's and the carnage report's score: the squad's kills (a
-player's own are their Kills column) */
+/* the scoreboard's and the carnage report's score: the squad's kills, as
+their Kills column counts them (the game's statistics: the Reclaimer's
+too) */
 static wchar_t *royale_format_player_score(
 	long player_index,
 	wchar_t *text)
 {
-	short squad = royale_squad_of(player_index);
-	long kills = royale_player_kills(player_index);
+	struct player_datum *player = player_try_and_get(player_index);
+	long mate = royale_squadmate_of(player_index);
+	struct player_datum *mate_player = mate != NONE ? player_try_and_get(mate) : NULL;
+	long kills = (player ? player->statistics.kills[0] : 0) + (mate_player ? mate_player->statistics.kills[0] : 0);
 
-	if (squad != NONE)
-	{
-		long mate = royale_squadmate_of(player_index);
-
-		kills += mate != NONE ? royale_player_kills(mate) : 0;
-	}
 	usprintf(text, L"%ld", kills);
 	return text;
 }
