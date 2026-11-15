@@ -73,10 +73,6 @@ units), full at it */
 /* how far past the HUD's bounds the screen's edge is (royale_beam.c's) */
 #define ROYALE_FX_HUD_EDGE 0.087f
 
-/* the supply pods' fall (royale_loot.c's ROYALE_LOOT_POD_FALL_SECONDS and
-_HEIGHT: the loot's crate falls so) */
-#define ROYALE_FX_POD_FALL_SECONDS 5.0f
-#define ROYALE_FX_POD_FALL_HEIGHT 120.0f
 #define ROYALE_FX_POD_TRAIL_LENGTH 45.0f
 #define ROYALE_FX_POD_TRAIL_POINTS 16
 /* the boom's shake reaches this far */
@@ -84,6 +80,9 @@ _HEIGHT: the loot's crate falls so) */
 /* the boom's fireball and smoke last so long (seconds) */
 #define ROYALE_FX_POD_BOOM_SECONDS 1.2f
 #define ROYALE_FX_POD_SMOKE_SECONDS 10.0f
+/* the landing's flash on the screens of those this near (world units) */
+#define ROYALE_FX_POD_FLASH_SECONDS 0.4f
+#define ROYALE_FX_POD_FLASH_DISTANCE 120.0f
 
 /* the rumble: the beam's hum (royale_beam.c starts it), its sound's scale
 made its loudness, from this far ahead of the front (world units) up to
@@ -389,7 +388,7 @@ static void royale_fx_pods_tick(
 	enum royale_phase phase = royale_phase();
 	long now = royale_match_time();
 	long endgame_start = phase == ROYALE_PHASE_ENDGAME ? now - royale_phase_time() : NONE;
-	long fall_ticks = MAX(royale_seconds_to_ticks(ROYALE_FX_POD_FALL_SECONDS), 1);
+	long fall_ticks = MAX(royale_seconds_to_ticks(ROYALE_LOOT_POD_FALL_SECONDS), 1);
 	long flame_period = MAX(royale_seconds_to_ticks(0.05f), 1);
 	short index;
 
@@ -412,7 +411,7 @@ static void royale_fx_pods_tick(
 		elapsed = now - fall_start;
 		fraction = MIN((real)elapsed / (real)fall_ticks, 1.0f);
 		royale_fx.pods[index].position = ground;
-		royale_fx.pods[index].position.z = ground.z + ROYALE_FX_POD_FALL_HEIGHT * (1.0f - fraction * fraction);
+		royale_fx.pods[index].position.z = ground.z + royale_loot_pod_height(fraction);
 		if (fraction < 1.0f)
 		{
 			royale_fx.pods[index].falling = TRUE;
@@ -720,11 +719,21 @@ static void royale_fx_render_pod_boom(
 	if (seconds_since < ROYALE_FX_POD_BOOM_SECONDS)
 	{
 		real t = seconds_since / ROYALE_FX_POD_BOOM_SECONDS;
-		real size = 6.0f + 26.0f * sqrtf(t);
+		real size = 8.0f + 34.0f * sqrtf(t);
 		real fade = (1.0f - t) * (1.0f - t);
+		/* (blended, not added: dark smoke and orange fire read against a
+		bright sky, as a glow alone does not) */
+		real_argb_color smoke = { 0.9f * (1.0f - 0.6f * t), 0.16f, 0.14f, 0.13f };
+		real_argb_color smoke_top = { 0.5f * (1.0f - t), 0.3f, 0.28f, 0.26f };
+		real_argb_color fire = { 0.95f * (1.0f - t), 1.0f, 0.5f, 0.08f };
+		real_argb_color fire_top = { 0.6f * (1.0f - t), 1.0f, 0.25f, 0.03f };
 		real_argb_color hot = { fade, 1.0f, 0.85f, 0.5f };
 		real_argb_color edge = { fade * 0.7f, 1.0f, 0.35f, 0.08f };
 
+		royale_fx_ribbon(ground, &across, -size * 0.2f, size * 1.1f, size * 1.2f, size * 0.9f, &smoke, &smoke_top, t,
+			royale_fx.trail);
+		royale_fx_ribbon(ground, &across, -size * 0.2f, size * 0.8f, size * 0.8f, size * 0.5f, &fire, &fire_top, t * 2.0f,
+			royale_fx.trail);
 		royale_fx_ribbon(ground, &across, -size * 0.3f, size, size, size * 0.6f, &hot, &edge, t, royale_fx.glow);
 	}
 	if (seconds_since < ROYALE_FX_POD_SMOKE_SECONDS)
@@ -876,6 +885,43 @@ void royale_fx_tick(
 	royale_fx_rumble_tick();
 }
 
+/* a pod's landing seen near: the view flashes white-orange for a moment */
+static void royale_fx_draw_pod_flash(
+	void)
+{
+	real strength = 0.0f;
+	short index;
+
+	for (index = 0; index < ROYALE_LOOT_POD_COUNT; index++)
+	{
+		real since, distance, near;
+
+		if (!royale_fx.pods[index].landed || royale_fx.pods[index].landed_time == NONE)
+			continue;
+		since = (real)(royale_match_time() - royale_fx.pods[index].landed_time) /
+			(real)MAX(royale_seconds_to_ticks(1.0f), 1);
+		distance = sqrtf(distance_squared3d(&render.camera.position, &royale_fx.pods[index].position));
+		if (since < 0.0f || since >= ROYALE_FX_POD_FLASH_SECONDS || distance >= ROYALE_FX_POD_FLASH_DISTANCE)
+			continue;
+		near = 1.0f - distance / ROYALE_FX_POD_FLASH_DISTANCE;
+		strength = MAX(strength, near * (1.0f - since / ROYALE_FX_POD_FLASH_SECONDS));
+	}
+	if (strength > 0.0f)
+	{
+		rectangle2d whole = render.camera.window_bounds;
+		short width, height;
+
+		offset_rectangle2d(&whole, (short)-render.camera.viewport_bounds.x0, (short)-render.camera.viewport_bounds.y0);
+		width = (short)(whole.x1 - whole.x0);
+		height = (short)(whole.y1 - whole.y0);
+		whole.x0 = (short)(whole.x0 - width * ROYALE_FX_HUD_EDGE);
+		whole.x1 = (short)(whole.x1 + width * ROYALE_FX_HUD_EDGE);
+		whole.y0 = (short)(whole.y0 - height * ROYALE_FX_HUD_EDGE);
+		whole.y1 = (short)(whole.y1 + height * ROYALE_FX_HUD_EDGE);
+		draw_quad(&whole, ((pixel32)(PIN(0.55f * strength, 0.0f, 1.0f) * 255.0f + 0.5f) << 24) | 0x00FFD9A0);
+	}
+}
+
 /* the sky going orange near the beam: a glow from the top of the view
 down, stronger the nearer the front */
 void royale_fx_draw(
@@ -888,6 +934,7 @@ void royale_fx_draw(
 
 	if (!royale_fx.started || !royale_active() || !royale_fx_world_phase())
 		return;
+	royale_fx_draw_pod_flash();
 	if (!royale_fx_local_unit_position(local_player_index, &position))
 		return;
 	ahead = royale_fx_distance_ahead(&position);

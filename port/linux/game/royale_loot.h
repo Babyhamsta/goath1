@@ -69,6 +69,12 @@ struct royale_loot_plan const *royale_loot_plan_get(void);
 start if that comes first (a pod still to fall falls then); NONE before PLAY.
 From the match clock, so every machine's pod falls alike */
 long royale_loot_pod_fall_start(long play_start, long endgame_start, long drop_ticks);
+/* a pod's fall: this long, from this high over its spot, and its height
+over the spot at a share 0..1 of the fall (it brakes near the ground, so
+that it stays in view: the crate and royale_fx.c's fire alike) */
+#define ROYALE_LOOT_POD_FALL_SECONDS 6.0f
+#define ROYALE_LOOT_POD_FALL_HEIGHT 120.0f
+real royale_loot_pod_height(real fraction);
 
 enum royale_loot_kit_action
 {

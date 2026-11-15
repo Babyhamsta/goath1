@@ -100,8 +100,6 @@ static short const royale_loot_start_rounds[2] = { 8, 8 };
 #define ROYALE_LOOT_POD_FIRST_SECOND 30
 #define ROYALE_LOOT_POD_INTERVAL_SECONDS 45
 #define ROYALE_LOOT_POD_JITTER_SECONDS 20
-#define ROYALE_LOOT_POD_FALL_SECONDS 5.0f
-#define ROYALE_LOOT_POD_FALL_HEIGHT 120.0f
 #define ROYALE_LOOT_POD_ITEM_RADIUS 1.6f
 #define ROYALE_LOOT_TRAIL_SECONDS 0.1f
 #define ROYALE_LOOT_MAXIMUM_PLACED (ROYALE_MAXIMUM_LOOT_SPOTS + ROYALE_LOOT_POD_COUNT * ROYALE_LOOT_POD_ITEMS)
@@ -219,6 +217,16 @@ void royale_loot_plan_make(
 				royale_loot_roll_kind(&loot_seed, ROYALE_LOOT_RARITY_COMMON, available);
 		}
 	}
+}
+
+real royale_loot_pod_height(
+	real fraction)
+{
+	real f = PIN(fraction, 0.0f, 1.0f);
+
+	/* (fast from the sky, braking hard near the ground, still moving as it
+	strikes) */
+	return ROYALE_LOOT_POD_FALL_HEIGHT * (1.0f - f) * (1.0f - 0.8f * f);
 }
 
 long royale_loot_pod_fall_start(
@@ -680,8 +688,7 @@ static void royale_loot_pods_tick(
 			continue;
 		elapsed = MAX(now - royale_loot.pods[index].fall_start, 0);
 		fraction = MIN((real)elapsed / (real)fall_ticks, 1.0f);
-		/* (falling faster as it comes) */
-		position.z = ground->z + ROYALE_LOOT_POD_FALL_HEIGHT * (1.0f - fraction * fraction);
+		position.z = ground->z + royale_loot_pod_height(fraction);
 		if (royale_loot.pods[index].crate_index != NONE && object_try_and_get(royale_loot.pods[index].crate_index))
 			object_set_position(royale_loot.pods[index].crate_index, &position, NULL, NULL);
 		if (fraction < 1.0f)
