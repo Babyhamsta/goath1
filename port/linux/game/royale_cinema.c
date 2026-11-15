@@ -24,6 +24,9 @@ every machine shows the same moment from its own copy of the game.
 #include "game/players.h"
 #include "interface/hud.h"
 #include "interface/hud_messaging.h"
+#include "interface/hud_definitions.h"
+#include "interface/ui_widget.h"
+#include "bitmaps/bitmap_group_lookup.h"
 #include "math/real_math.h"
 #include "objects/objects.h"
 #include "physics/collisions.h"
@@ -56,17 +59,9 @@ slide in and out */
 #define CINEMA_ORBIT_DISTANCE 3.6f
 #define CINEMA_ORBIT_HEIGHT 1.3f
 #define CINEMA_ORBIT_RATE 0.4f
-/* the carnage report's rows */
-#define CINEMA_REPORT_ROWS 10
 
 #define PELICAN_TAG_NAME "vehicles\\pelican\\pelican"
 
-/* Halo's menu palette (the postgame carnage report's) */
-#define CINEMA_PANEL 0xE00A1424
-#define CINEMA_PANEL_BORDER 0xFF3F74AE
-#define CINEMA_HEADER_BAND 0xFF173257
-#define CINEMA_ROW_BAND 0x40203C60
-#define CINEMA_OWN_BAND 0x70B88A1E
 
 enum cinema_mode
 {
@@ -96,6 +91,7 @@ struct cinema_camera
 	real_point3d focus; /* the orbit's, eased after the squad */
 	boolean focus_valid;
 	byte pad[3];
+	real orbit_start; /* the orbit's first angle */
 };
 
 typedef char cinema_camera_size_assert[sizeof(struct cinema_camera) <= 0x40 ? 1 : -1];
@@ -138,6 +134,8 @@ static boolean cinema_winners_focus(
 	short squad = royale_winning_squad();
 	short seat;
 	short count = 0;
+	real_point3d first = { 0 };
+	real_point3d last = { 0 };
 
 	if (squad == NONE)
 		return FALSE;
@@ -150,6 +148,9 @@ static boolean cinema_winners_focus(
 		if (unit_index == NONE)
 			continue;
 		center = &object_get(unit_index)->object.bounding_sphere_center;
+		if (!count)
+			first = *center;
+		last = *center;
 		focus->x += center->x;
 		focus->y += center->y;
 		focus->z += center->z;
@@ -157,6 +158,12 @@ static boolean cinema_winners_focus(
 	}
 	if (!count)
 		return FALSE;
+	/* (two apart: the first of them alone, so the orbit frames someone) */
+	if (count == 2 && distance_squared3d(&first, &last) > 6.0f * 6.0f)
+	{
+		*focus = first;
+		return TRUE;
+	}
 	focus->x /= count;
 	focus->y /= count;
 	focus->z /= count;
@@ -240,33 +247,71 @@ static void cinema_flyover_camera(
 		*forward = *global_forward3d;
 }
 
+#define CINEMA_ORBIT_COLLISION (FLAG(_collision_test_front_facing_surfaces_bit) | \
+	FLAG(_collision_test_structure_bit) | FLAG(_collision_test_objects_bit) | \
+	_collision_test_objects_sight_blocking_flags)
+
+/* how far out from the squad the camera may be at an angle, a share of the
+orbit's way (1: clear) */
+static real cinema_orbit_clear(
+	real_point3d const *focus,
+	real angle,
+	real distance,
+	real_vector3d *out)
+{
+	struct collision_result collision;
+
+	out->i = cosf(angle) * distance;
+	out->j = sinf(angle) * distance;
+	out->k = CINEMA_ORBIT_HEIGHT;
+	if (collision_test_vector(CINEMA_ORBIT_COLLISION, focus, out, NONE, &collision))
+		return MAX(collision.t - 0.3f / MAX(magnitude3d(out), 0.01f), 0.15f);
+	return 1.0f;
+}
+
+/* the orbit's start: of eight ways round, the one most clear of walls,
+rocks and trees over the turn ahead */
+static real cinema_orbit_start(
+	real_point3d const *focus)
+{
+	real best_angle = 0.0f;
+	real best = -1.0f;
+	short way;
+
+	for (way = 0; way < 8; way++)
+	{
+		real angle = way * (_pi / 4.0f);
+		real_vector3d out;
+		real clear = cinema_orbit_clear(focus, angle, CINEMA_ORBIT_DISTANCE + 0.6f, &out) +
+			cinema_orbit_clear(focus, angle + CINEMA_ORBIT_RATE * CINEMA_ORBIT_SECONDS * 0.5f, CINEMA_ORBIT_DISTANCE,
+				&out) +
+			cinema_orbit_clear(focus, angle + CINEMA_ORBIT_RATE * CINEMA_ORBIT_SECONDS, CINEMA_ORBIT_DISTANCE, &out);
+
+		if (clear > best + 0.01f)
+		{
+			best = clear;
+			best_angle = angle;
+		}
+	}
+	return best_angle;
+}
+
 /* the orbit's camera about the squad: out from it, pulled in short of a
-wall or the ground between */
+wall, a rock or the ground between */
 static void cinema_orbit_camera(
 	real seconds,
+	real start,
 	real_point3d const *focus,
 	real_point3d *position,
 	real_vector3d *forward)
 {
-	real angle = (real)(royale_winning_squad() * 97 % 360) * (_pi / 180.0f) + seconds * CINEMA_ORBIT_RATE;
+	real angle = start + seconds * CINEMA_ORBIT_RATE;
 	real distance = CINEMA_ORBIT_DISTANCE + 0.6f * (1.0f - cinema_smooth(seconds / 2.0f));
 	real_vector3d out;
 	real_point3d look = *focus;
-	struct collision_result collision;
+	real t = cinema_orbit_clear(focus, angle, distance, &out);
 
-	out.i = cosf(angle) * distance;
-	out.j = sinf(angle) * distance;
-	out.k = CINEMA_ORBIT_HEIGHT;
-	if (collision_test_vector(FLAG(_collision_test_structure_bit) | FLAG(_collision_test_front_facing_surfaces_bit),
-		focus, &out, NONE, &collision))
-	{
-		real t = MAX(collision.t - 0.3f / MAX(magnitude3d(&out), 0.01f), 0.15f);
-
-		out.i *= t;
-		out.j *= t;
-		out.k *= t;
-	}
-	point_from_line3d(focus, &out, 1.0f, position);
+	point_from_line3d(focus, &out, t, position);
 	look.z += 0.2f;
 	vector_from_points3d(position, &look, forward);
 	if (normalize3d(forward) <= 0.0001f)
@@ -337,6 +382,7 @@ void royale_cinema_camera_update(
 		{
 			camera->focus = focus;
 			camera->focus_valid = TRUE;
+			camera->orbit_start = cinema_orbit_start(&focus);
 		}
 		else
 		{
@@ -347,7 +393,7 @@ void royale_cinema_camera_update(
 			camera->focus.y += (focus.y - camera->focus.y) * fraction;
 			camera->focus.z += (focus.z - camera->focus.z) * fraction;
 		}
-		cinema_orbit_camera(camera->clock, &camera->focus, &position, &forward);
+		cinema_orbit_camera(camera->clock, camera->orbit_start, &camera->focus, &position, &forward);
 	}
 	observer_up_from_forward(&forward, &up);
 	csmemset(command, 0, sizeof(*command));
@@ -376,7 +422,7 @@ void royale_cinema_object_lighting(
 {
 	struct object_datum *object;
 	long vehicle_index;
-	real const lamp = 0.42f;
+	real const lamp = 0.55f;
 
 	if (!royale_active() || royale_phase() != ROYALE_PHASE_INSERTION || !lighting)
 		return;
@@ -575,8 +621,11 @@ static void cinema_letterbox(
 
 	if (bar <= 0)
 		return;
-	cinema_quad(window->x0, window->y0, window->x1, (short)(window->y0 + bar), 0xFF000000);
-	cinema_quad(window->x0, (short)(window->y1 - bar), window->x1, window->y1, 0xFF000000);
+	/* (out past the HUD's safe window, to the screen's edges) */
+	cinema_quad((short)(window->x0 - 4000), (short)(window->y0 - 4000), (short)(window->x1 + 4000),
+		(short)(window->y0 + bar), 0xFF000000);
+	cinema_quad((short)(window->x0 - 4000), (short)(window->y1 - bar), (short)(window->x1 + 4000),
+		(short)(window->y1 + 4000), 0xFF000000);
 }
 
 static void cinema_draw_flyover(
@@ -670,128 +719,305 @@ static void cinema_draw_victory(
 	cinema_text(&bounds, small, 2, 1.0f, L"WINNERS", 0.62f, 0.78f, 1.0f, fade);
 }
 
-/* the carnage report: Halo's postgame screen's panel, every squad by its
-place, this player's squad marked (and shown last if below the rows) */
+/* the carnage report, as the game's own after a game (game_engine.c's
+carnage report): the hud globals' panel bitmap with its title, laid out in
+its 640 by 480 and scaled to the view, the game's line, the result's banner,
+then a table of the squads by place: their players, each one's kills and
+the squad's. This player's squad's row lit, and shown last if below the
+rows */
+#define CARNAGE_TEXT 0xE6EFFF
+#define CARNAGE_TEXT_LIT 0xFFFFFF
+#define CARNAGE_INFO 0x9CBBE6
+#define CARNAGE_HEADING 0x7F9FCB
+#define CARNAGE_BLUE 0x5AA9FF
+#define CARNAGE_GOLD 0xFFD45A
+#define CARNAGE_TABLE_FILL 0xD8081A40
+#define CARNAGE_TABLE_EDGE 0xFF2F7FFF
+#define CARNAGE_RULE 0xFF1F4F9A
+#define CARNAGE_ROW_RULE 0xFF12305F
+#define CARNAGE_ROW_LIT 0xFF0E2A63
+#define CARNAGE_ROWS 16
+
+/* the report's 640 by 480 in the view: its scale and its origin */
+struct cinema_report
+{
+	real scale;
+	real x;
+	real y;
+	real alpha;
+	short left; /* the panel's sides (report units: wider on a wide view) */
+	short right;
+};
+
+static short report_x(struct cinema_report const *report, real x) { return (short)(report->x + x * report->scale); }
+static short report_y(struct cinema_report const *report, real y) { return (short)(report->y + y * report->scale); }
+
+static void report_quad(
+	struct cinema_report const *report,
+	real x0,
+	real y0,
+	real x1,
+	real y1,
+	unsigned long argb)
+{
+	cinema_quad(report_x(report, x0), report_y(report, y0), report_x(report, x1), report_y(report, y1),
+		cinema_alpha((pixel32)argb, report->alpha));
+}
+
+static void report_box(
+	struct cinema_report const *report,
+	real x0,
+	real y0,
+	real x1,
+	real y1,
+	unsigned long fill,
+	unsigned long edge)
+{
+	real unit = 1.0f / MAX(report->scale, 0.01f);
+
+	if (fill >> 24)
+		report_quad(report, x0, y0, x1, y1, fill);
+	report_quad(report, x0, y0, x1, y0 + unit, edge);
+	report_quad(report, x0, y1 - unit, x1, y1, edge);
+	report_quad(report, x0, y0, x0 + unit, y1, edge);
+	report_quad(report, x1 - unit, y0, x1, y1, edge);
+}
+
+/* text in a box of the report's, height units tall, centred on its middle */
+static void report_text(
+	struct cinema_report const *report,
+	real x0,
+	real y0,
+	real x1,
+	real y1,
+	wchar_t const *text,
+	long font_index,
+	short justification,
+	real height,
+	unsigned long rgb)
+{
+	struct font_header *font;
+	real font_height;
+	rectangle2d bounds;
+	real top;
+
+	if (font_index == NONE)
+		return;
+	font = font_definition_get(font_index);
+	font_height = (real)MAX(font->ascending_height + font->descending_height, 1);
+	top = 0.5f * (y0 + y1) - 0.5f * height;
+	bounds.x0 = report_x(report, x0);
+	bounds.x1 = report_x(report, x1);
+	bounds.y0 = report_y(report, top);
+	bounds.y1 = (short)(bounds.y0 + (font->ascending_height + font->descending_height + font->leading_height) * 2 *
+		(height * report->scale / font_height));
+	cinema_text(&bounds, font_index, justification, height * report->scale / font_height, text,
+		((rgb >> 16) & 0xFF) / 255.0f, ((rgb >> 8) & 0xFF) / 255.0f, (rgb & 0xFF) / 255.0f, report->alpha);
+}
+
+static void report_place(
+	short place,
+	wchar_t *text,
+	short count)
+{
+	usnprintf(text, count - 1, L"%d%s", place,
+		place % 100 >= 11 && place % 100 <= 13 ? L"th" : place % 10 == 1 ? L"st" : place % 10 == 2 ? L"nd" :
+		place % 10 == 3 ? L"rd" : L"th");
+	text[count - 1] = 0;
+}
+
 static void cinema_draw_report(
 	long player_index)
 {
 	rectangle2d window = cinema_window();
 	real seconds = cinema_phase_seconds() - CINEMA_ORBIT_SECONDS;
-	/* (faded in after the orbit; at once when there was none) */
-	real fade = seconds >= 0.0f ? PIN(seconds / 0.5f, 0.0f, 1.0f) : 1.0f;
+	struct cinema_report report;
 	long large = cinema_font(TRUE);
 	long small = cinema_font(FALSE);
-	short line = (short)(cinema_font_height(small) * 5 / 4);
-	short title_height = (short)(cinema_font_height(large) * 2);
 	short squad_count = royale_squad_count();
 	short my_squad = royale_squad_of(player_index);
-	short width = (short)MIN(window.x1 - window.x0 - 32, 46 * cinema_font_height(small));
-	short left = (short)((window.x0 + window.x1 - width) / 2);
-	short rows = (short)MIN(squad_count, CINEMA_REPORT_ROWS);
-	short body_rows;
-	short top;
-	short place_column;
-	short squad_column;
-	short kills_column;
-	rectangle2d panel;
-	rectangle2d bounds;
-	wchar_t text[128];
+	short winners = royale_winning_squad();
+	short my_place = my_squad != NONE ? royale_squad_placement(my_squad) : 0;
+	short rows = (short)MIN(squad_count, CARNAGE_ROWS);
+	short body_rows = rows;
+	short squads_shown[CARNAGE_ROWS + 1];
+	short shown = 0;
+	real width = (real)(window.x1 - window.x0);
+	real height = (real)(window.y1 - window.y0);
+	real row_height;
+	real text_height;
+	real top;
+	real column_place, column_a, column_a_kills, column_b, column_b_kills, column_total;
+	wchar_t text[160];
+	wchar_t name[64];
 	short place;
-	short row = 0;
+	short index;
+	struct bitmap_data *panel = hud_globals ?
+		bitmap_group_try_and_get_bitmap(hud_globals->carnage_report_bitmap.index, 0) : NULL;
 
-	/* (this player's squad below the rows gets a row of its own) */
-	body_rows = rows;
-	if (my_squad != NONE && royale_squad_placement(my_squad) > CINEMA_REPORT_ROWS)
-		body_rows++;
-	top = (short)((window.y0 + window.y1) / 2 - (title_height + line * (body_rows + 4)) / 2);
-	panel.x0 = left;
-	panel.x1 = (short)(left + width);
-	panel.y0 = top;
-	panel.y1 = (short)(top + title_height + line * (body_rows + 3));
-	/* the screen dimmed behind, the panel and its border */
-	cinema_quad(window.x0, window.y0, window.x1, window.y1, cinema_alpha(0x90000000, fade));
-	draw_quad(&panel, cinema_alpha(CINEMA_PANEL, fade));
-	cinema_frame(&panel, cinema_alpha(CINEMA_PANEL_BORDER, fade));
-	/* the title band */
-	cinema_quad((short)(panel.x0 + 1), (short)(panel.y0 + 1), (short)(panel.x1 - 1), (short)(panel.y0 + title_height),
-		cinema_alpha(CINEMA_HEADER_BAND, fade));
-	bounds.x0 = (short)(panel.x0 + line);
-	bounds.x1 = (short)(panel.x1 - line);
-	bounds.y0 = (short)(panel.y0 + (title_height - cinema_font_height(large)) / 2);
-	bounds.y1 = (short)(bounds.y0 + cinema_font_height(large));
-	cinema_text(&bounds, large, 0, 1.0f, L"CARNAGE REPORT", 0.62f, 0.8f, 1.0f, fade);
-	if (my_squad != NONE && royale_squad_placement(my_squad))
+	/* (faded in after the orbit; at once when there was none) */
+	report.alpha = seconds >= 0.0f ? PIN(seconds / 0.5f, 0.0f, 1.0f) : 1.0f;
+	report.scale = MIN(width / 640.0f, height / 480.0f);
+	report.x = window.x0 + 0.5f * (width - 640.0f * report.scale);
+	report.y = window.y0 + 0.5f * (height - 480.0f * report.scale);
+	/* (a wide view: the panel's sides out toward its edges, as the game's) */
+	report.left = 24;
+	report.right = 616;
+	if (width / report.scale > 640.0f)
 	{
-		if (my_squad == royale_winning_squad())
-			usnprintf(text, NUMBEROF(text) - 1, L"VICTORY");
+		real extra = MIN(0.5f * (width / report.scale - 640.0f), 0.5f * (640.0f * 16.0f / 9.0f / (4.0f / 3.0f) - 640.0f));
+
+		report.left = (short)(24 - extra);
+		report.right = (short)(616 + extra);
+	}
+	/* the world dimmed, then the panel */
+	cinema_quad((short)(window.x0 - 4000), (short)(window.y0 - 4000), (short)(window.x1 + 4000),
+		(short)(window.y1 + 4000), cinema_alpha(0xC0000000, report.alpha));
+	if (panel)
+	{
+		rectangle2d bounds;
+
+		bounds.x0 = report_x(&report, report.left - 24);
+		bounds.x1 = report_x(&report, report.right + 24);
+		bounds.y0 = report_y(&report, 0.0f);
+		bounds.y1 = report_y(&report, 480.0f);
+		if (report.right - report.left > 592)
+		{
+			draw_bitmap_widened_in_rect(panel, &bounds, (short)(640.0f * report.scale), (short)(40.0f * report.scale),
+				NULL, cinema_alpha(0xFFFFFFFF, report.alpha), NULL, TRUE);
+		}
 		else
-			usnprintf(text, NUMBEROF(text) - 1, L"PLACED #%d OF %d", royale_squad_placement(my_squad), squad_count);
+		{
+			rectangle2d source;
+
+			source.y0 = 0;
+			source.x0 = 0;
+			source.y1 = 480;
+			source.x1 = 640;
+			draw_bitmap_in_rect(panel, &bounds, &source, NULL, cinema_alpha(0xFFFFFFFF, report.alpha), NULL, TRUE);
+		}
+	}
+	/* the game's line */
+	{
+		long match_seconds = royale_match_time() / TICKS_PER_SECOND;
+
+		usnprintf(text, NUMBEROF(text) - 1, L"ROYALE   \x00B7   %s   \x00B7   %ld:%02ld   \x00B7   %d SQUADS",
+			cinema_map_title(), match_seconds / 60, match_seconds % 60, squad_count);
+		text[NUMBEROF(text) - 1] = 0;
+		report_text(&report, report.left, 72, report.right, 88, text, small, 0, 10.0f, CARNAGE_INFO);
+	}
+	/* the banner: the winners, and this player's place */
+	if (winners != NONE && winners == my_squad)
+	{
+		report_box(&report, report.left, 92, report.right, 122, 0xF0332608, 0xFF000000 | CARNAGE_GOLD);
+		report_text(&report, report.left + 12, 92, report.right - 12, 122, L"VICTORY", small, 0, 15.0f, CARNAGE_GOLD);
 	}
 	else
-		usnprintf(text, NUMBEROF(text) - 1, L"ROYALE");
-	text[NUMBEROF(text) - 1] = 0;
-	cinema_text(&bounds, large, 1, 1.0f, text, 1.0f, 0.85f, 0.35f, fade);
-	/* the columns' headers */
-	place_column = (short)(panel.x0 + line);
-	squad_column = (short)(panel.x0 + line * 5);
-	kills_column = (short)(panel.x1 - line);
-	bounds.y0 = (short)(panel.y0 + title_height + line / 2);
-	bounds.y1 = (short)(bounds.y0 + line);
-	bounds.x0 = place_column;
-	bounds.x1 = kills_column;
-	cinema_text(&bounds, small, 0, 1.0f, L"PLACE", 0.45f, 0.62f, 0.85f, fade);
-	cinema_text(&bounds, small, 1, 1.0f, L"KILLS", 0.45f, 0.62f, 0.85f, fade);
-	bounds.x0 = squad_column;
-	cinema_text(&bounds, small, 0, 1.0f, L"SQUAD", 0.45f, 0.62f, 0.85f, fade);
-	cinema_quad(place_column, (short)(bounds.y1 + 1), kills_column, (short)(bounds.y1 + 2),
-		cinema_alpha(CINEMA_PANEL_BORDER, fade));
-	/* the squads by their place */
-	for (place = 1; place <= squad_count && row < body_rows; place++)
+	{
+		report_box(&report, report.left, 92, report.right, 122, 0xF00A2456, 0xFF5AA9FF);
+		if (winners != NONE)
+		{
+			cinema_squad_names(winners, name, NUMBEROF(name));
+			usnprintf(text, NUMBEROF(text) - 1, L"%s WIN", name);
+		}
+		else
+			usnprintf(text, NUMBEROF(text) - 1, L"NO SQUAD LEFT");
+		text[NUMBEROF(text) - 1] = 0;
+		report_text(&report, report.left + 12, 92, report.right - 12, 122, text, small, 0, 15.0f, CARNAGE_BLUE);
+	}
+	if (my_place)
+	{
+		wchar_t ordinal[16];
+
+		report_place(my_place, ordinal, NUMBEROF(ordinal));
+		usnprintf(text, NUMBEROF(text) - 1, L"%s OF %d", ordinal, squad_count);
+		text[NUMBEROF(text) - 1] = 0;
+		report_text(&report, report.left + 12, 92, report.right - 12, 122, text, large, 1, 20.0f, CARNAGE_TEXT_LIT);
+	}
+	/* the squads shown: the first by place, and this player's if below */
+	for (place = 1; place <= squad_count && shown < rows; place++)
 	{
 		short squad;
 
-		for (squad = 0; squad < squad_count && row < body_rows; squad++)
+		for (squad = 0; squad < squad_count && shown < rows; squad++)
 		{
-			boolean mine = squad == my_squad;
-			long a;
-			long b;
-			short y;
-			real red, green, blue;
-
-			if (royale_squad_placement(squad) != place)
-				continue;
-			/* (past the rows: only this player's squad, in the last) */
-			if (row >= rows && !mine)
-				continue;
-			y = (short)(panel.y0 + title_height + line * (row + 2) - line / 4);
-			if (mine)
-				cinema_quad((short)(panel.x0 + 2), y, (short)(panel.x1 - 2), (short)(y + line),
-					cinema_alpha(CINEMA_OWN_BAND, fade));
-			else if (row & 1)
-				cinema_quad((short)(panel.x0 + 2), y, (short)(panel.x1 - 2), (short)(y + line),
-					cinema_alpha(CINEMA_ROW_BAND, fade));
-			red = mine ? 1.0f : 0.85f;
-			green = mine ? 0.85f : 0.92f;
-			blue = mine ? 0.35f : 1.0f;
-			bounds.y0 = (short)(y + line / 8);
-			bounds.y1 = (short)(bounds.y0 + line);
-			bounds.x0 = place_column;
-			bounds.x1 = kills_column;
-			usnprintf(text, NUMBEROF(text) - 1, place == 1 ? L"1ST" : place == 2 ? L"2ND" : place == 3 ? L"3RD" :
-				L"%dTH", place);
-			text[NUMBEROF(text) - 1] = 0;
-			cinema_text(&bounds, small, 0, 1.0f, text, red, green, blue, fade);
-			a = royale_squad_member(squad, 0);
-			b = royale_squad_member(squad, 1);
-			usnprintf(text, NUMBEROF(text) - 1, L"%d", royale_player_kills(a) + (b != NONE ? royale_player_kills(b) : 0));
-			text[NUMBEROF(text) - 1] = 0;
-			cinema_text(&bounds, small, 1, 1.0f, text, red, green, blue, fade);
-			bounds.x0 = squad_column;
-			bounds.x1 = (short)(kills_column - line * 3);
-			cinema_squad_names(squad, text, NUMBEROF(text));
-			cinema_text(&bounds, small, 0, 1.0f, text, red, green, blue, fade);
-			row++;
+			if (royale_squad_placement(squad) == place)
+				squads_shown[shown++] = squad;
 		}
+	}
+	if (my_squad != NONE && my_place)
+	{
+		for (index = 0; index < shown && squads_shown[index] != my_squad; index++)
+			;
+		if (index == shown)
+		{
+			if (shown == CARNAGE_ROWS)
+				shown--;
+			squads_shown[shown++] = my_squad;
+		}
+	}
+	body_rows = shown;
+	/* the table */
+	row_height = MIN(30.0f, (400.0f - 128.0f - 8.0f - 18.0f) / MAX(body_rows, 1));
+	text_height = MIN(11.0f, 0.7f * row_height);
+	report_box(&report, report.left, 128, report.right,
+		MIN(400.0f, 128.0f + 8.0f + 18.0f + body_rows * row_height), CARNAGE_TABLE_FILL, CARNAGE_TABLE_EDGE);
+	{
+		real inner = (real)(report.right - report.left - 20);
+		real x = (real)report.left + 10;
+
+		column_place = x;
+		column_a = x + 42.0f;
+		column_total = x + inner;
+		column_b_kills = column_total - 90.0f;
+		column_b = column_a + 0.5f * (column_b_kills - 54.0f - column_a) + 27.0f;
+		column_a_kills = column_b - 20.0f;
+	}
+	top = 132.0f;
+	report_text(&report, column_place, top, column_a, top + 18, L"#", small, 0, 8.0f, CARNAGE_HEADING);
+	report_text(&report, column_a, top, column_a_kills, top + 18, L"PLAYER", small, 0, 8.0f, CARNAGE_HEADING);
+	report_text(&report, column_a, top, column_a_kills, top + 18, L"KILLS", small, 1, 8.0f, CARNAGE_HEADING);
+	report_text(&report, column_b, top, column_b_kills, top + 18, L"PLAYER", small, 0, 8.0f, CARNAGE_HEADING);
+	report_text(&report, column_b, top, column_b_kills, top + 18, L"KILLS", small, 1, 8.0f, CARNAGE_HEADING);
+	report_text(&report, column_b_kills, top, column_total, top + 18, L"SQUAD KILLS", small, 1, 8.0f, CARNAGE_HEADING);
+	top += 18.0f;
+	report_quad(&report, report.left + 10, top - 1, report.right - 10, top, CARNAGE_RULE);
+	for (index = 0; index < body_rows; index++)
+	{
+		short squad = squads_shown[index];
+		boolean mine = squad == my_squad;
+		unsigned long rgb = mine ? CARNAGE_TEXT_LIT : CARNAGE_TEXT;
+		long a = royale_squad_member(squad, 0);
+		long b = royale_squad_member(squad, 1);
+		short kills_a = royale_player_kills(a);
+		short kills_b = b != NONE ? royale_player_kills(b) : 0;
+
+		if (mine)
+			report_box(&report, column_place - 6, top + 1, column_total + 6, top + row_height - 1, CARNAGE_ROW_LIT,
+				squad == winners ? 0xFF000000 | CARNAGE_GOLD : CARNAGE_TABLE_EDGE);
+		report_place(royale_squad_placement(squad), text, NUMBEROF(text));
+		report_text(&report, column_place, top, column_a, top + row_height, text, small, 0, text_height,
+			squad == winners ? CARNAGE_GOLD : mine ? CARNAGE_TEXT_LIT : CARNAGE_INFO);
+		cinema_name(a, name, 16);
+		report_text(&report, column_a, top, column_a_kills, top + row_height, name, small, 0, text_height, rgb);
+		usnprintf(text, NUMBEROF(text) - 1, L"%d", kills_a);
+		text[NUMBEROF(text) - 1] = 0;
+		report_text(&report, column_a, top, column_a_kills, top + row_height, text, small, 1, text_height, rgb);
+		if (b != NONE)
+		{
+			cinema_name(b, name, 16);
+			report_text(&report, column_b, top, column_b_kills, top + row_height, name, small, 0, text_height, rgb);
+			usnprintf(text, NUMBEROF(text) - 1, L"%d", kills_b);
+			text[NUMBEROF(text) - 1] = 0;
+			report_text(&report, column_b, top, column_b_kills, top + row_height, text, small, 1, text_height, rgb);
+		}
+		usnprintf(text, NUMBEROF(text) - 1, L"%d", kills_a + kills_b);
+		text[NUMBEROF(text) - 1] = 0;
+		report_text(&report, column_b_kills, top, column_total, top + row_height, text, small, 1, text_height,
+			CARNAGE_TEXT_LIT);
+		top += row_height;
+		if (index + 1 < body_rows)
+			report_quad(&report, report.left + 10, top - 1, report.right - 10, top, CARNAGE_ROW_RULE);
 	}
 }
 
