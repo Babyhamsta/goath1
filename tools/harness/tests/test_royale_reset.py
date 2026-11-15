@@ -12,13 +12,10 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from harness import function, mutated, read  # noqa: E402
 
-LANE_FILES = {"map": "royale_map.c", "loot": "royale_loot.c", "insertion": "royale_insertion.c",
-              "beam": "royale_beam.c", "gulag": "royale_gulag.c", "bots": "bots_royale.c"}
-
-
 def sources():
-    files = {name: read(f"port/linux/game/{name}") for name in
-             ["royale.c", "royale_lanes_stub.c", *LANE_FILES.values()]}
+    game = Path(__file__).resolve().parents[3] / "port/linux/game"
+    names = {path.name for path in game.glob("royale*.c")} | {"bots_royale.c"}
+    files = {name: read(f"port/linux/game/{name}") for name in sorted(names)}
     files["game_engine.c"] = read("source/game/game_engine.c")
     return files
 
@@ -32,11 +29,11 @@ def problems(files):
     for lane in started:
         if f"royale_{lane}_reset();" not in reset:
             found.append(f"royale_reset does not reset the {lane} lane")
-        if f"void royale_{lane}_reset(void)" not in files["royale_lanes_stub.c"]:
-            found.append(f"no stub of royale_{lane}_reset")
-        if lane in LANE_FILES and not re.search(rf"void royale_{lane}_reset\(\s*void\)\s*\{{",
-                                                files[LANE_FILES[lane]]):
-            found.append(f"{LANE_FILES[lane]} has no royale_{lane}_reset")
+        # (a lane with a start of its own, so a state of its own: its own reset)
+        own = [text for name, text in files.items() if name != "royale_lanes_stub.c"]
+        if any(re.search(rf"void royale_{lane}_start\(\s*struct royale_map_config", text) for text in own) and \
+                not any(re.search(rf"void royale_{lane}_reset\(\s*void\)\s*\{{", text) for text in own):
+            found.append(f"the {lane} lane has no reset of its own")
     engine = files["game_engine.c"]
     for name in ("game_engine_initialize_for_new_map", "game_engine_dispose_from_old_map"):
         if "royale_reset();" not in function(engine, name):
@@ -65,6 +62,7 @@ NEGATIVE_CONTROLS = {
     "map-mode-any-game": ("royale_map.c", "_scenario_type_solo && royale_active();",
                           "_scenario_type_solo && game_engine_running();"),
     "contrail-kept": ("royale_beam.c", "\troyale_beam.contrail = NONE;\n", ""),
+    "loot-reset-missing": ("royale_loot.c", "void royale_loot_reset(", "void royale_loot_forget("),
 }
 
 
