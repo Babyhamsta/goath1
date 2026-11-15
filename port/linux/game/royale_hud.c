@@ -46,13 +46,10 @@ boolean hud_render_nav_point_colored(short local_player_index, real_point3d cons
 	short waypoint_type, real_rgb_color const *color, real alpha, real_point2d *drawn_position, real *half_height,
 	short *drawn_type);
 void draw_quad(rectangle2d *rectangle, pixel32 color);
-void platform_log(char const *format, ...); /* TEMP-P3 */
 
 /* ---- the HUD's own types (hud_draw.c's; each HUD file keeps a copy) */
 
 #define ROYALE_HUD_NUMBER_TAG 'hud#'
-/* interface.c's blend for its bitmaps (interface_draw_bitmap's) */
-#define ROYALE_HUD_BLEND_ALPHA_MULTIPLY_ADD 7
 
 struct royale_hud_number_element
 {
@@ -305,6 +302,7 @@ static void royale_hud_number_at(
 	short top,
 	short value,
 	char digits,
+	byte flags,
 	struct hud_color_definition const *colors,
 	boolean flash,
 	long since,
@@ -314,7 +312,7 @@ static void royale_hud_number_at(
 	short window_top = (short)(render.camera.window_bounds.y0 - render.camera.viewport_bounds.y0);
 
 	royale_hud_number(local_player_index, _hud_anchor_top_right, (short)(window_right - right),
-		(short)(top - window_top), value, digits, ROYALE_HUD_NUMBER_LEADING_ZEROS, colors, flash, since, scale);
+		(short)(top - window_top), value, digits, flags, colors, flash, since, scale);
 }
 
 /* where an anchor's offset lands in the view (as hud_draw_numbers places it) */
@@ -480,20 +478,19 @@ static void royale_hud_draw_mate_triangle(
 		(MIN(render.frustum.z_far, rasterizer_globals.far_clip_distance) - render.frustum.z_near);
 	fade = PIN(depth_factor, 0.075f, 1.0f);
 	clip.x0 = 0.0f;
-	clip.x1 = (real)bitmap->width;
-	clip.y0 = (1.0f - fade) * 0.5f * bitmap->height;
-	clip.y1 = (real)bitmap->height;
+	clip.x1 = 1.0f;
+	clip.y0 = (1.0f - fade) * 0.5f;
+	clip.y1 = 1.0f;
+	/* (downed: flashing, on and off, as the timer's time-up) */
+	color = 0xFFFFFFFF;
 	if (downed)
 	{
-		/* (the timer's time-up flash: red, on and off) */
 		real_argb_color red = royale_hud_flash_color(royale_hud_timer_colors(TRUE), TRUE, 0);
 
 		color = real_argb_color_to_pixel32(&red);
 	}
-	else
-		color = 0xFFFFFFFF;
-	interface_draw_bitmap_modulated_p32(bitmap, &position, &clip, mcc_hud_bitmap_scale(bitmap_group), 0.0f, color,
-		ROYALE_HUD_BLEND_ALPHA_MULTIPLY_ADD);
+	if (!downed || (game_time_get() / (TICKS_PER_SECOND / 4)) % 2 == 0)
+		interface_draw_bitmap(bitmap, &position, &clip, mcc_hud_bitmap_scale(bitmap_group), 0.0f, 1.0f);
 	/* (their name over it, as hud.c draws an ally's: the HUD's text colour,
 	fading to 0.4 from 15 to 75 world units; DOWNED in the alarm's red) */
 	{
@@ -539,17 +536,6 @@ static void royale_hud_draw_mate(
 	real_point3d camera;
 	real distance;
 
-	{ /* TEMP-P3 */
-		static long logged;
-		if (game_time_get() - logged > 120)
-		{
-			struct player_datum *mp = mate != NONE ? player_try_and_get(mate) : NULL;
-			logged = game_time_get();
-			platform_log("p3hud: me %lx mate %lx unit %lx/%lx state %d nav %d", (unsigned long)player_index,
-				(unsigned long)mate, mp ? (unsigned long)mp->unit_index : 0xffffffffUL, (unsigned long)unit_index,
-				(int)royale_player_state(mate), (int)royale_hud_nav_index());
-		}
-	}
 	if (unit_index == NONE)
 		return;
 	downed = royale_player_state(mate) == ROYALE_PLAYER_DOWNED;
@@ -691,7 +677,7 @@ static void royale_hud_draw_state(
 			royale_hud_digit_size(&digit_width, &digit_height);
 			royale_hud_text(&bounds, 2, L"DOWNED  -  HOLD ON FOR A REVIVE", &red);
 			royale_hud_number_at(local_player_index, (short)(middle_x + digit_width * ROYALE_HUD_TIMER_SCALE),
-				(short)(top + line + 4), seconds, 2,
+				(short)(top + line + 4), seconds, 2, ROYALE_HUD_NUMBER_LEADING_ZEROS,
 				royale_hud_timer_colors(seconds <= ROYALE_HUD_BEAM_FLASH_SECONDS), seconds <= ROYALE_HUD_BEAM_FLASH_SECONDS,
 				0, ROYALE_HUD_TIMER_SCALE);
 			bar.y0 = (short)(bar.y0 + digit_height * ROYALE_HUD_TIMER_SCALE + 6);
@@ -718,9 +704,8 @@ static void royale_hud_draw_state(
 		break;
 	case ROYALE_PLAYER_SPECTATING:
 		royale_hud_player_name(mate, name, NUMBEROF(name));
-		usnprintf(text, NUMBEROF(text) - 1, L"ELIMINATED  -  WATCHING %s", name);
-		text[NUMBEROF(text) - 1] = 0;
-		royale_hud_text(&bounds, 2, text, &color);
+		/* (whom they watch is the game's line: dead_spectate.c) */
+		royale_hud_text(&bounds, 2, L"ELIMINATED", &color);
 		break;
 	case ROYALE_PLAYER_ELIMINATED:
 	{
@@ -810,10 +795,10 @@ static void royale_hud_draw_beam(
 		label = royale_hud_text_color(0.9f);
 		royale_hud_text(&bounds, 2, L"BEAM MOVES IN", &label);
 		/* (M:SS centered: the minute left of the colon, the seconds right) */
-		royale_hud_number_at(local_player_index, (short)(center_x - digit / 2), top_y, (short)MIN(left / 60, 9), 1,
-			colors, flash, 0, ROYALE_HUD_TIMER_SCALE);
+		royale_hud_number_at(local_player_index, (short)(center_x + digit / 2), top_y, (short)MIN(left / 60, 9), 1,
+			ROYALE_HUD_NUMBER_LEADING_ZEROS, colors, flash, 0, ROYALE_HUD_TIMER_SCALE);
 		royale_hud_number_at(local_player_index, (short)(center_x + digit / 2 + 2 * digit), top_y, (short)(left % 60),
-			2, colors, flash, 0, ROYALE_HUD_TIMER_SCALE);
+			2, ROYALE_HUD_NUMBER_LEADING_ZEROS, colors, flash, 0, ROYALE_HUD_TIMER_SCALE);
 		colon_color = royale_hud_flash_color(colors, flash, 0);
 		colon.x0 = (short)(center_x - 20);
 		colon.x1 = (short)(center_x + 20);
@@ -846,6 +831,18 @@ static void royale_hud_draw_beam(
 		warning_bounds.y1 = (short)(warning_bounds.y0 + line);
 		royale_hud_text(&warning_bounds, 2, inside ? L"WARNING: YOU ARE BEING GLASSED" :
 			L"WARNING: GLASSING BEAM  -  MOVE", &alarm);
+		/* (the way to safe ground in meters, in the digits with their m, as
+		a waypoint's: the arrow off the screen shows none) */
+		{
+			short meters = (short)PIN(away * 3.048f, 0.0f, 999.0f);
+			short digit = (short)(digit_width * ROYALE_HUD_COUNT_SCALE);
+			short count = (short)(meters >= 100 ? 3 : meters >= 10 ? 2 : 1);
+
+			royale_hud_number_at(local_player_index,
+				(short)((window.x0 + window.x1) / 2 + (count + 1) * digit / 2),
+				(short)(warning_bounds.y1 + 2), meters, (char)count, ROYALE_HUD_NUMBER_TRAILING_M,
+				royale_hud_timer_colors(TRUE), TRUE, since, ROYALE_HUD_COUNT_SCALE);
+		}
 		if (royale_hud_nav_index() != NONE && unit_index != NONE)
 		{
 			safe.x = origin.x + beam.safe.i * away;

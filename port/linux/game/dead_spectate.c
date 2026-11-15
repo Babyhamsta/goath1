@@ -184,7 +184,10 @@ static boolean spectate_teammate(
 
 		if (royale_squadmate_of(self) == other)
 			return TRUE;
-		return royale_player_state(self) == ROYALE_PLAYER_ELIMINATED &&
+		/* (out: eliminated, or no longer in the match's rules at all, as a
+		player who left the fight or joined after the drop) */
+		return (royale_player_state(self) == ROYALE_PLAYER_ELIMINATED ||
+			royale_player_state(self) == ROYALE_PLAYER_NONE) &&
 			(state == ROYALE_PLAYER_ALIVE || state == ROYALE_PLAYER_DOWNED || state == ROYALE_PLAYER_FALLING);
 	}
 	return !game_engine_running() || player->team_index == player_get(self)->team_index;

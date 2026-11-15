@@ -42,6 +42,11 @@ NEGATIVE_CONTROLS = {
                           "network"),
     # a squad past the count taken
     "squad-unchecked": (("(entry->squad != SLOT_NONE && entry->squad >= rules->squad_count) ||", ""), "network"),
+    # the Reclaimer's result not sent: every client shows none
+    "reclaimer-not-sent": (("\t\t*cursor++ = entry->reclaimer;\n", "\t\t*cursor++ = 0;\n"), "network"),
+    # a win not recorded
+    "reclaimer-win-lost": (("ROYALE_RULES_RECLAIMER_LOST : ROYALE_RULES_RECLAIMER_WON;",
+                            "ROYALE_RULES_RECLAIMER_LOST : ROYALE_RULES_RECLAIMER_NONE;"), "gulag"),
     # every state snaps a client's clock (it steps)
     "take-always-snaps": (("return snap || local < host - slack || local > host + slack ? host : local;",
                            "return host;"), "take"),

@@ -39,6 +39,14 @@ enum
 	ROYALE_RULES_ELIMINATED
 };
 
+/* a slot's gulag (Reclaimer) result */
+enum
+{
+	ROYALE_RULES_RECLAIMER_NONE = 0, /* never there, or still there */
+	ROYALE_RULES_RECLAIMER_WON,
+	ROYALE_RULES_RECLAIMER_LOST
+};
+
 /* what the rules ask of royale.c, a slot's events from royale_rules_tick */
 enum
 {
@@ -71,7 +79,9 @@ struct royale_rules_slot
 	short downed_ticks; /* left to bleed out */
 	short revive_ticks; /* of the revive in progress */
 	byte reviver; /* 0xFF: none */
-	byte reserved[3];
+	/* how their time in the gulag (the Reclaimer) ended: ROYALE_RULES_RECLAIMER_* */
+	byte reclaimer;
+	byte reserved[2];
 };
 
 struct royale_rules

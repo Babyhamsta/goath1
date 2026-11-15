@@ -190,13 +190,18 @@ static void case_gulag(void)
 	royale_rules_died(&rules, &settings, a, enemy, gulag);
 	CHECK(gulag_calls == 2, "the gulag was asked %d times", gulag_calls);
 	CHECK(rules.slots[a].state == ROYALE_RULES_SPECTATING, "state %d after losing the gulag", rules.slots[a].state);
+	CHECK(rules.slots[a].reclaimer == ROYALE_RULES_RECLAIMER_LOST, "the Reclaimer lost reads %d",
+		rules.slots[a].reclaimer);
 	/* (a gulag winner back in) */
 	royale_rules_reset(&rules);
 	start(4, 9);
 	gulag_takes = 1;
 	royale_rules_died(&rules, &settings, a, enemy_of(a), gulag);
+	CHECK(rules.slots[a].reclaimer == ROYALE_RULES_RECLAIMER_NONE, "the Reclaimer decided while in it");
 	royale_rules_set_state(&rules, &settings, a, ROYALE_RULES_ALIVE);
 	CHECK(rules.slots[a].state == ROYALE_RULES_ALIVE, "state %d after winning the gulag", rules.slots[a].state);
+	CHECK(rules.slots[a].reclaimer == ROYALE_RULES_RECLAIMER_WON, "the Reclaimer won reads %d",
+		rules.slots[a].reclaimer);
 }
 
 static void case_results(void)
@@ -351,8 +356,9 @@ static void case_network(void)
 
 	start(6, 3);
 	CHECK(royale_rules_lethal(&rules, &settings, 0, enemy_of(0)), "not downed");
+	rules.slots[5].reclaimer = ROYALE_RULES_RECLAIMER_WON;
 	size = royale_rules_write_discrete(&rules, first, sizeof(first));
-	CHECK(size > 0 && size <= 13 + 6 * 6 + rules.squad_count, "the discrete part takes %ld bytes", size);
+	CHECK(size > 0 && size <= 13 + 7 * 6 + rules.squad_count, "the discrete part takes %ld bytes", size);
 	for (index = 0; index < 5; index++)
 		tick();
 	again = royale_rules_write_discrete(&rules, second, sizeof(second));
@@ -372,7 +378,8 @@ static void case_network(void)
 		struct royale_rules_slot const *b = &rules.slots[slot];
 
 		CHECK(a->state == b->state && a->squad == b->squad && a->kills == b->kills && a->downed_by == b->downed_by &&
-			a->reviver == b->reviver && a->downed_ticks == b->downed_ticks && a->revive_ticks == b->revive_ticks,
+			a->reviver == b->reviver && a->downed_ticks == b->downed_ticks && a->revive_ticks == b->revive_ticks &&
+			a->reclaimer == b->reclaimer,
 			"slot %ld read otherwise", slot);
 	}
 	for (squad = 0; squad < rules.squad_count; squad++)

@@ -79,7 +79,8 @@ void royale_rules_reset(
 		entry->downed_ticks = 0;
 		entry->revive_ticks = 0;
 		entry->reviver = SLOT_NONE;
-		entry->reserved[0] = entry->reserved[1] = entry->reserved[2] = 0;
+		entry->reclaimer = ROYALE_RULES_RECLAIMER_NONE;
+		entry->reserved[0] = entry->reserved[1] = 0;
 	}
 	for (squad = 0; squad < ROYALE_RULES_MAXIMUM_SQUADS; squad++)
 		rules->placement[squad] = 0;
@@ -246,6 +247,8 @@ void royale_rules_died(
 	/* (the gulag hears of every death, one in the gulag's too: its loser is
 	out) */
 	in_gulag = entry->state == ROYALE_RULES_GULAG;
+	if (in_gulag)
+		entry->reclaimer = ROYALE_RULES_RECLAIMER_LOST;
 	if (gulag && gulag(slot, killer_slot) && !in_gulag)
 		entry->state = ROYALE_RULES_GULAG;
 	else
@@ -267,7 +270,9 @@ void royale_rules_leave(
 		rules->slots[slot].state = ROYALE_RULES_NONE;
 		return;
 	}
-	/* (no gulag for one who left) */
+	/* (no gulag for one who left; one who left it lost it) */
+	if (rules->slots[slot].state == ROYALE_RULES_GULAG)
+		rules->slots[slot].reclaimer = ROYALE_RULES_RECLAIMER_LOST;
 	royale_rules_eliminate(rules, slot);
 	rules->slots[slot].state = ROYALE_RULES_ELIMINATED;
 	royale_rules_count_squads(rules, settings);
@@ -324,6 +329,12 @@ void royale_rules_set_state(
 		(royale_rules_out(rules->slots[slot].state) || rules->slots[slot].state == ROYALE_RULES_DOWNED))
 	{
 		return;
+	}
+	/* (out of the gulag: back in the fight won it, out of the game lost it) */
+	if (rules->slots[slot].state == ROYALE_RULES_GULAG && state != ROYALE_RULES_GULAG)
+	{
+		rules->slots[slot].reclaimer = state == ROYALE_RULES_SPECTATING || state == ROYALE_RULES_ELIMINATED ?
+			ROYALE_RULES_RECLAIMER_LOST : ROYALE_RULES_RECLAIMER_WON;
 	}
 	if (state == ROYALE_RULES_SPECTATING || state == ROYALE_RULES_ELIMINATED)
 	{
@@ -496,8 +507,9 @@ void royale_rules_tick(
 
 /* ---- the network state */
 
-/* a discrete part's slot: slot, state, squad, kills, downed_by, reviver */
-#define ROYALE_RULES_SLOT_BYTES 6
+/* a discrete part's slot: slot, state, squad, kills, downed_by, reviver,
+reclaimer */
+#define ROYALE_RULES_SLOT_BYTES 7
 /* the discrete part's head: phase, squad_count, squads_alive, winner,
 phase_start, play_start, the slots' count */
 #define ROYALE_RULES_HEAD_BYTES 13
@@ -611,6 +623,7 @@ long royale_rules_write_discrete(
 		*cursor++ = entry->kills;
 		*cursor++ = entry->downed_by;
 		*cursor++ = entry->reviver;
+		*cursor++ = entry->reclaimer;
 	}
 	for (squad = 0; squad < rules->squad_count; squad++)
 		*cursor++ = rules->placement[squad];
@@ -692,7 +705,8 @@ long royale_rules_read_discrete(
 		entry->kills = *cursor++;
 		entry->downed_by = *cursor++;
 		entry->reviver = *cursor++;
-		if (entry->state > ROYALE_RULES_ELIMINATED || (entry->squad != SLOT_NONE && entry->squad >= rules->squad_count) ||
+		entry->reclaimer = *cursor++;
+		if (entry->state > ROYALE_RULES_ELIMINATED || entry->reclaimer > ROYALE_RULES_RECLAIMER_LOST || (entry->squad != SLOT_NONE && entry->squad >= rules->squad_count) ||
 			!royale_rules_valid_slot_byte(entry->downed_by) || !royale_rules_valid_slot_byte(entry->reviver))
 		{
 			return NONE;

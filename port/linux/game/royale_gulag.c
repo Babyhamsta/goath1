@@ -889,7 +889,7 @@ void royale_gulag_draw(
 		long seconds = (royale_seconds_to_ticks(ROYALE_GULAG_FIGHT_SECONDS) - royale_gulag.queue.fight_ticks) /
 			MAX(royale_seconds_to_ticks(1.0f), 1);
 
-		usnprintf(text, NUMBEROF(text) - 1, L"GULAG: WIN TO REDEPLOY   %ld", MAX(seconds, 0L));
+		usnprintf(text, NUMBEROF(text) - 1, L"RECLAIMER: WIN TO REDEPLOY   %ld", MAX(seconds, 0L));
 		text[NUMBEROF(text) - 1] = 0;
 		royale_gulag_text(0, text, &gold);
 		royale_gulag_name(royale_gulag.queue.fighter[1 - side], name, NUMBEROF(name));
@@ -900,9 +900,9 @@ void royale_gulag_draw(
 	else if (place != NONE)
 	{
 		if (place == 0 && royale_gulag.queue.fighter[0] == NONE)
-			usnprintf(text, NUMBEROF(text) - 1, L"GULAG: WAITING FOR AN OPPONENT");
+			usnprintf(text, NUMBEROF(text) - 1, L"RECLAIMER: WAITING FOR AN OPPONENT");
 		else
-			usnprintf(text, NUMBEROF(text) - 1, L"GULAG: YOU FIGHT %s", place < 2 ? L"NEXT" : L"SOON");
+			usnprintf(text, NUMBEROF(text) - 1, L"RECLAIMER: YOU FIGHT %s", place < 2 ? L"NEXT" : L"SOON");
 		text[NUMBEROF(text) - 1] = 0;
 		royale_gulag_text(0, text, &gold);
 		if (royale_gulag.queue.fighter[0] != NONE)

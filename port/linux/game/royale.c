@@ -313,6 +313,18 @@ long royale_spectate_target(
 	return royale_living_unit(mate) != NONE ? mate : NONE;
 }
 
+enum royale_reclaimer_result royale_player_reclaimer(
+	long player_index)
+{
+	struct royale_rules_slot const *entry = royale_entry(player_index);
+
+	return royale_active() && entry ? (enum royale_reclaimer_result)entry->reclaimer : ROYALE_RECLAIMER_NONE;
+}
+
+/* (the rules' results are royale.h's) */
+typedef char royale_reclaimer_results_alike[ROYALE_RULES_RECLAIMER_WON == ROYALE_RECLAIMER_WON &&
+	ROYALE_RULES_RECLAIMER_LOST == ROYALE_RECLAIMER_LOST ? 1 : -1];
+
 short royale_squad_placement(
 	short squad)
 {
@@ -1156,6 +1168,13 @@ static void royale_draw_banner(
 		if (state != ROYALE_PLAYER_IN_PELICAN && state != ROYALE_PLAYER_FALLING)
 			return;
 		usnprintf(text, NUMBEROF(text) - 1, L"DROP  -  %d SQUADS", royale.rules.squads_alive);
+		break;
+	case ROYALE_RULES_PHASE_PLAY:
+	case ROYALE_RULES_PHASE_ENDGAME:
+		/* (a Reclaimer's winner falling back to the island) */
+		if (state != ROYALE_PLAYER_FALLING)
+			return;
+		usnprintf(text, NUMBEROF(text) - 1, L"RECLAIMED  -  REDEPLOYING");
 		break;
 	default:
 		return;
