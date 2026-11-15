@@ -88,7 +88,7 @@ this long after the first ends */
 #define ROYALE_AUDIO_WIPE_ANNOUNCE_SQUADS 8
 /* the announcer, the radio and the music's loudness */
 #define ROYALE_AUDIO_VOICE_SCALE 1.0f
-#define ROYALE_AUDIO_MUSIC_GAIN 0.8f
+#define ROYALE_AUDIO_MUSIC_GAIN 1.0f
 
 /* ---------- the module's state */
 

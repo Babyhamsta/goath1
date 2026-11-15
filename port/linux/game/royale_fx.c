@@ -88,8 +88,10 @@ _HEIGHT: the loot's crate falls so) */
 /* the rumble: the beam's hum (royale_beam.c starts it), its sound's scale
 made its loudness, from this far ahead of the front (world units) up to
 full at it, a little deeper than its own pitch */
-#define ROYALE_FX_RUMBLE_DISTANCE 220.0f
-#define ROYALE_FX_RUMBLE_FLOOR 0.03f
+#define ROYALE_FX_RUMBLE_DISTANCE 200.0f
+#define ROYALE_FX_RUMBLE_FLOOR 0.02f
+/* its loudness at the front (its sound is loud: a dropship's engine) */
+#define ROYALE_FX_RUMBLE_GAIN 0.7f
 #define ROYALE_FX_RUMBLE_PITCH 0.85f
 
 /* ---------- the tags */
@@ -462,7 +464,7 @@ static void royale_fx_rumble_take(
 	royale_fx.rumble_modifiers[2] = definition->zero_pitch_modifier;
 	royale_fx.rumble_modifiers[3] = definition->one_pitch_modifier;
 	definition->zero_gain_modifier = 0.0f;
-	definition->one_gain_modifier = 1.0f;
+	definition->one_gain_modifier = ROYALE_FX_RUMBLE_GAIN;
 	definition->zero_pitch_modifier = ROYALE_FX_RUMBLE_PITCH;
 	definition->one_pitch_modifier = ROYALE_FX_RUMBLE_PITCH;
 }
@@ -510,7 +512,7 @@ static void royale_fx_rumble_tick(
 	}
 	scale = nearest <= 0.0f ? 1.0f : 1.0f - nearest / ROYALE_FX_RUMBLE_DISTANCE;
 	scale = PIN(scale, 0.0f, 1.0f);
-	scale = ROYALE_FX_RUMBLE_FLOOR + (1.0f - ROYALE_FX_RUMBLE_FLOOR) * scale * scale;
+	scale = ROYALE_FX_RUMBLE_FLOOR + (1.0f - ROYALE_FX_RUMBLE_FLOOR) * scale * scale * scale;
 	scripted_looping_sound_set_scale(royale_fx.rumble_loop, scale);
 }
 
