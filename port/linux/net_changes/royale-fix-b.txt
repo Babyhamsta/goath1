@@ -1,3 +1,0 @@
-Royale's game engine state compacted and split: the rules' discrete part (only slots in the game) and the
-gulag's line and fight, then the clock (match time, downed counts) left out of the host's change check and
-sent with each change and every 3 s; clients advance the clock themselves (royale.c, royale_rules.c)
