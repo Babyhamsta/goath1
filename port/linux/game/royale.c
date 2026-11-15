@@ -841,6 +841,18 @@ static wchar_t *royale_format_score_name(
 	return text;
 }
 
+/* (the game's "won" and "lost": the winning squad's players won, everyone
+else lost; NONE before there is a winner) */
+static long royale_did_player_win(
+	long player_index)
+{
+	short winners = royale_winning_squad();
+
+	if (winners == NONE)
+		return NONE;
+	return royale_squad_of(player_index) == winners ? TRUE : FALSE;
+}
+
 long royale_player_place(
 	long player_index)
 {
@@ -888,6 +900,7 @@ struct game_engine *royale_engine_get(
 	royale.engine.get_player_score = royale_get_player_score;
 	royale.engine.format_player_score = royale_format_player_score;
 	royale.engine.format_score_name = royale_format_score_name;
+	royale.engine.did_player_win = royale_did_player_win;
 	return &royale.engine;
 }
 
