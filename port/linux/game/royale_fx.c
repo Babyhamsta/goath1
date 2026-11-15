@@ -58,9 +58,9 @@ void draw_quad(rectangle2d const *bounds, pixel32 color);
 
 /* the ship: its length a share of the front's, its height over the play
 area's top, how far over the glassed side of the front it hangs */
-#define ROYALE_FX_SHIP_LENGTH_SHARE 0.7f
-#define ROYALE_FX_SHIP_HEIGHT 150.0f
-#define ROYALE_FX_SHIP_BEHIND 25.0f
+#define ROYALE_FX_SHIP_LENGTH_SHARE 0.9f
+#define ROYALE_FX_SHIP_HEIGHT (-30.0f)
+#define ROYALE_FX_SHIP_BEHIND 180.0f
 
 /* the orange sky and the shake: from this far ahead of the front (world
 units), full at it */
@@ -82,7 +82,16 @@ _HEIGHT: the loot's crate falls so) */
 /* the boom's shake reaches this far */
 #define ROYALE_FX_POD_BOOM_DISTANCE 60.0f
 
+/* the rumble: the beam's hum (royale_beam.c starts it), its sound's scale
+made its loudness, from this far ahead of the front (world units) up to
+full at it, a little deeper than its own pitch */
+#define ROYALE_FX_RUMBLE_DISTANCE 220.0f
+#define ROYALE_FX_RUMBLE_FLOOR 0.03f
+#define ROYALE_FX_RUMBLE_PITCH 0.85f
+
 /* ---------- the tags */
+
+static char const *const royale_fx_rumble_name = "sound\\sfx\\vehicles\\covydrop";
 
 static char const *const royale_fx_ship_name = "vehicles\\c_dropship\\c_dropship";
 static char const *const royale_fx_trail_names[] =
@@ -143,6 +152,12 @@ static struct
 	long boom;
 	long boom_sound;
 	long shake;
+	/* the rumble's looping sound and its sound (whose scale modifiers are
+	changed for the game: the map's own kept to give back) */
+	long rumble_loop;
+	long rumble_sound;
+	struct sound_definition *rumble_definition;
+	real rumble_modifiers[6];
 	/* each pod: falling, its height above the ground (for the drawing),
 	and its boom played */
 	struct
@@ -408,6 +423,75 @@ static void royale_fx_pods_tick(
 	}
 }
 
+/* the rumble's sound: its scale made its loudness (none to full) and its
+pitch a little deeper, for the game */
+static void royale_fx_rumble_take(
+	void)
+{
+	struct sound_definition *definition;
+
+	royale_fx.rumble_definition = NULL;
+	if (royale_fx.rumble_loop == NONE || royale_fx.rumble_sound == NONE)
+		return;
+	definition = sound_definition_get(royale_fx.rumble_sound);
+	royale_fx.rumble_definition = definition;
+	royale_fx.rumble_modifiers[0] = definition->zero_gain_modifier;
+	royale_fx.rumble_modifiers[1] = definition->one_gain_modifier;
+	royale_fx.rumble_modifiers[2] = definition->zero_pitch_modifier;
+	royale_fx.rumble_modifiers[3] = definition->one_pitch_modifier;
+	definition->zero_gain_modifier = 0.0f;
+	definition->one_gain_modifier = 1.0f;
+	definition->zero_pitch_modifier = ROYALE_FX_RUMBLE_PITCH;
+	definition->one_pitch_modifier = ROYALE_FX_RUMBLE_PITCH;
+}
+
+static void royale_fx_rumble_give_back(
+	void)
+{
+	struct sound_definition *definition = royale_fx.rumble_definition;
+
+	royale_fx.rumble_definition = NULL;
+	/* (only into the same map's tags still loaded) */
+	if (!definition || tag_loaded(SOUND_DEFINITION_TAG, royale_fx_rumble_name) != royale_fx.rumble_sound ||
+		sound_definition_get(royale_fx.rumble_sound) != definition)
+	{
+		return;
+	}
+	definition->zero_gain_modifier = royale_fx.rumble_modifiers[0];
+	definition->one_gain_modifier = royale_fx.rumble_modifiers[1];
+	definition->zero_pitch_modifier = royale_fx.rumble_modifiers[2];
+	definition->one_pitch_modifier = royale_fx.rumble_modifiers[3];
+}
+
+/* the rumble's loudness: by the local player nearest the front */
+static void royale_fx_rumble_tick(
+	void)
+{
+	real nearest = 1.0e9f;
+	real scale;
+	short local_player_index;
+
+	if (!royale_fx.rumble_definition)
+		return;
+	for (local_player_index = local_player_get_next(NONE); local_player_index != NONE;
+		local_player_index = local_player_get_next(local_player_index))
+	{
+		real_point3d position;
+
+		if (royale_fx_local_unit_position(local_player_index, &position))
+			nearest = MIN(nearest, royale_fx_distance_ahead(&position));
+	}
+	if (nearest >= 1.0e8f)
+	{
+		/* (no one standing: from the camera, if the beam runs) */
+		nearest = royale_beam_front() > 0.0f ? royale_fx_distance_ahead(&render.camera.position) : 1.0e9f;
+	}
+	scale = nearest <= 0.0f ? 1.0f : 1.0f - nearest / ROYALE_FX_RUMBLE_DISTANCE;
+	scale = PIN(scale, 0.0f, 1.0f);
+	scale = ROYALE_FX_RUMBLE_FLOOR + (1.0f - ROYALE_FX_RUMBLE_FLOOR) * scale * scale;
+	scripted_looping_sound_set_scale(royale_fx.rumble_loop, scale);
+}
+
 /* ---------- the world's drawing */
 
 static pixel32 royale_fx_pixel(
@@ -635,6 +719,7 @@ void royale_fx_start(
 {
 	long ship_definition;
 
+	royale_fx_rumble_give_back();
 	csmemset(&royale_fx, 0, sizeof(royale_fx));
 	royale_fx.ship_model = NONE;
 	if (!config)
@@ -660,7 +745,11 @@ void royale_fx_start(
 		(short)NUMBEROF(royale_fx_boom_sound_names));
 	royale_fx.shake = royale_fx_first_tag(DAMAGE_EFFECT_DEFINITION_TAG, royale_fx_shake_names,
 		(short)NUMBEROF(royale_fx_shake_names));
+	royale_fx.rumble_loop = tag_loaded(LOOPING_SOUND_DEFINITION_TAG, royale_fx_rumble_name);
+	royale_fx.rumble_sound = tag_loaded(SOUND_DEFINITION_TAG, royale_fx_rumble_name);
+	royale_fx_rumble_take();
 	royale_fx.started = TRUE;
+	platform_log("royale fx: rumble %s", royale_fx.rumble_definition ? "yes" : "no");
 	platform_log("royale fx: ship %s (radius %.1f), trail %s, flame %s, boom %s/%s, shake %s",
 		royale_fx.ship_model != NONE ? "yes" : "no", royale_fx.ship_radius, royale_fx.trail != NONE ? "yes" : "no",
 		royale_fx.flame != NONE ? "yes" : "no", royale_fx.boom != NONE ? "yes" : "no",
@@ -670,6 +759,7 @@ void royale_fx_start(
 void royale_fx_reset(
 	void)
 {
+	royale_fx_rumble_give_back();
 	csmemset(&royale_fx, 0, sizeof(royale_fx));
 	royale_fx.ship_model = NONE;
 }
@@ -684,6 +774,7 @@ void royale_fx_tick(
 		return;
 	royale_fx_pods_tick();
 	royale_fx_beam_shake_tick();
+	royale_fx_rumble_tick();
 }
 
 /* the sky going orange near the beam: a glow from the top of the view
