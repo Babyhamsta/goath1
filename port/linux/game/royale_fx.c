@@ -100,6 +100,12 @@ static char const *const royale_fx_trail_names[] =
 	"vehicles\\banshee\\banshee wingtip contrail",
 	"weapons\\fuel rod gun\\tail",
 };
+/* (additive: the fire, the beam's own glow) */
+static char const *const royale_fx_glow_names[] =
+{
+	"vehicles\\c gun turret\\c gun turret",
+	"weapons\\plasma rifle\\plasma",
+};
 static char const *const royale_fx_flame_names[] =
 {
 	"weapons\\rocket launcher\\effects\\rocket exhaust",
@@ -148,6 +154,7 @@ static struct
 	long ship_model;
 	real ship_radius;
 	long trail;
+	long glow;
 	long flame;
 	long boom;
 	long boom_sound;
@@ -419,7 +426,16 @@ static void royale_fx_pods_tick(
 		/* (one that landed long before this machine began to watch: no boom) */
 		if (elapsed <= fall_ticks + royale_seconds_to_ticks(1.0f))
 			royale_fx_pod_boom(&ground);
-		platform_log("royale fx: supply pod %d boom", index);
+		{
+			real_point3d position;
+			short local_player_index = local_player_get_next(NONE);
+
+			if (local_player_index != NONE && royale_fx_local_unit_position(local_player_index, &position))
+			{
+				platform_log("royale fx: supply pod %d boom at %.0f %.0f %.0f (local player at %.0f %.0f %.0f)", index,
+					ground.x, ground.y, ground.z, position.x, position.y, position.z);
+			}
+		}
 	}
 }
 
@@ -539,7 +555,8 @@ static void royale_fx_strip_add(
 /* a strip of quads through the trail's contrail material (royale_beam.c's
 way) */
 static void royale_fx_strip_draw(
-	struct royale_fx_strip *strip)
+	struct royale_fx_strip *strip,
+	long contrail)
 {
 	struct contrail_definition *definition;
 	struct bitmap_data *bitmap;
@@ -548,9 +565,9 @@ static void royale_fx_strip_draw(
 	long triangle_buffer;
 	long vertex_buffer;
 
-	if (strip->pairs < 2 || royale_fx.trail == NONE)
+	if (strip->pairs < 2 || contrail == NONE)
 		return;
-	definition = contrail_definition_get(royale_fx.trail);
+	definition = contrail_definition_get(contrail);
 	bitmap = bitmap_group_get_bitmap_from_sequence(definition->bitmap.index, definition->first_sequence_index, 0);
 	if (!bitmap)
 		return;
@@ -595,16 +612,53 @@ static void royale_fx_strip_draw(
 	rasterizer_globals.current_lock_operation = _rasterizer_lock_none;
 }
 
-/* a falling pod's trail: fire at the pod, smoke above it, facing the
-camera */
+/* a camera-facing ribbon up from a point: `points` pairs over `length`,
+its width and color by the share t of the way up */
+static void royale_fx_ribbon(
+	real_point3d const *base,
+	real_vector2d const *across,
+	real bottom,
+	real length,
+	real width0,
+	real width1,
+	real_argb_color const *color0,
+	real_argb_color const *color1,
+	real flow,
+	long contrail)
+{
+	static struct royale_fx_strip strip;
+	short point;
+
+	csmemset(&strip, 0, sizeof(strip));
+	for (point = 0; point < ROYALE_FX_POD_TRAIL_POINTS; point++)
+	{
+		real t = (real)point / (real)(ROYALE_FX_POD_TRAIL_POINTS - 1);
+		real width = width0 + (width1 - width0) * t;
+		real_point3d p0, p1;
+		pixel32 color = royale_fx_pixel(color0->red + (color1->red - color0->red) * t,
+			color0->green + (color1->green - color0->green) * t, color0->blue + (color1->blue - color0->blue) * t,
+			color0->alpha + (color1->alpha - color0->alpha) * t);
+
+		p0.x = base->x - across->i * width * 0.5f;
+		p0.y = base->y - across->j * width * 0.5f;
+		p0.z = base->z + bottom + t * length;
+		p1.x = base->x + across->i * width * 0.5f;
+		p1.y = base->y + across->j * width * 0.5f;
+		p1.z = p0.z;
+		royale_fx_strip_add(&strip, &p0, &p1, t * 3.0f + flow, color);
+	}
+	royale_fx_strip_draw(&strip, contrail);
+}
+
+/* a falling pod: a fireball about it, fire streaming up from it and a
+column of smoke behind, facing the camera */
 static void royale_fx_render_pod_trail(
 	real_point3d const *pod,
 	real seconds)
 {
-	static struct royale_fx_strip strip;
-	short layer;
 	real_vector2d to_camera, across;
 	real length;
+	real flicker = 0.85f + 0.15f * sinf(seconds * 37.0f);
 
 	to_camera.i = render.camera.position.x - pod->x;
 	to_camera.j = render.camera.position.y - pod->y;
@@ -613,32 +667,29 @@ static void royale_fx_render_pod_trail(
 		return;
 	across.i = -to_camera.j / length;
 	across.j = to_camera.i / length;
-	for (layer = 0; layer < 2; layer++)
+	/* the smoke: dark, widening, thinning up */
 	{
-		/* (a wide orange-to-smoke plume, a white-hot core) */
-		static real const widths[2] = { 7.0f, 2.2f };
-		short point;
+		real_argb_color bottom = { 0.8f, 0.30f, 0.27f, 0.25f };
+		real_argb_color top = { 0.0f, 0.45f, 0.43f, 0.42f };
 
-		csmemset(&strip, 0, sizeof(strip));
-		for (point = 0; point < ROYALE_FX_POD_TRAIL_POINTS; point++)
-		{
-			real t = (real)point / (real)(ROYALE_FX_POD_TRAIL_POINTS - 1);
-			real width = widths[layer] * (0.6f + 1.4f * t) * (layer ? 1.0f - t : 1.0f);
-			real flicker = 0.85f + 0.15f * sinf(seconds * 31.0f + t * 9.0f + (real)layer);
-			real_point3d p0, p1;
-			pixel32 color = layer ?
-				royale_fx_pixel(1.0f, 0.9f, 0.6f, (1.0f - t) * flicker) :
-				royale_fx_pixel(1.0f, 0.45f - 0.25f * t, 0.12f, (1.0f - t * 0.9f) * 0.85f * flicker);
+		royale_fx_ribbon(pod, &across, 2.0f, 70.0f, 5.0f, 18.0f, &bottom, &top, seconds * 0.8f, royale_fx.trail);
+	}
+	/* the fire: orange to red, the core white-hot */
+	{
+		real_argb_color bottom = { flicker, 1.0f, 0.55f, 0.12f };
+		real_argb_color top = { 0.0f, 1.0f, 0.2f, 0.05f };
+		real_argb_color core_bottom = { flicker, 1.0f, 0.95f, 0.7f };
+		real_argb_color core_top = { 0.0f, 1.0f, 0.6f, 0.2f };
 
-			p0.x = pod->x - across.i * width * 0.5f;
-			p0.y = pod->y - across.j * width * 0.5f;
-			p0.z = pod->z + t * ROYALE_FX_POD_TRAIL_LENGTH;
-			p1.x = pod->x + across.i * width * 0.5f;
-			p1.y = pod->y + across.j * width * 0.5f;
-			p1.z = p0.z;
-			royale_fx_strip_add(&strip, &p0, &p1, t * 3.0f + seconds * 4.0f, color);
-		}
-		royale_fx_strip_draw(&strip);
+		royale_fx_ribbon(pod, &across, -3.0f, 28.0f, 9.0f, 3.0f, &bottom, &top, seconds * 5.0f, royale_fx.glow);
+		royale_fx_ribbon(pod, &across, -1.5f, 12.0f, 3.5f, 1.0f, &core_bottom, &core_top, seconds * 7.0f, royale_fx.glow);
+	}
+	/* the fireball about the pod */
+	{
+		real_argb_color hot = { flicker, 1.0f, 0.7f, 0.3f };
+		real_argb_color edge = { 0.6f * flicker, 1.0f, 0.4f, 0.1f };
+
+		royale_fx_ribbon(pod, &across, -5.0f, 10.0f, 11.0f, 7.0f, &hot, &edge, seconds * 3.0f, royale_fx.glow);
 	}
 }
 
@@ -737,6 +788,8 @@ void royale_fx_start(
 	}
 	royale_fx.trail = royale_fx_first_tag(CONTRAIL_DEFINITION_TAG, royale_fx_trail_names,
 		(short)NUMBEROF(royale_fx_trail_names));
+	royale_fx.glow = royale_fx_first_tag(CONTRAIL_DEFINITION_TAG, royale_fx_glow_names,
+		(short)NUMBEROF(royale_fx_glow_names));
 	royale_fx.flame = royale_fx_first_tag(PARTICLE_SYSTEM_DEFINITION_TAG, royale_fx_flame_names,
 		(short)NUMBEROF(royale_fx_flame_names));
 	royale_fx.boom = royale_fx_first_tag(PARTICLE_SYSTEM_DEFINITION_TAG, royale_fx_boom_names,
