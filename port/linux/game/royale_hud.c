@@ -302,6 +302,7 @@ static void royale_hud_number_at(
 	short top,
 	short value,
 	char digits,
+	byte flags,
 	struct hud_color_definition const *colors,
 	boolean flash,
 	long since,
@@ -311,7 +312,7 @@ static void royale_hud_number_at(
 	short window_top = (short)(render.camera.window_bounds.y0 - render.camera.viewport_bounds.y0);
 
 	royale_hud_number(local_player_index, _hud_anchor_top_right, (short)(window_right - right),
-		(short)(top - window_top), value, digits, ROYALE_HUD_NUMBER_LEADING_ZEROS, colors, flash, since, scale);
+		(short)(top - window_top), value, digits, flags, colors, flash, since, scale);
 }
 
 /* where an anchor's offset lands in the view (as hud_draw_numbers places it) */
@@ -676,7 +677,7 @@ static void royale_hud_draw_state(
 			royale_hud_digit_size(&digit_width, &digit_height);
 			royale_hud_text(&bounds, 2, L"DOWNED  -  HOLD ON FOR A REVIVE", &red);
 			royale_hud_number_at(local_player_index, (short)(middle_x + digit_width * ROYALE_HUD_TIMER_SCALE),
-				(short)(top + line + 4), seconds, 2,
+				(short)(top + line + 4), seconds, 2, ROYALE_HUD_NUMBER_LEADING_ZEROS,
 				royale_hud_timer_colors(seconds <= ROYALE_HUD_BEAM_FLASH_SECONDS), seconds <= ROYALE_HUD_BEAM_FLASH_SECONDS,
 				0, ROYALE_HUD_TIMER_SCALE);
 			bar.y0 = (short)(bar.y0 + digit_height * ROYALE_HUD_TIMER_SCALE + 6);
@@ -703,9 +704,8 @@ static void royale_hud_draw_state(
 		break;
 	case ROYALE_PLAYER_SPECTATING:
 		royale_hud_player_name(mate, name, NUMBEROF(name));
-		usnprintf(text, NUMBEROF(text) - 1, L"ELIMINATED  -  WATCHING %s", name);
-		text[NUMBEROF(text) - 1] = 0;
-		royale_hud_text(&bounds, 2, text, &color);
+		/* (whom they watch is the game's line: dead_spectate.c) */
+		royale_hud_text(&bounds, 2, L"ELIMINATED", &color);
 		break;
 	case ROYALE_PLAYER_ELIMINATED:
 	{
@@ -796,9 +796,9 @@ static void royale_hud_draw_beam(
 		royale_hud_text(&bounds, 2, L"BEAM MOVES IN", &label);
 		/* (M:SS centered: the minute left of the colon, the seconds right) */
 		royale_hud_number_at(local_player_index, (short)(center_x + digit / 2), top_y, (short)MIN(left / 60, 9), 1,
-			colors, flash, 0, ROYALE_HUD_TIMER_SCALE);
+			ROYALE_HUD_NUMBER_LEADING_ZEROS, colors, flash, 0, ROYALE_HUD_TIMER_SCALE);
 		royale_hud_number_at(local_player_index, (short)(center_x + digit / 2 + 2 * digit), top_y, (short)(left % 60),
-			2, colors, flash, 0, ROYALE_HUD_TIMER_SCALE);
+			2, ROYALE_HUD_NUMBER_LEADING_ZEROS, colors, flash, 0, ROYALE_HUD_TIMER_SCALE);
 		colon_color = royale_hud_flash_color(colors, flash, 0);
 		colon.x0 = (short)(center_x - 20);
 		colon.x1 = (short)(center_x + 20);
@@ -831,6 +831,18 @@ static void royale_hud_draw_beam(
 		warning_bounds.y1 = (short)(warning_bounds.y0 + line);
 		royale_hud_text(&warning_bounds, 2, inside ? L"WARNING: YOU ARE BEING GLASSED" :
 			L"WARNING: GLASSING BEAM  -  MOVE", &alarm);
+		/* (the way to safe ground in meters, in the digits with their m, as
+		a waypoint's: the arrow off the screen shows none) */
+		{
+			short meters = (short)PIN(away * 3.048f, 0.0f, 999.0f);
+			short digit = (short)(digit_width * ROYALE_HUD_COUNT_SCALE);
+			short count = (short)(meters >= 100 ? 3 : meters >= 10 ? 2 : 1);
+
+			royale_hud_number_at(local_player_index,
+				(short)((window.x0 + window.x1) / 2 + (count + 1) * digit / 2),
+				(short)(warning_bounds.y1 + 2), meters, (char)count, ROYALE_HUD_NUMBER_TRAILING_M,
+				royale_hud_timer_colors(TRUE), TRUE, since, ROYALE_HUD_COUNT_SCALE);
+		}
 		if (royale_hud_nav_index() != NONE && unit_index != NONE)
 		{
 			safe.x = origin.x + beam.safe.i * away;
