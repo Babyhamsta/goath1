@@ -811,8 +811,19 @@ void royale_beam_tick(
 	if (royale_beam.play_start == NONE)
 		return;
 	royale_beam.ticks = MAX(royale_match_time() - royale_beam.play_start, 0);
-	royale_beam_status_at(royale_beam.stages, royale_beam.stage_count, royale_beam.ticks_per_second,
-		royale_beam.ticks, &royale_beam.status);
+	{
+		short stage = royale_beam.status.stage;
+		boolean moving = royale_beam.status.moving;
+
+		royale_beam_status_at(royale_beam.stages, royale_beam.stage_count, royale_beam.ticks_per_second,
+			royale_beam.ticks, &royale_beam.status);
+		/* (every machine's, alike: a host and client's logs compare) */
+		if (stage != royale_beam.status.stage || moving != royale_beam.status.moving)
+		{
+			platform_log("royale beam: stage %d %s at match tick %ld (front %.3f)", royale_beam.status.stage,
+				royale_beam.status.moving ? "moving" : "holding", royale_match_time(), royale_beam.status.front);
+		}
+	}
 	royale_beam_damage_tick();
 	royale_beam_local_tick();
 }
@@ -1111,56 +1122,6 @@ static pixel32 royale_beam_hud_pixel(
 		(pixel32)(PIN(blue, 0.0f, 1.0f) * 255.0f + 0.5f);
 }
 
-static void royale_beam_hud_text(
-	rectangle2d const *bounds,
-	wchar_t const *text,
-	real_argb_color const *color)
-{
-	long font_index = hud_get_font_index();
-
-	if (font_index == NONE)
-		return;
-	/* draw mode 2: centered */
-	draw_string_set_draw_mode(font_index, NONE, 2, 0, color);
-	rasterizer_draw_unicode_string(bounds, NULL, NULL, 0, text);
-}
-
-/* an arrow of squares, pointing on the screen (x right, y down) */
-static void royale_beam_hud_arrow(
-	short center_x,
-	short center_y,
-	real direction_x,
-	real direction_y,
-	short size,
-	pixel32 color)
-{
-	/* the arrow in its own frame (along, across), pointing along +1 */
-	static real const shape[][2] =
-	{
-		{ -1.0f, 0.0f }, { -0.75f, 0.0f }, { -0.5f, 0.0f }, { -0.25f, 0.0f }, { 0.0f, 0.0f },
-		{ 0.25f, 0.0f }, { 0.5f, 0.0f }, { 0.75f, 0.0f }, { 1.0f, 0.0f },
-		{ 0.75f, 0.22f }, { 0.5f, 0.44f }, { 0.25f, 0.66f },
-		{ 0.75f, -0.22f }, { 0.5f, -0.44f }, { 0.25f, -0.66f },
-	};
-	short index;
-	short half = (short)MAX(2, size / 10);
-
-	for (index = 0; index < (short)NUMBEROF(shape); index++)
-	{
-		real along = shape[index][0] * (real)size * 0.5f;
-		real across = shape[index][1] * (real)size * 0.5f;
-		short x = (short)(center_x + along * direction_x - across * direction_y);
-		short y = (short)(center_y + along * direction_y + across * direction_x);
-		rectangle2d square;
-
-		square.x0 = (short)(x - half);
-		square.x1 = (short)(x + half);
-		square.y0 = (short)(y - half);
-		square.y1 = (short)(y + half);
-		draw_quad(&square, color);
-	}
-}
-
 void royale_beam_draw(
 	void)
 {
@@ -1168,25 +1129,11 @@ void royale_beam_draw(
 	rectangle2d screen;
 	real_point3d eye;
 	real depth;
-	real target_depth = -1.0e9f;
 	real seconds;
-	long font_index;
-	short line;
 	short width, height;
-	wchar_t text[64];
-	real_argb_color white = { 1.0f, 1.0f, 1.0f, 1.0f };
-	real_argb_color hot = { 1.0f, 1.0f, 0.55f, 0.2f };
 
 	if (!royale_beam_sweeping())
 		return;
-	font_index = hud_get_font_index();
-	if (font_index == NONE)
-		return;
-	{
-		struct font_header *font = font_definition_get(font_index);
-
-		line = (short)(font->ascending_height + font->descending_height);
-	}
 	seconds = (real)royale_beam.ticks / royale_beam.ticks_per_second;
 	/* the warnings are for a player standing in the world (alive or downed),
 	from where their unit is; the countdown for everyone */
@@ -1201,7 +1148,6 @@ void royale_beam_draw(
 		{
 			object_get_origin(player->unit_index, &eye);
 			depth = royale_beam_depth(&eye);
-			target_depth = royale_beam_depth_at(&royale_beam.bounds, royale_beam.side, royale_beam.status.target, eye.x, eye.y);
 		}
 	}
 	/* (in the view's own coordinates: a split screen's lower window's too) */
@@ -1253,59 +1199,33 @@ void royale_beam_draw(
 		}
 	}
 
-	/* the countdown, at the top, while the beam holds */
-	if (!royale_beam.status.moving && royale_beam.status.stage < royale_beam.stage_count)
+	/* (the countdown, the warning and the way to safety are the HUD's:
+	royale_hud.c, from royale_beam_hud_state) */
+}
+
+boolean royale_beam_hud_state(
+	real_point3d const *point,
+	struct royale_beam_hud_state *state)
+{
+	real_point2d a, b;
+
+	csmemset(state, 0, sizeof(*state));
+	if (!royale_beam_sweeping())
+		return FALSE;
+	state->moving = royale_beam.status.moving;
+	state->holding = !royale_beam.status.moving && royale_beam.status.stage < royale_beam.stage_count;
+	state->ticks_to_move = royale_beam.status.ticks_to_move;
+	state->ticks_per_second = royale_beam.ticks_per_second;
+	state->depth = -1.0e9f;
+	state->target_depth = -1.0e9f;
+	if (point)
 	{
-		long left = (royale_beam.status.ticks_to_move + (long)royale_beam.ticks_per_second - 1) /
-			(long)MAX(1.0f, royale_beam.ticks_per_second);
-		rectangle2d top = bounds;
-
-		royale_hud_row(ROYALE_HUD_ROW_COUNTDOWN, &top.y0, &top.y1);
-		usnprintf(text, NUMBEROF(text) - 1, L"GLASSING IN %ld:%02ld", left / 60, left % 60);
-		text[NUMBEROF(text) - 1] = 0;
-		royale_beam_hud_text(&top, text, left <= 10 ? &hot : &white);
+		state->depth = royale_beam_depth(point);
+		state->target_depth = royale_beam_depth_at(&royale_beam.bounds, royale_beam.side, royale_beam.status.target,
+			point->x, point->y);
 	}
-	else if (royale_beam.status.moving)
-	{
-		rectangle2d top = bounds;
-
-		royale_hud_row(ROYALE_HUD_ROW_COUNTDOWN, &top.y0, &top.y1);
-		royale_beam_hud_text(&top, L"GLASSING", &hot);
-	}
-
-	/* MOVE, and the way to safety: behind the front, or on the ground this
-	stage glasses once it moves (or within 20 seconds of its moving) */
-	if (depth > 0.0f || (target_depth > 0.0f && (royale_beam.status.moving ||
-		royale_beam.status.ticks_to_move < (long)(20.0f * royale_beam.ticks_per_second))))
-	{
-		real_point2d a, b;
-		real_vector2d safe;
-		real camera_yaw = atan2f(render.camera.forward.j, render.camera.forward.i);
-		real safe_yaw;
-		real relative;
-		short row_top, row_bottom, arrow_bottom;
-		short size;
-		short center_x = (short)(bounds.x0 + width / 2);
-		short center_y;
-		real flash = depth > 0.0f ? 0.6f + 0.4f * sinf(seconds * 10.0f) : 1.0f;
-		real_argb_color color = { flash, 1.0f, depth > 0.0f ? 0.95f : 0.75f, depth > 0.0f ? 0.7f : 0.2f };
-		rectangle2d move = bounds;
-
-		/* (MOVE in its row, the arrow in the two under it) */
-		royale_hud_row(ROYALE_HUD_ROW_MOVE, &row_top, &row_bottom);
-		royale_hud_row(ROYALE_HUD_ROW_MOVE + 2, &move.y0, &arrow_bottom);
-		size = (short)MAX(12, arrow_bottom - row_bottom - 4);
-		center_y = (short)(row_bottom + 2 + size / 2);
-		royale_beam_front_line(royale_beam.status.front, &a, &b, &safe);
-		safe_yaw = atan2f(safe.j, safe.i);
-		relative = safe_yaw - camera_yaw;
-		/* (left of the view's forward is the screen's left) */
-		royale_beam_hud_arrow(center_x, center_y, -sinf(relative), -cosf(relative), size,
-			royale_beam_hud_pixel(1.0f, depth > 0.0f ? 0.95f : 0.75f, depth > 0.0f ? 0.6f : 0.2f, 0.95f * flash));
-		move.y0 = row_top;
-		move.y1 = row_bottom;
-		royale_beam_hud_text(&move, depth > 0.0f ? L"MOVE! YOU ARE BEING GLASSED" : L"MOVE", &color);
-	}
+	royale_beam_front_line(royale_beam.status.front, &a, &b, &state->safe);
+	return TRUE;
 }
 
 /* (royale.h) not running, no play start, none of the last map's tags */

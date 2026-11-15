@@ -108,6 +108,7 @@ symbols in this file:
 #include "units/unit_definitions.h"
 #include "units/units.h"
 #include "units/vehicles.h"
+#include "royale_hud.h" /* port: port/linux/game/royale_hud.c */
 
 #ifdef HALO_VR
 /* port/linux/game/vr_death.c: as the player is back from the VR mode's
@@ -126,6 +127,10 @@ enum
 	_blip_type_vehicle_enemy,
 	_blip_type_custom,
 	_blip_type_none,
+	/* port: Royale's squadmate, and downed (royale_hud.c): after none,
+	never stored in a blip */
+	_blip_type_squadmate,
+	_blip_type_squadmate_downed,
 	NUMBER_OF_BLIP_TYPES
 };
 
@@ -253,7 +258,9 @@ const real_rgb_color blip_colors[] =
 	{ 1.f, 1.f, 0.f },
 	{ 1.f, 0.f, 0.f },
 	{ .5f, .5f, 1.f },
-	{ 0.f, 0.f, 0.f }
+	{ 0.f, 0.f, 0.f },
+	{ .3f, .85f, 1.f },
+	{ 1.f, .15f, .1f }
 };
 
 real scale[] =
@@ -785,6 +792,21 @@ static void render_motion_sensor(
 		}
 	}
 
+	/* port: Royale's squadmate, always (moving or not), pulsing as a goal's
+	blip does, in its own colour (royale_hud.c) */
+	{
+		real_point2d mate_position;
+		boolean mate_downed;
+
+		if (royale_hud_tracker_mate(local_player_index, &mate_position, &mate_downed))
+		{
+			struct motion_sensor_datum *sensor = &player->sensor_data[motion_sensor_globals->active_sensor_index];
+
+			render_blip(sensor, mate_downed ? _blip_type_squadmate_downed : _blip_type_squadmate,
+				_hud_blip_type_medium, &mate_position, relative_scale, 1.0f, 1.0f);
+		}
+	}
+
 	rasterizer_hud_motion_sensor_blip_end(&center_point, sweep_theta);
 
 render_motion_sensor_done:
@@ -1165,7 +1187,8 @@ static void render_blip(
 		blip_color = &blip_colors[blip_type];
 		pulse_scale = 1.0f;
 		blip_draw_size = blip_size_get(blip_size_type);
-		if (blip_type == _blip_type_custom)
+		if (blip_type == _blip_type_custom || blip_type == _blip_type_squadmate ||
+			blip_type == _blip_type_squadmate_downed)
 		{
 			/* port: (pulsing in each frame drawn, as the sweep moves) */
 			pulse_scale = (real)(
@@ -1180,7 +1203,8 @@ static void render_blip(
 			fade,
 			blip_draw_size,
 			blip_color,
-			(boolean)(blip_type == _blip_type_custom));
+			(boolean)(blip_type == _blip_type_custom || blip_type == _blip_type_squadmate ||
+				blip_type == _blip_type_squadmate_downed));
 	}
 
 	return;
