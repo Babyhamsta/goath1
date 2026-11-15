@@ -398,6 +398,24 @@ static void royale_hud_draw_counts(
 	}
 }
 
+/* the waypoint arrow, as a ping's (network_markers.c): the campaign's, else
+the multiplayer goals', else the first; NONE if the map has none */
+static short royale_hud_nav_index(
+	void)
+{
+	static char const *const arrows[] = { "default", "target_blue", NULL };
+	short index;
+
+	if (!royale_hud.nav_looked_up)
+	{
+		royale_hud.nav_index = NONE;
+		for (index = 0; index < (short)NUMBEROF(arrows) && royale_hud.nav_index == NONE; index++)
+			royale_hud.nav_index = hud_find_nav_point_quietly(arrows[index]);
+		royale_hud.nav_looked_up = TRUE;
+	}
+	return royale_hud.nav_index;
+}
+
 /* ---- the squadmate: the teammate triangle over them, their nav marker far
 off, downed flashing red */
 
@@ -517,16 +535,7 @@ static void royale_hud_draw_mate(
 		short drawn_type;
 		real_point3d head;
 
-		if (!royale_hud.nav_looked_up)
-		{
-			static char const *const arrows[] = { "default", NULL };
-
-			royale_hud.nav_index = hud_find_nav_point_quietly(arrows[0]);
-			if (royale_hud.nav_index == NONE)
-				royale_hud.nav_index = hud_find_nav_point_quietly(arrows[1]);
-			royale_hud.nav_looked_up = TRUE;
-		}
-		if (royale_hud.nav_index == NONE)
+		if (royale_hud_nav_index() == NONE)
 			return;
 		if (downed)
 		{
@@ -801,14 +810,7 @@ static void royale_hud_draw_beam(
 		warning_bounds.y1 = (short)(warning_bounds.y0 + line);
 		royale_hud_text(&warning_bounds, 2, inside ? L"WARNING: YOU ARE BEING GLASSED" :
 			L"WARNING: GLASSING BEAM  -  MOVE", &alarm);
-		if (!royale_hud.nav_looked_up)
-		{
-			royale_hud.nav_index = hud_find_nav_point_quietly("default");
-			if (royale_hud.nav_index == NONE)
-				royale_hud.nav_index = hud_find_nav_point_quietly(NULL);
-			royale_hud.nav_looked_up = TRUE;
-		}
-		if (royale_hud.nav_index != NONE && unit_index != NONE)
+		if (royale_hud_nav_index() != NONE && unit_index != NONE)
 		{
 			safe.x = origin.x + beam.safe.i * away;
 			safe.y = origin.y + beam.safe.j * away;
