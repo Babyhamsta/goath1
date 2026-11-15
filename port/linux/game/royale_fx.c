@@ -81,6 +81,9 @@ _HEIGHT: the loot's crate falls so) */
 #define ROYALE_FX_POD_TRAIL_POINTS 16
 /* the boom's shake reaches this far */
 #define ROYALE_FX_POD_BOOM_DISTANCE 60.0f
+/* the boom's fireball and smoke last so long (seconds) */
+#define ROYALE_FX_POD_BOOM_SECONDS 1.2f
+#define ROYALE_FX_POD_SMOKE_SECONDS 10.0f
 
 /* the rumble: the beam's hum (royale_beam.c starts it), its sound's scale
 made its loudness, from this far ahead of the front (world units) up to
@@ -172,6 +175,7 @@ static struct
 		boolean falling;
 		boolean landed;
 		real_point3d position;
+		long landed_time; /* royale_match_time() (NONE: none seen) */
 	} pods[ROYALE_LOOT_POD_COUNT];
 } royale_fx;
 
@@ -423,6 +427,8 @@ static void royale_fx_pods_tick(
 		}
 		royale_fx.pods[index].falling = FALSE;
 		royale_fx.pods[index].landed = TRUE;
+		royale_fx.pods[index].position = ground;
+		royale_fx.pods[index].landed_time = elapsed <= fall_ticks + royale_seconds_to_ticks(1.0f) ? now : NONE;
 		/* (one that landed long before this machine began to watch: no boom) */
 		if (elapsed <= fall_ticks + royale_seconds_to_ticks(1.0f))
 			royale_fx_pod_boom(&ground);
@@ -693,6 +699,44 @@ static void royale_fx_render_pod_trail(
 	}
 }
 
+/* a landed pod: the boom's fireball swelling and fading, then its smoke
+rising for a while */
+static void royale_fx_render_pod_boom(
+	real_point3d const *ground,
+	real seconds_since)
+{
+	real_vector2d to_camera, across;
+	real length;
+
+	to_camera.i = render.camera.position.x - ground->x;
+	to_camera.j = render.camera.position.y - ground->y;
+	length = sqrtf(to_camera.i * to_camera.i + to_camera.j * to_camera.j);
+	if (length < 0.01f)
+		return;
+	across.i = -to_camera.j / length;
+	across.j = to_camera.i / length;
+	if (seconds_since < ROYALE_FX_POD_BOOM_SECONDS)
+	{
+		real t = seconds_since / ROYALE_FX_POD_BOOM_SECONDS;
+		real size = 6.0f + 26.0f * sqrtf(t);
+		real fade = (1.0f - t) * (1.0f - t);
+		real_argb_color hot = { fade, 1.0f, 0.85f, 0.5f };
+		real_argb_color edge = { fade * 0.7f, 1.0f, 0.35f, 0.08f };
+
+		royale_fx_ribbon(ground, &across, -size * 0.3f, size, size, size * 0.6f, &hot, &edge, t, royale_fx.glow);
+	}
+	if (seconds_since < ROYALE_FX_POD_SMOKE_SECONDS)
+	{
+		real t = seconds_since / ROYALE_FX_POD_SMOKE_SECONDS;
+		real fade = t < 0.1f ? t / 0.1f : 1.0f - (t - 0.1f) / 0.9f;
+		real_argb_color bottom = { 0.75f * fade, 0.28f, 0.26f, 0.24f };
+		real_argb_color top = { 0.0f, 0.42f, 0.41f, 0.4f };
+
+		royale_fx_ribbon(ground, &across, 0.0f, 15.0f + 45.0f * t, 8.0f, 14.0f + 20.0f * t, &bottom, &top,
+			seconds_since * 0.5f, royale_fx.trail);
+	}
+}
+
 /* the Covenant ship hanging over the beam's front, along it */
 static void royale_fx_render_ship(
 	real seconds)
@@ -895,5 +939,12 @@ void royale_fx_render(
 	{
 		if (royale_fx.pods[index].falling)
 			royale_fx_render_pod_trail(&royale_fx.pods[index].position, seconds);
+		else if (royale_fx.pods[index].landed && royale_fx.pods[index].landed_time != NONE)
+		{
+			real since = (real)(royale_match_time() - royale_fx.pods[index].landed_time) /
+				(real)MAX(royale_seconds_to_ticks(1.0f), 1);
+
+			royale_fx_render_pod_boom(&royale_fx.pods[index].position, since);
+		}
 	}
 }
