@@ -12,7 +12,8 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from harness import CHECK_FAILED, build, mutated, read, run  # noqa: E402
 
-CASES = ["squads", "revive", "bleed-out", "gulag", "results"]
+CASES = ["squads", "revive", "bleed-out", "gulag", "results", "downed-rule", "lane-states", "clock", "network",
+         "take"]
 
 # a fault in each rule, and the case that must catch it
 NEGATIVE_CONTROLS = {
@@ -20,7 +21,30 @@ NEGATIVE_CONTROLS = {
     "anyone-revives": (("by != mate || ", ""), "revive"),
     "placed-one-low": (("rules->placement[squad] = (byte)(alive + 1);", "rules->placement[squad] = alive;"),
                        "results"),
-    "last-of-squad-downed": (("if (!can_revive)", "if (0 && !can_revive)"), "bleed-out"),
+    "last-of-squad-downed": (("return mate != NONE && royale_rules_standing(rules->slots[mate].state) &&",
+                              "return mate != NONE &&"), "bleed-out"),
+    # (the client's old guess: any squadmate) a down when the squadmate is in the gulag
+    "mate-in-gulag-revives": (("rules->slots[mate].state != ROYALE_RULES_GULAG;\n}", "TRUE;\n}"), "downed-rule"),
+    # a landing that stands the downed (the lanes' moves unchecked)
+    "landing-stands-downed": ((" || rules->slots[slot].state == ROYALE_RULES_DOWNED))", "))"), "lane-states"),
+    # a client whose clock stands still
+    "client-clock-frozen": (("\trules->match_time++;\n\trules->phase_time = rules->match_time - rules->phase_start;",
+                             "\trules->phase_time = rules->match_time - rules->phase_start;"), "clock"),
+    # a client bleeding out while revived
+    "client-bleeds-in-revive": (("\t\telse if (entry->downed_ticks > 0)\n\t\t\tentry->downed_ticks--;",
+                                 "\t\tif (entry->downed_ticks > 0)\n\t\t\tentry->downed_ticks--;"), "clock"),
+    # ENDGAME's start taken as PLAY's
+    "play-start-moves": (("rules->play_start == NONE)\n\t\trules->play_start = rules->match_time;",
+                          "TRUE)\n\t\trules->play_start = rules->match_time;"), "clock"),
+    # the clock in the discrete part: it changes every tick, resent all the time
+    "clock-in-discrete": (("cursor = royale_rules_put_long(cursor, rules->phase_start);\n\tcursor = royale_rules_put_long(cursor, rules->play_start);\n\t*cursor++ = (byte)count;",
+                           "cursor = royale_rules_put_long(cursor, rules->phase_time);\n\tcursor = royale_rules_put_long(cursor, rules->play_start);\n\t*cursor++ = (byte)count;"),
+                          "network"),
+    # a squad past the count taken
+    "squad-unchecked": (("(entry->squad != SLOT_NONE && entry->squad >= rules->squad_count) ||", ""), "network"),
+    # every state snaps a client's clock (it steps)
+    "take-always-snaps": (("return snap || local < host - slack || local > host + slack ? host : local;",
+                           "return host;"), "take"),
     "gulag-not-told": (("if (gulag && gulag(slot, killer_slot) && !in_gulag)",
                         "if (!in_gulag && gulag && gulag(slot, killer_slot))"), "gulag"),
 }

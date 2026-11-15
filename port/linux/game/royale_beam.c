@@ -811,8 +811,19 @@ void royale_beam_tick(
 	if (royale_beam.play_start == NONE)
 		return;
 	royale_beam.ticks = MAX(royale_match_time() - royale_beam.play_start, 0);
-	royale_beam_status_at(royale_beam.stages, royale_beam.stage_count, royale_beam.ticks_per_second,
-		royale_beam.ticks, &royale_beam.status);
+	{
+		short stage = royale_beam.status.stage;
+		boolean moving = royale_beam.status.moving;
+
+		royale_beam_status_at(royale_beam.stages, royale_beam.stage_count, royale_beam.ticks_per_second,
+			royale_beam.ticks, &royale_beam.status);
+		/* (every machine's, alike: a host and client's logs compare) */
+		if (stage != royale_beam.status.stage || moving != royale_beam.status.moving)
+		{
+			platform_log("royale beam: stage %d %s at match tick %ld (front %.3f)", royale_beam.status.stage,
+				royale_beam.status.moving ? "moving" : "holding", royale_match_time(), royale_beam.status.front);
+		}
+	}
 	royale_beam_damage_tick();
 	royale_beam_local_tick();
 }
