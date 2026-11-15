@@ -823,6 +823,30 @@ static void report_place(
 	text[count - 1] = 0;
 }
 
+/* a player's Reclaimer (the gulag): WON, LOST, or nothing */
+static void cinema_reclaimer(
+	struct cinema_report const *report,
+	long player_index,
+	real x0,
+	real y0,
+	real x1,
+	real y1,
+	long font_index,
+	real height)
+{
+	switch (royale_player_reclaimer(player_index))
+	{
+	case ROYALE_RECLAIMER_WON:
+		report_text(report, x0, y0, x1, y1, L"WON", font_index, 1, height, CARNAGE_GOLD);
+		break;
+	case ROYALE_RECLAIMER_LOST:
+		report_text(report, x0, y0, x1, y1, L"LOST", font_index, 1, height, CARNAGE_HEADING);
+		break;
+	default:
+		break;
+	}
+}
+
 static void cinema_draw_report(
 	long player_index)
 {
@@ -956,6 +980,8 @@ static void cinema_draw_report(
 	report_text(&report, column_place, top, column_a, top + 18, L"#", small, 0, 8.0f, CARNAGE_HEADING);
 	report_text(&report, column_a, top, column_a_kills, top + 18, L"PLAYER", small, 0, 8.0f, CARNAGE_HEADING);
 	report_text(&report, column_a, top, column_a_kills, top + 18, L"KILLS", small, 1, 8.0f, CARNAGE_HEADING);
+	report_text(&report, column_a, top, column_a_kills - 44, top + 18, L"RECLAIMER", small, 1, 8.0f, CARNAGE_HEADING);
+	report_text(&report, column_b, top, column_b_kills - 44, top + 18, L"RECLAIMER", small, 1, 8.0f, CARNAGE_HEADING);
 	report_text(&report, column_b, top, column_b_kills, top + 18, L"PLAYER", small, 0, 8.0f, CARNAGE_HEADING);
 	report_text(&report, column_b, top, column_b_kills, top + 18, L"KILLS", small, 1, 8.0f, CARNAGE_HEADING);
 	report_text(&report, column_b_kills, top, column_total, top + 18, L"SQUAD KILLS", small, 1, 8.0f, CARNAGE_HEADING);
@@ -979,6 +1005,7 @@ static void cinema_draw_report(
 			squad == winners ? CARNAGE_GOLD : mine ? CARNAGE_TEXT_LIT : CARNAGE_INFO);
 		cinema_name(a, name, 16);
 		report_text(&report, column_a, top, column_a_kills, top + row_height, name, small, 0, text_height, rgb);
+		cinema_reclaimer(&report, a, column_a, top, column_a_kills - 44, top + row_height, small, text_height);
 		usnprintf(text, NUMBEROF(text) - 1, L"%d", kills_a);
 		text[NUMBEROF(text) - 1] = 0;
 		report_text(&report, column_a, top, column_a_kills, top + row_height, text, small, 1, text_height, rgb);
@@ -986,6 +1013,7 @@ static void cinema_draw_report(
 		{
 			cinema_name(b, name, 16);
 			report_text(&report, column_b, top, column_b_kills, top + row_height, name, small, 0, text_height, rgb);
+			cinema_reclaimer(&report, b, column_b, top, column_b_kills - 44, top + row_height, small, text_height);
 			usnprintf(text, NUMBEROF(text) - 1, L"%d", kills_b);
 			text[NUMBEROF(text) - 1] = 0;
 			report_text(&report, column_b, top, column_b_kills, top + row_height, text, small, 1, text_height, rgb);
