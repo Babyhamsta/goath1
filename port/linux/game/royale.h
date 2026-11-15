@@ -104,6 +104,18 @@ real royale_revive_progress(long player_index);
 /* the player watched by a spectating one, NONE if none */
 long royale_spectate_target(long player_index);
 
+/* how a player's gulag (the Reclaimer) ended: the host's rules, sent to every
+machine with the state */
+enum royale_reclaimer_result
+{
+	ROYALE_RECLAIMER_NONE = 0, /* never in the gulag, or still in it */
+	ROYALE_RECLAIMER_WON, /* won it (or by default) and redeployed */
+	ROYALE_RECLAIMER_LOST, /* lost the fight, the time up, or left the game from it */
+	NUMBER_OF_ROYALE_RECLAIMER_RESULTS
+};
+
+enum royale_reclaimer_result royale_player_reclaimer(long player_index);
+
 /* ---- placement and kills (the results screen) */
 
 /* a squad's place: 1 for the winner, 0 while still alive */
