@@ -46,13 +46,10 @@ boolean hud_render_nav_point_colored(short local_player_index, real_point3d cons
 	short waypoint_type, real_rgb_color const *color, real alpha, real_point2d *drawn_position, real *half_height,
 	short *drawn_type);
 void draw_quad(rectangle2d *rectangle, pixel32 color);
-void platform_log(char const *format, ...); /* TEMP-P3 */
 
 /* ---- the HUD's own types (hud_draw.c's; each HUD file keeps a copy) */
 
 #define ROYALE_HUD_NUMBER_TAG 'hud#'
-/* interface.c's blend for its bitmaps (interface_draw_bitmap's) */
-#define ROYALE_HUD_BLEND_ALPHA_MULTIPLY_ADD 7
 
 struct royale_hud_number_element
 {
@@ -480,20 +477,19 @@ static void royale_hud_draw_mate_triangle(
 		(MIN(render.frustum.z_far, rasterizer_globals.far_clip_distance) - render.frustum.z_near);
 	fade = PIN(depth_factor, 0.075f, 1.0f);
 	clip.x0 = 0.0f;
-	clip.x1 = (real)bitmap->width;
-	clip.y0 = (1.0f - fade) * 0.5f * bitmap->height;
-	clip.y1 = (real)bitmap->height;
+	clip.x1 = 1.0f;
+	clip.y0 = (1.0f - fade) * 0.5f;
+	clip.y1 = 1.0f;
+	/* (downed: flashing, on and off, as the timer's time-up) */
+	color = 0xFFFFFFFF;
 	if (downed)
 	{
-		/* (the timer's time-up flash: red, on and off) */
 		real_argb_color red = royale_hud_flash_color(royale_hud_timer_colors(TRUE), TRUE, 0);
 
 		color = real_argb_color_to_pixel32(&red);
 	}
-	else
-		color = 0xFFFFFFFF;
-	interface_draw_bitmap_modulated_p32(bitmap, &position, &clip, mcc_hud_bitmap_scale(bitmap_group), 0.0f, color,
-		ROYALE_HUD_BLEND_ALPHA_MULTIPLY_ADD);
+	if (!downed || (game_time_get() / (TICKS_PER_SECOND / 4)) % 2 == 0)
+		interface_draw_bitmap(bitmap, &position, &clip, mcc_hud_bitmap_scale(bitmap_group), 0.0f, 1.0f);
 	/* (their name over it, as hud.c draws an ally's: the HUD's text colour,
 	fading to 0.4 from 15 to 75 world units; DOWNED in the alarm's red) */
 	{
@@ -539,17 +535,6 @@ static void royale_hud_draw_mate(
 	real_point3d camera;
 	real distance;
 
-	{ /* TEMP-P3 */
-		static long logged;
-		if (game_time_get() - logged > 120)
-		{
-			struct player_datum *mp = mate != NONE ? player_try_and_get(mate) : NULL;
-			logged = game_time_get();
-			platform_log("p3hud: me %lx mate %lx unit %lx/%lx state %d nav %d", (unsigned long)player_index,
-				(unsigned long)mate, mp ? (unsigned long)mp->unit_index : 0xffffffffUL, (unsigned long)unit_index,
-				(int)royale_player_state(mate), (int)royale_hud_nav_index());
-		}
-	}
 	if (unit_index == NONE)
 		return;
 	downed = royale_player_state(mate) == ROYALE_PLAYER_DOWNED;
@@ -810,7 +795,7 @@ static void royale_hud_draw_beam(
 		label = royale_hud_text_color(0.9f);
 		royale_hud_text(&bounds, 2, L"BEAM MOVES IN", &label);
 		/* (M:SS centered: the minute left of the colon, the seconds right) */
-		royale_hud_number_at(local_player_index, (short)(center_x - digit / 2), top_y, (short)MIN(left / 60, 9), 1,
+		royale_hud_number_at(local_player_index, (short)(center_x + digit / 2), top_y, (short)MIN(left / 60, 9), 1,
 			colors, flash, 0, ROYALE_HUD_TIMER_SCALE);
 		royale_hud_number_at(local_player_index, (short)(center_x + digit / 2 + 2 * digit), top_y, (short)(left % 60),
 			2, colors, flash, 0, ROYALE_HUD_TIMER_SCALE);
