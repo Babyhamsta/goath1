@@ -59,8 +59,8 @@ void draw_quad(rectangle2d const *bounds, pixel32 color);
 /* the ship: its length a share of the front's, its height over the play
 area's top, how far over the glassed side of the front it hangs */
 #define ROYALE_FX_SHIP_LENGTH_SHARE 0.9f
-#define ROYALE_FX_SHIP_HEIGHT 90.0f
-#define ROYALE_FX_SHIP_BEHIND 140.0f
+#define ROYALE_FX_SHIP_HEIGHT (-30.0f)
+#define ROYALE_FX_SHIP_BEHIND 180.0f
 
 /* the orange sky and the shake: from this far ahead of the front (world
 units), full at it */
