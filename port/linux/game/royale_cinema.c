@@ -912,6 +912,16 @@ static void report_place(
 	text[count - 1] = 0;
 }
 
+/* a player's kills as the game's own report counts them (its statistics:
+the Reclaimer's too), so the two reports agree */
+static short cinema_kills(
+	long player_index)
+{
+	struct player_datum *player = player_index != NONE ? player_try_and_get(player_index) : NULL;
+
+	return player ? (short)player->statistics.kills[0] : 0;
+}
+
 /* a player's Reclaimer (the gulag): WON, LOST, or nothing */
 static void cinema_reclaimer(
 	struct cinema_report const *report,
@@ -1084,8 +1094,8 @@ static void cinema_draw_report(
 		unsigned long rgb = mine ? CARNAGE_TEXT_LIT : CARNAGE_TEXT;
 		long a = royale_squad_member(squad, 0);
 		long b = royale_squad_member(squad, 1);
-		short kills_a = royale_player_kills(a);
-		short kills_b = b != NONE ? royale_player_kills(b) : 0;
+		short kills_a = cinema_kills(a);
+		short kills_b = cinema_kills(b);
 
 		if (mine)
 			report_box(&report, column_place - 6, top + 1, column_total + 6, top + row_height - 1, CARNAGE_ROW_LIT,
