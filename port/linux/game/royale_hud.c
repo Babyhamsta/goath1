@@ -46,6 +46,7 @@ boolean hud_render_nav_point_colored(short local_player_index, real_point3d cons
 	short waypoint_type, real_rgb_color const *color, real alpha, real_point2d *drawn_position, real *half_height,
 	short *drawn_type);
 void draw_quad(rectangle2d *rectangle, pixel32 color);
+void platform_log(char const *format, ...); /* TEMP-P3 */
 
 /* ---- the HUD's own types (hud_draw.c's; each HUD file keeps a copy) */
 
@@ -92,6 +93,9 @@ enum
 #define ROYALE_HUD_MATE_MARKER_SCALE 1.0f
 /* the beam's warning: this long before the ground under the player glasses */
 #define ROYALE_HUD_BEAM_WARNING_SECONDS 20.0f
+/* the digits' sizes: the counts', the timer's (the campaign's is 2) */
+#define ROYALE_HUD_COUNT_SCALE 1.5f
+#define ROYALE_HUD_TIMER_SCALE 2.0f
 /* the countdown flashes under this */
 #define ROYALE_HUD_BEAM_FLASH_SECONDS 10
 
@@ -273,7 +277,8 @@ static void royale_hud_number(
 	byte flags,
 	struct hud_color_definition const *colors,
 	boolean flash,
-	long since)
+	long since,
+	real scale)
 {
 	struct hud_absolute_placement_definition placement;
 	struct royale_hud_number_element number;
@@ -289,7 +294,27 @@ static void royale_hud_number(
 	number.digits = digits;
 	number.number_flags = flags;
 	hud_draw_numbers(local_player_index, &placement, (struct number_hud_element_definition const *)&number, value,
-		NONE, flash ? FLAG(_hud_draw_flashing_bit) : 0, since, 0.0f);
+		NONE, flash ? FLAG(_hud_draw_flashing_bit) : 0, since, scale);
+}
+
+/* the same with its right edge at x and its top at y, in the view's
+coordinates (the top right anchor's: the digits go leftward from it) */
+static void royale_hud_number_at(
+	short local_player_index,
+	short right,
+	short top,
+	short value,
+	char digits,
+	struct hud_color_definition const *colors,
+	boolean flash,
+	long since,
+	real scale)
+{
+	short window_right = (short)(render.camera.window_bounds.x1 - render.camera.viewport_bounds.x0);
+	short window_top = (short)(render.camera.window_bounds.y0 - render.camera.viewport_bounds.y0);
+
+	royale_hud_number(local_player_index, _hud_anchor_top_right, (short)(window_right - right),
+		(short)(top - window_top), value, digits, ROYALE_HUD_NUMBER_LEADING_ZEROS, colors, flash, since, scale);
 }
 
 /* where an anchor's offset lands in the view (as hud_draw_numbers places it) */
@@ -381,17 +406,18 @@ static void royale_hud_draw_counts(
 	{
 		/* (from the bottom: kills lowest, squads on top; the match clock's
 		row under them stays free) */
-		short y = (short)(34 + (2 - row) * (MAX(digit_height, line) + 4));
+		short y = (short)(22 + (2 - row) * (MAX((short)(digit_height * ROYALE_HUD_COUNT_SCALE), line) + 4));
 		short x = 12;
 		point2d right;
 		rectangle2d bounds;
 
 		royale_hud_number(local_player_index, _hud_anchor_bottom_right, x, y, values[row], 2,
-			ROYALE_HUD_NUMBER_LEADING_ZEROS, colors, FALSE, 0);
+			ROYALE_HUD_NUMBER_LEADING_ZEROS, colors, FALSE, 0, ROYALE_HUD_COUNT_SCALE);
 		right = royale_hud_point(local_player_index, _hud_anchor_bottom_right, x, y);
-		bounds.x1 = (short)(right.x - 3 * digit_width - 4);
+		bounds.x1 = (short)(right.x - 2 * digit_width * ROYALE_HUD_COUNT_SCALE - 6);
 		bounds.x0 = (short)(bounds.x1 - 160);
-		bounds.y0 = (short)(right.y - digit_height + (digit_height - line) / 2);
+		bounds.y0 = (short)(right.y - digit_height * ROYALE_HUD_COUNT_SCALE +
+			(digit_height * ROYALE_HUD_COUNT_SCALE - line) / 2);
 		bounds.y1 = (short)(bounds.y0 + line);
 		/* (right justified: 1) */
 		royale_hud_text(&bounds, 1, labels[row], &label);
@@ -513,6 +539,17 @@ static void royale_hud_draw_mate(
 	real_point3d camera;
 	real distance;
 
+	{ /* TEMP-P3 */
+		static long logged;
+		if (game_time_get() - logged > 120)
+		{
+			struct player_datum *mp = mate != NONE ? player_try_and_get(mate) : NULL;
+			logged = game_time_get();
+			platform_log("p3hud: me %lx mate %lx unit %lx/%lx state %d nav %d", (unsigned long)player_index,
+				(unsigned long)mate, mp ? (unsigned long)mp->unit_index : 0xffffffffUL, (unsigned long)unit_index,
+				(int)royale_player_state(mate), (int)royale_hud_nav_index());
+		}
+	}
 	if (unit_index == NONE)
 		return;
 	downed = royale_player_state(mate) == ROYALE_PLAYER_DOWNED;
@@ -653,11 +690,11 @@ static void royale_hud_draw_state(
 
 			royale_hud_digit_size(&digit_width, &digit_height);
 			royale_hud_text(&bounds, 2, L"DOWNED  -  HOLD ON FOR A REVIVE", &red);
-			royale_hud_number(local_player_index, _hud_anchor_center, digit_width,
-				(short)(top - (window.y0 + window.y1) / 2 + line + 6), seconds, 2, ROYALE_HUD_NUMBER_LEADING_ZEROS,
+			royale_hud_number_at(local_player_index, (short)(middle_x + digit_width * ROYALE_HUD_TIMER_SCALE),
+				(short)(top + line + 4), seconds, 2,
 				royale_hud_timer_colors(seconds <= ROYALE_HUD_BEAM_FLASH_SECONDS), seconds <= ROYALE_HUD_BEAM_FLASH_SECONDS,
-				0);
-			bar.y0 = (short)(bar.y0 + digit_height + 6);
+				0, ROYALE_HUD_TIMER_SCALE);
+			bar.y0 = (short)(bar.y0 + digit_height * ROYALE_HUD_TIMER_SCALE + 6);
 			bar.y1 = (short)(bar.y0 + 3);
 			royale_hud_bar(&bar, bleed > 0 ? (real)left / (real)bleed : 0.0f, &red);
 		}
@@ -764,24 +801,23 @@ static void royale_hud_draw_beam(
 		long left = (beam.ticks_to_move + (long)beam.ticks_per_second - 1) / (long)MAX(1.0f, beam.ticks_per_second);
 		boolean flash = left <= ROYALE_HUD_BEAM_FLASH_SECONDS;
 		struct hud_color_definition const *colors = royale_hud_timer_colors(flash);
-		short center_offset = (short)(top_y - (window.y0 + window.y1) / 2);
+		short center_x = (short)((window.x0 + window.x1) / 2);
+		short digit = (short)(digit_width * ROYALE_HUD_TIMER_SCALE);
 		wchar_t colon_text[2] = { L':', 0 };
 		real_argb_color colon_color;
-		point2d colon_at;
 		rectangle2d colon;
 
 		label = royale_hud_text_color(0.9f);
 		royale_hud_text(&bounds, 2, L"BEAM MOVES IN", &label);
-		royale_hud_number(local_player_index, _hud_anchor_center, (short)(-digit_width), center_offset,
-			(short)MIN(left / 60, 9), 1, ROYALE_HUD_NUMBER_LEADING_ZEROS, colors, flash, 0);
-		royale_hud_number(local_player_index, _hud_anchor_center, (short)(digit_width * 3 / 2), center_offset,
-			(short)(left % 60), 2, ROYALE_HUD_NUMBER_LEADING_ZEROS, colors, flash, 0);
-		/* (the colon between, in the digits' colour) */
-		colon_at = royale_hud_point(local_player_index, _hud_anchor_center, 0, center_offset);
+		/* (M:SS centered: the minute left of the colon, the seconds right) */
+		royale_hud_number_at(local_player_index, (short)(center_x - digit / 2), top_y, (short)MIN(left / 60, 9), 1,
+			colors, flash, 0, ROYALE_HUD_TIMER_SCALE);
+		royale_hud_number_at(local_player_index, (short)(center_x + digit / 2 + 2 * digit), top_y, (short)(left % 60),
+			2, colors, flash, 0, ROYALE_HUD_TIMER_SCALE);
 		colon_color = royale_hud_flash_color(colors, flash, 0);
-		colon.x0 = (short)(colon_at.x - 20);
-		colon.x1 = (short)(colon_at.x + 20);
-		colon.y0 = (short)(colon_at.y - line / 2);
+		colon.x0 = (short)(center_x - 20);
+		colon.x1 = (short)(center_x + 20);
+		colon.y0 = (short)(top_y + (digit_height * ROYALE_HUD_TIMER_SCALE - line) / 2);
 		colon.y1 = (short)(colon.y0 + line);
 		royale_hud_text(&colon, 2, colon_text, &colon_color);
 	}
@@ -806,7 +842,7 @@ static void royale_hud_draw_beam(
 		short drawn_type;
 		real_point3d head;
 
-		warning_bounds.y0 = (short)(top_y + digit_height + 4);
+		warning_bounds.y0 = (short)(top_y + digit_height * ROYALE_HUD_TIMER_SCALE + 4);
 		warning_bounds.y1 = (short)(warning_bounds.y0 + line);
 		royale_hud_text(&warning_bounds, 2, inside ? L"WARNING: YOU ARE BEING GLASSED" :
 			L"WARNING: GLASSING BEAM  -  MOVE", &alarm);
