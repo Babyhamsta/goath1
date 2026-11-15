@@ -32,6 +32,14 @@ static struct royale_gulag_event step(void)
 	return event;
 }
 
+/* the host's players by absolute index; a client may not know one yet */
+static long unknown_slot = -1;
+
+static long player_of_slot(long slot)
+{
+	return slot == unknown_slot ? NONE : P(slot);
+}
+
 static void enter(long player)
 {
 	CHECK(royale_gulag_queue_enter(&queue, player, TRUE), "player %ld kept out of an open gulag", player & 0xFFFF);
@@ -139,6 +147,56 @@ int main(int argc, char **argv)
 		event = step();
 		CHECK(event.type == ROYALE_GULAG_EVENT_FIGHT && event.player[0] == P(3) && event.player[1] == P(5),
 			"the fight after a leave is not the next two");
+		return 0;
+	}
+	/* every player the port allows goes in (absolute indices to 127) */
+	CASE("every-player")
+	{
+		enter(P(127));
+		enter(P(100));
+		enter(P(64));
+		CHECK(!royale_gulag_queue_enter(&queue, P(128), TRUE), "an index past the players went in");
+		event = step();
+		CHECK(event.type == ROYALE_GULAG_EVENT_FIGHT && event.player[0] == P(127) && event.player[1] == P(100),
+			"the high players' fight (%d)", event.type);
+		CHECK(royale_gulag_queue_place(&queue, P(64)) == 0, "player 64 not in line");
+		return 0;
+	}
+
+	/* the host's line on the wire: a client reads the same line and fight,
+	the fight's start as a match time */
+	CASE("network")
+	{
+		static byte buffer[512];
+		struct royale_gulag_queue read;
+		long fight_start = -5;
+		long size;
+
+		enter(P(3));
+		enter(P(1));
+		enter(P(120));
+		enter(P(9));
+		event = step();
+		for (tick = 0; tick < 40; tick++)
+			step();
+		size = royale_gulag_queue_write(&queue, 1000, buffer, sizeof(buffer));
+		CHECK(size == 3 + 2 + 4, "the line takes %ld bytes", size);
+		CHECK(royale_gulag_queue_write(&queue, 1000, buffer, size - 1) == 0, "written past its room");
+		CHECK(royale_gulag_queue_read(buffer, size, player_of_slot, &read, &fight_start) == size, "not read");
+		CHECK(read.fighter[0] == P(3) && read.fighter[1] == P(1), "the fight read as %ld %ld", read.fighter[0] & 0xFFFF,
+			read.fighter[1] & 0xFFFF);
+		CHECK(read.waiting_count == 2 && read.waiting[0] == P(120) && read.waiting[1] == P(9), "the line read otherwise");
+		CHECK(fight_start == 1000 - queue.fight_ticks, "the fight began at %ld, not %ld", fight_start,
+			1000 - queue.fight_ticks);
+		CHECK(royale_gulag_queue_place(&read, P(9)) == 1 && royale_gulag_queue_opponent(&read, P(1)) == P(3),
+			"the client's HUD reads another line");
+		/* (one the client has not yet is left out; a slot past the players refused) */
+		unknown_slot = 120;
+		CHECK(royale_gulag_queue_read(buffer, size, player_of_slot, &read, &fight_start) == size &&
+			read.waiting_count == 1 && read.waiting[0] == P(9), "an unknown player kept in line");
+		buffer[1] = 200;
+		CHECK(royale_gulag_queue_read(buffer, size, player_of_slot, &read, &fight_start) == NONE,
+			"a player past the limit read");
 		return 0;
 	}
 	fprintf(stderr, "no case %s\n", case_name);

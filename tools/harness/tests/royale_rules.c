@@ -225,6 +225,199 @@ static void case_results(void)
 	CHECK(rules.phase == ROYALE_RULES_PHASE_OVER, "phase %d after the results", rules.phase);
 }
 
+/* the host's rule for a down, and the lethal hit it decides */
+static void case_downed_rule(void)
+{
+	static byte const mate_states[] = { ROYALE_RULES_ALIVE, ROYALE_RULES_FALLING, ROYALE_RULES_IN_PELICAN,
+		ROYALE_RULES_GULAG, ROYALE_RULES_DOWNED, ROYALE_RULES_SPECTATING, ROYALE_RULES_ELIMINATED };
+	static boolean const downs[] = { TRUE, TRUE, TRUE, FALSE, FALSE, FALSE, FALSE };
+	long a = 0;
+	long mate;
+	unsigned index;
+
+	start(6, 3);
+	mate = royale_rules_squadmate(&rules, a);
+	for (index = 0; index < sizeof(mate_states); index++)
+	{
+		struct royale_rules copy;
+
+		rules.slots[mate].state = mate_states[index];
+		copy = rules;
+		CHECK(royale_rules_can_be_downed(&rules, a) == downs[index], "squadmate in state %d: downed %d",
+			mate_states[index], royale_rules_can_be_downed(&rules, a));
+		CHECK(royale_rules_lethal(&copy, &settings, a, enemy_of(a)) == downs[index],
+			"the lethal hit disagrees with the rule (squadmate in state %d)", mate_states[index]);
+	}
+}
+
+/* the lanes move only what they may: a landing never stands the downed nor
+brings back one out */
+static void case_lane_states(void)
+{
+	long a = 0;
+	long other;
+
+	start(6, 3);
+	other = enemy_of(a);
+	CHECK(royale_rules_lethal(&rules, &settings, a, other), "not downed");
+	royale_rules_set_state(&rules, &settings, a, ROYALE_RULES_ALIVE);
+	CHECK(rules.slots[a].state == ROYALE_RULES_DOWNED, "a lane stood a downed slot: state %d", rules.slots[a].state);
+	royale_rules_set_state(&rules, &settings, a, ROYALE_RULES_FALLING);
+	CHECK(rules.slots[a].state == ROYALE_RULES_DOWNED, "a lane made a downed slot fall: state %d", rules.slots[a].state);
+	royale_rules_set_state(&rules, &settings, a, ROYALE_RULES_ELIMINATED);
+	CHECK(rules.slots[a].state == ROYALE_RULES_SPECTATING, "state %d once out", rules.slots[a].state);
+	royale_rules_set_state(&rules, &settings, a, ROYALE_RULES_ALIVE);
+	CHECK(rules.slots[a].state == ROYALE_RULES_SPECTATING, "a lane brought one out back: state %d",
+		rules.slots[a].state);
+	/* (the falling land) */
+	royale_rules_set_state(&rules, &settings, other, ROYALE_RULES_FALLING);
+	royale_rules_set_state(&rules, &settings, other, ROYALE_RULES_ALIVE);
+	CHECK(rules.slots[other].state == ROYALE_RULES_ALIVE, "a landing did not stand: state %d", rules.slots[other].state);
+}
+
+/* a client's clock, advanced alone, keeps step with the host's */
+static void case_clock(void)
+{
+	struct royale_rules client;
+	long a = 0;
+	long mate;
+	long play;
+	long slot;
+	int index;
+
+	/* (two squads, the endgame's count: PLAY and ENDGAME on one tick) */
+	start(4, 3);
+	CHECK(rules.phase == ROYALE_RULES_PHASE_ENDGAME, "phase %d", rules.phase);
+	CHECK(rules.play_start != NONE && rules.play_start == rules.phase_start, "PLAY began %ld, ENDGAME %ld",
+		rules.play_start, rules.phase_start);
+
+	start(6, 3);
+	CHECK(rules.phase == ROYALE_RULES_PHASE_PLAY && rules.play_start == rules.phase_start, "phase %d", rules.phase);
+	play = rules.play_start;
+	mate = royale_rules_squadmate(&rules, a);
+	CHECK(royale_rules_lethal(&rules, &settings, a, enemy_of(a)), "not downed");
+	client = rules;
+	for (index = 0; index < 10; index++)
+	{
+		tick();
+		royale_rules_advance(&client, &settings);
+	}
+	CHECK(client.match_time == rules.match_time && client.phase_time == rules.phase_time,
+		"client at %ld/%ld, host at %ld/%ld", client.match_time, client.phase_time, rules.match_time, rules.phase_time);
+	CHECK(client.slots[a].downed_ticks == rules.slots[a].downed_ticks, "bleeding out: client %d host %d",
+		client.slots[a].downed_ticks, rules.slots[a].downed_ticks);
+	/* (a revive: the host's change, then each its own count) */
+	revivers[a] = mate;
+	tick();
+	royale_rules_take(&client, &rules, 0, 0, FALSE);
+	for (index = 0; index < (int)settings.revive_ticks - 2; index++)
+	{
+		tick();
+		royale_rules_advance(&client, &settings);
+	}
+	CHECK(client.slots[a].revive_ticks == rules.slots[a].revive_ticks &&
+		client.slots[a].downed_ticks == rules.slots[a].downed_ticks, "reviving: client %d/%d host %d/%d",
+		client.slots[a].revive_ticks, client.slots[a].downed_ticks, rules.slots[a].revive_ticks,
+		rules.slots[a].downed_ticks);
+	revivers[a] = NONE;
+	/* (later the endgame: PLAY's start stays) */
+	for (slot = 0; slot < ROYALE_RULES_MAXIMUM_SLOTS; slot++)
+	{
+		if (rules.slots[slot].squad != SLOT_NONE && rules.slots[slot].squad != rules.slots[a].squad &&
+			rules.slots[slot].squad == rules.slots[enemy_of(a)].squad)
+		{
+			royale_rules_died(&rules, &settings, slot, NONE, gulag);
+		}
+	}
+	CHECK(rules.phase == ROYALE_RULES_PHASE_ENDGAME, "phase %d", rules.phase);
+	CHECK(rules.play_start == play && rules.phase_start == rules.match_time, "PLAY began %ld (was %ld), ENDGAME %ld",
+		rules.play_start, play, rules.phase_start);
+}
+
+/* the network state: the discrete part still while only the clock goes on,
+read back whole, and a broken one refused */
+static void case_network(void)
+{
+	static byte first[4096];
+	static byte second[4096];
+	static byte clock[1024];
+	struct royale_rules read;
+	long size;
+	long again;
+	long clock_size;
+	long slot;
+	short squad;
+	int index;
+
+	start(6, 3);
+	CHECK(royale_rules_lethal(&rules, &settings, 0, enemy_of(0)), "not downed");
+	size = royale_rules_write_discrete(&rules, first, sizeof(first));
+	CHECK(size > 0 && size <= 13 + 6 * 6 + rules.squad_count, "the discrete part takes %ld bytes", size);
+	for (index = 0; index < 5; index++)
+		tick();
+	again = royale_rules_write_discrete(&rules, second, sizeof(second));
+	CHECK(again == size && !memcmp(first, second, (size_t)size), "the discrete part changed with the clock alone");
+	clock_size = royale_rules_write_clock(&rules, clock, sizeof(clock));
+	CHECK(clock_size == 4 + 4, "the clock takes %ld bytes with one downed", clock_size);
+	CHECK(royale_rules_write_discrete(&rules, second, size - 1) == 0, "written past its room");
+	CHECK(royale_rules_read_discrete(second, again, &read) == again, "the discrete part not read");
+	CHECK(royale_rules_read_clock(clock, clock_size, &read) == clock_size, "the clock not read");
+	CHECK(read.phase == rules.phase && read.squad_count == rules.squad_count &&
+		read.squads_alive == rules.squads_alive && read.winner == rules.winner && read.match_time == rules.match_time &&
+		read.phase_time == rules.phase_time && read.phase_start == rules.phase_start &&
+		read.play_start == rules.play_start, "the head read otherwise");
+	for (slot = 0; slot < ROYALE_RULES_MAXIMUM_SLOTS; slot++)
+	{
+		struct royale_rules_slot const *a = &read.slots[slot];
+		struct royale_rules_slot const *b = &rules.slots[slot];
+
+		CHECK(a->state == b->state && a->squad == b->squad && a->kills == b->kills && a->downed_by == b->downed_by &&
+			a->reviver == b->reviver && a->downed_ticks == b->downed_ticks && a->revive_ticks == b->revive_ticks,
+			"slot %ld read otherwise", slot);
+	}
+	for (squad = 0; squad < rules.squad_count; squad++)
+		CHECK(read.placement[squad] == rules.placement[squad], "squad %d placed otherwise", squad);
+	/* (refused: one short, a state that is none, a squad past the count) */
+	CHECK(royale_rules_read_discrete(second, again - 1, &read) == NONE, "a short state read");
+	second[13 + 1] = 9;
+	CHECK(royale_rules_read_discrete(second, again, &read) == NONE, "a state 9 read");
+	second[13 + 1] = ROYALE_RULES_ALIVE;
+	second[13 + 2] = (byte)rules.squad_count;
+	CHECK(royale_rules_read_discrete(second, again, &read) == NONE, "a squad past the count read");
+}
+
+/* a client takes the host's clock only when its own is off by more than the
+slack (the message's age added) */
+static void case_take(void)
+{
+	struct royale_rules host;
+	struct royale_rules client;
+	long a = 0;
+
+	start(6, 3);
+	CHECK(royale_rules_lethal(&rules, &settings, a, enemy_of(a)), "not downed");
+	host = rules;
+	client = rules;
+	client.match_time = host.match_time + 2;
+	royale_rules_take(&client, &host, 0, 4, FALSE);
+	CHECK(client.match_time == host.match_time + 2, "a clock within the slack put right: %ld", client.match_time);
+	client.match_time = host.match_time + 20;
+	royale_rules_take(&client, &host, 0, 4, FALSE);
+	CHECK(client.match_time == host.match_time, "a clock 20 ticks off kept: %ld", client.match_time);
+	royale_rules_take(&client, &host, 3, 4, TRUE);
+	CHECK(client.match_time == host.match_time + 3, "the first state's clock not taken: %ld", client.match_time);
+	CHECK(client.phase_time == client.match_time - client.phase_start, "the phase's time %ld", client.phase_time);
+	/* (a down's count: kept near, taken new) */
+	client.slots[a].downed_ticks = (short)(host.slots[a].downed_ticks - 3 - 2);
+	royale_rules_take(&client, &host, 3, 4, FALSE);
+	CHECK(client.slots[a].downed_ticks == host.slots[a].downed_ticks - 3 - 2, "a near bleed-out put right");
+	client.slots[a].state = ROYALE_RULES_ALIVE;
+	client.slots[a].downed_ticks = 0;
+	royale_rules_take(&client, &host, 3, 4, FALSE);
+	CHECK(client.slots[a].downed_ticks == host.slots[a].downed_ticks - 3, "a new down's bleed-out %d, the host's %d",
+		client.slots[a].downed_ticks, host.slots[a].downed_ticks);
+}
+
 int main(int argc, char **argv)
 {
 	char const *name = argc > 1 ? argv[1] : "";
@@ -239,6 +432,16 @@ int main(int argc, char **argv)
 		case_gulag();
 	else if (!strcmp(name, "results"))
 		case_results();
+	else if (!strcmp(name, "downed-rule"))
+		case_downed_rule();
+	else if (!strcmp(name, "lane-states"))
+		case_lane_states();
+	else if (!strcmp(name, "clock"))
+		case_clock();
+	else if (!strcmp(name, "network"))
+		case_network();
+	else if (!strcmp(name, "take"))
+		case_take();
 	else
 		return 2;
 	return 0;

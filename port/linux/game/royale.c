@@ -116,6 +116,16 @@ static struct
 	(royale_network_state_clock_size); a client's: the host's clock taken */
 	long clock_bytes;
 	boolean clock_taken;
+	/* every machine's: the states and phase last logged (royale_log_changes),
+	and a client's states taken and clocks put right */
+	byte logged_state[ROYALE_RULES_MAXIMUM_SLOTS];
+	byte logged_phase;
+	long states_taken;
+	long clock_corrections;
+	/* the hash of this machine's map config (royale_map_config_hash): the
+	host's goes in the state; a client's that differs is told once */
+	unsigned long config_hash;
+	boolean config_mismatch_told;
 } royale;
 
 /* (the rules, the gulag and the lanes by player slot: every player the
@@ -437,7 +447,12 @@ static boolean royale_initialize_for_new_map(
 	royale.results_logged = FALSE;
 	royale.clock_bytes = 0;
 	royale.clock_taken = FALSE;
+	csmemset(royale.logged_state, ROYALE_RULES_NONE, sizeof(royale.logged_state));
+	royale.logged_phase = ROYALE_RULES_PHASE_LOBBY;
+	royale.states_taken = 0;
+	royale.clock_corrections = 0;
 	royale.config_loaded = royale_map_config_load(royale_map_short_name(), &royale.config);
+	royale.config_hash = royale_map_config_hash(&royale.config);
 	platform_log("royale: map %s, config %s, insertion %s", royale_map_short_name(),
 		royale.config_loaded ? "loaded" : "none", royale.settings.skip_insertion ? "skipped" : "on");
 	/* (Royale ends by its own rules, never at Slayer's score) */
@@ -473,9 +488,13 @@ void royale_reset(
 	royale_rules_reset(&royale.rules);
 	csmemset(&royale.config, 0, sizeof(royale.config));
 	royale.config_loaded = FALSE;
+	royale.config_hash = 0;
+	royale.config_mismatch_told = FALSE;
 	royale.started = FALSE;
 	royale.results_logged = FALSE;
 	royale.test_end_ticks = 0;
+	royale.clock_bytes = 0;
+	royale.clock_taken = FALSE;
 	csmemset(royale.action_held, 0, sizeof(royale.action_held));
 	csmemset(royale.events, 0, sizeof(royale.events));
 	csmemset(royale.spawn_requested, 0, sizeof(royale.spawn_requested));
@@ -664,6 +683,30 @@ static void royale_downed_update(
 	}
 }
 
+/* every machine logs each phase and player state as it comes, alike, with
+the match time: a host's and a client's logs compare line by line */
+static void royale_log_changes(
+	void)
+{
+	long slot;
+
+	if (royale.logged_phase != royale.rules.phase)
+	{
+		platform_log("royale: phase %d -> %d at match tick %ld (play began %ld; %ld host states taken, %ld clock fixes)",
+			royale.logged_phase, royale.rules.phase, royale.rules.match_time, royale.rules.play_start,
+			royale.states_taken, royale.clock_corrections);
+		royale.logged_phase = royale.rules.phase;
+	}
+	for (slot = 0; slot < ROYALE_RULES_MAXIMUM_SLOTS; slot++)
+	{
+		if (royale.logged_state[slot] == royale.rules.slots[slot].state)
+			continue;
+		platform_log("royale: slot %ld state %d -> %d at match tick %ld", slot, royale.logged_state[slot],
+			royale.rules.slots[slot].state, royale.rules.match_time);
+		royale.logged_state[slot] = royale.rules.slots[slot].state;
+	}
+}
+
 static void royale_log_results(
 	void)
 {
@@ -674,6 +717,11 @@ static void royale_log_results(
 	royale.results_logged = TRUE;
 	platform_log("royale: results: squad %d wins after %ld ticks (%d squads)",
 		royale.rules.winner == 0xFF ? -1 : royale.rules.winner, royale.rules.match_time, royale.rules.squad_count);
+	if (network_game_distributed_client())
+	{
+		platform_log("royale: client took %ld host states, its clock put right %ld times", royale.states_taken,
+			royale.clock_corrections);
+	}
 	for (squad = 0; squad < royale.rules.squad_count; squad++)
 	{
 		long a = royale_squad_member(squad, 0);
@@ -698,6 +746,7 @@ static void royale_update(
 	else
 		royale_rules_advance(&royale.rules, &royale.settings);
 	royale_downed_update();
+	royale_log_changes();
 	royale_log_results();
 	/* (the lanes, on every machine, before the objects move) */
 	royale_map_tick();
@@ -891,6 +940,27 @@ state, and at least every few seconds (network_distributed.c). */
 is put right; nearer, it keeps its own steady count */
 #define ROYALE_CLOCK_SLACK_TICKS (TICKS_PER_SECOND / 4)
 
+/* (a client) the host's map config's hash against this machine's: the host's
+config rules (its bounds, beam and gulag are the game's: the host decides
+every death); a client whose own differs draws and predicts by a wrong one,
+which its player is told, once a game */
+static void royale_config_check(
+	unsigned long host_hash)
+{
+	short local_player_index;
+
+	if (host_hash == royale.config_hash || royale.config_mismatch_told)
+		return;
+	royale.config_mismatch_told = TRUE;
+	platform_log("royale: this machine's map config (%08lx) is not the host's (%08lx): the host's rules hold, "
+		"this machine's beam, bounds and gulag may show wrong", royale.config_hash, host_hash);
+	for (local_player_index = 0; local_player_index < MAXIMUM_NUMBER_OF_LOCAL_PLAYERS; local_player_index++)
+	{
+		if (local_player_get_player_index(local_player_index) != NONE)
+			hud_print_message(local_player_index, L"Your Royale map data differs from the host's: update the game.");
+	}
+}
+
 long royale_write_network_state(
 	byte *buffer,
 	long size)
@@ -922,6 +992,12 @@ long royale_write_network_state(
 	if (!gulag_size)
 		return 0;
 	cursor += gulag_size;
+	/* (the host's map config's hash: a client's own that differs is told,
+	royale_config_check) */
+	if (end - cursor < (long)sizeof(royale.config_hash))
+		return 0;
+	csmemcpy(cursor, &royale.config_hash, sizeof(royale.config_hash));
+	cursor += sizeof(royale.config_hash);
 	/* (more of the discrete part goes here: the clock stays last) */
 	clock_size = royale_rules_write_clock(&royale.rules, cursor, (long)(end - cursor));
 	if (!clock_size)
@@ -946,6 +1022,7 @@ boolean royale_read_network_state(
 	long slayer_size;
 	long read;
 	struct royale_rules rules;
+	unsigned long host_config_hash;
 	byte const *cursor;
 	byte const *end = buffer + size;
 
@@ -963,6 +1040,10 @@ boolean royale_read_network_state(
 	if (read == NONE)
 		return FALSE;
 	cursor += read;
+	if (end - cursor < (long)sizeof(host_config_hash))
+		return FALSE;
+	csmemcpy(&host_config_hash, cursor, sizeof(host_config_hash));
+	cursor += sizeof(host_config_hash);
 	read = royale_rules_read_clock(cursor, (long)(end - cursor), &rules);
 	if (read == NONE || cursor + read != end)
 		return FALSE;
@@ -970,10 +1051,22 @@ boolean royale_read_network_state(
 		return FALSE;
 	/* (the host's clock was its own when it sent this, half a round trip
 	ago) */
-	royale_rules_take(&royale.rules, &rules, (long)(distributed_own_round_trip_ticks() / 2.0f + 0.5f),
-		ROYALE_CLOCK_SLACK_TICKS, first || !royale.clock_taken);
+	{
+		long before = royale.rules.match_time;
+		long ahead = (long)(distributed_own_round_trip_ticks() / 2.0f + 0.5f);
+
+		royale_rules_take(&royale.rules, &rules, ahead, ROYALE_CLOCK_SLACK_TICKS, first || !royale.clock_taken);
+		royale.states_taken++;
+		if (royale.rules.match_time != before)
+		{
+			royale.clock_corrections++;
+			platform_log("royale: client clock %ld -> %ld (host's %ld, %ld ticks ago)", before, royale.rules.match_time,
+				rules.match_time, ahead);
+		}
+	}
 	royale.clock_taken = TRUE;
 	royale_gulag_take_network_state();
+	royale_config_check(host_config_hash);
 	return TRUE;
 }
 
@@ -1041,95 +1134,6 @@ void royale_hud_row(
 	*bottom = (short)(*top + line);
 }
 
-static void royale_bar(
-	rectangle2d const *box,
-	real progress,
-	pixel32 color)
-{
-	rectangle2d back = *box;
-	rectangle2d fill = *box;
-
-	draw_quad(&back, 0xA0000000);
-	fill.x1 = (short)(fill.x0 + (fill.x1 - fill.x0) * PIN(progress, 0.0f, 1.0f));
-	if (fill.x1 > fill.x0)
-		draw_quad(&fill, color);
-}
-
-static void royale_player_name(
-	long player_index,
-	wchar_t *name,
-	short count)
-{
-	struct player_datum *player = player_index != NONE ? player_try_and_get(player_index) : NULL;
-	short index;
-
-	for (index = 0; player && index < (short)NUMBEROF(player->name) && index < count - 1 && player->name[index];
-		index++)
-	{
-		name[index] = player->name[index];
-	}
-	name[index] = 0;
-	if (!index && count > 1)
-	{
-		name[0] = L'-';
-		name[1] = 0;
-	}
-}
-
-/* the squadmate's diamond over their head, and their name */
-static void royale_draw_squadmate(
-	long player_index)
-{
-	long mate = royale_squadmate_of(player_index);
-	long unit_index = royale_living_unit(mate);
-	real_point3d head;
-	real_point3d view;
-	real_point2d screen;
-	point2d whole;
-	rectangle2d box;
-	rectangle2d bounds;
-	wchar_t name[16];
-	wchar_t text[48];
-	boolean downed;
-	short size;
-	short reserved_top, reserved_bottom;
-
-	if (unit_index == NONE || royale_living_unit(player_index) == NONE)
-		return;
-	object_get_origin(unit_index, &head);
-	head.z += 0.9f;
-	matrix4x3_transform_point(&render.frustum.world_to_view, &head, &view);
-	if (!render_camera_view_to_screen(&render.camera, &render.frustum, &view, &screen))
-		return;
-	hud_draw_mark_begin(screen.x - render.camera.viewport_bounds.x0, screen.y - render.camera.viewport_bounds.y0,
-		&whole);
-	downed = royale_player_state(mate) == ROYALE_PLAYER_DOWNED;
-	size = 5;
-	box.x0 = (short)(whole.x - size);
-	box.x1 = (short)(whole.x + size);
-	box.y0 = (short)(whole.y - size);
-	box.y1 = (short)(whole.y + size);
-	draw_quad(&box, downed ? 0xE0FF4040 : 0xE040C0FF);
-	royale_player_name(mate, name, NUMBEROF(name));
-	usnprintf(text, NUMBEROF(text) - 1, downed ? L"%s  DOWNED" : L"%s", name);
-	text[NUMBEROF(text) - 1] = 0;
-	bounds.x0 = (short)(whole.x - 160);
-	bounds.x1 = (short)(whole.x + 160);
-	bounds.y1 = (short)(whole.y - size - 2);
-	bounds.y0 = (short)(bounds.y1 - royale_line_height());
-	/* (never over the HUD's rows at the top: under the diamond there, or
-	not at all) */
-	royale_hud_row(ROYALE_HUD_ROWS - 1, &reserved_top, &reserved_bottom);
-	if (bounds.y0 < reserved_bottom)
-	{
-		bounds.y0 = (short)(whole.y + size + 2);
-		bounds.y1 = (short)(bounds.y0 + royale_line_height());
-	}
-	if (bounds.y0 >= reserved_bottom)
-		royale_text(&bounds, 2, text, downed ? 1.0f : 0.5f, downed ? 0.4f : 0.85f, downed ? 0.4f : 1.0f, 1.0f);
-	hud_draw_mark_end();
-}
-
 /* the line at the top: the lobby's countdown, and DROP while this player is
 aboard or falling (once down, the squads left and the kills are the HUD's:
 royale_hud.c) */
@@ -1163,93 +1167,6 @@ static void royale_draw_banner(
 	royale_text(&bounds, 2, text, 1.0f, 0.85f, 0.4f, 1.0f);
 }
 
-/* downed (the bleed-out and a revive's progress), reviving, or out */
-static void royale_draw_state(
-	long player_index)
-{
-	rectangle2d window = royale_window();
-	short line = royale_line_height();
-	short middle_x = (short)((window.x0 + window.x1) / 2);
-	short top = (short)(window.y0 + (window.y1 - window.y0) * 6 / 10);
-	rectangle2d bounds;
-	rectangle2d bar;
-	wchar_t text[96];
-	wchar_t name[16];
-	long mate = royale_squadmate_of(player_index);
-
-	bounds.x0 = window.x0;
-	bounds.x1 = window.x1;
-	bounds.y0 = top;
-	bounds.y1 = (short)(top + line);
-	bar.x0 = (short)(middle_x - 80);
-	bar.x1 = (short)(middle_x + 80);
-	bar.y0 = (short)(top + line + 4);
-	bar.y1 = (short)(bar.y0 + 6);
-	switch (royale_player_state(player_index))
-	{
-	case ROYALE_PLAYER_DOWNED:
-	{
-		long left = royale_downed_ticks_left(player_index);
-		real progress = royale_revive_progress(player_index);
-
-		if (progress > 0.0f)
-		{
-			royale_text(&bounds, 2, L"BEING REVIVED", 0.5f, 1.0f, 0.5f, 1.0f);
-			royale_bar(&bar, progress, 0xFF60FF60);
-		}
-		else
-		{
-			usnprintf(text, NUMBEROF(text) - 1, L"DOWNED  -  BLEEDING OUT %ld", left / TICKS_PER_SECOND + 1);
-			text[NUMBEROF(text) - 1] = 0;
-			royale_text(&bounds, 2, text, 1.0f, 0.35f, 0.35f, 1.0f);
-			royale_bar(&bar, royale.settings.bleed_out_ticks > 0 ?
-				(real)left / (real)royale.settings.bleed_out_ticks : 0.0f, 0xFFFF5050);
-		}
-		break;
-	}
-	case ROYALE_PLAYER_ALIVE:
-		if (royale_player_state(mate) == ROYALE_PLAYER_DOWNED)
-		{
-			real progress = royale_revive_progress(mate);
-
-			royale_player_name(mate, name, NUMBEROF(name));
-			if (progress > 0.0f)
-				usnprintf(text, NUMBEROF(text) - 1, L"REVIVING %s", name);
-			else
-				usnprintf(text, NUMBEROF(text) - 1, L"%s IS DOWN  -  HOLD ACTION BESIDE THEM TO REVIVE", name);
-			text[NUMBEROF(text) - 1] = 0;
-			royale_text(&bounds, 2, text, 0.5f, 1.0f, 0.5f, 1.0f);
-			if (progress > 0.0f)
-				royale_bar(&bar, progress, 0xFF60FF60);
-		}
-		break;
-	case ROYALE_PLAYER_SPECTATING:
-		royale_player_name(mate, name, NUMBEROF(name));
-		usnprintf(text, NUMBEROF(text) - 1, L"ELIMINATED  -  WATCHING %s", name);
-		text[NUMBEROF(text) - 1] = 0;
-		royale_text(&bounds, 2, text, 1.0f, 0.85f, 0.4f, 1.0f);
-		break;
-	case ROYALE_PLAYER_ELIMINATED:
-	{
-		short squad = royale_squad_of(player_index);
-
-		if (squad != NONE && royale_squad_placement(squad))
-			usnprintf(text, NUMBEROF(text) - 1, L"ELIMINATED  -  YOUR SQUAD PLACED #%d", royale_squad_placement(squad));
-		else
-			usnprintf(text, NUMBEROF(text) - 1, L"ELIMINATED");
-		text[NUMBEROF(text) - 1] = 0;
-		royale_text(&bounds, 2, text, 1.0f, 0.85f, 0.4f, 1.0f);
-		break;
-	}
-	case ROYALE_PLAYER_NONE:
-		if (royale.rules.phase != ROYALE_RULES_PHASE_LOBBY)
-			royale_text(&bounds, 2, L"SPECTATING  -  THE NEXT ROYALE STARTS AFTER THIS ONE", 1.0f, 0.85f, 0.4f, 1.0f);
-		break;
-	default:
-		break;
-	}
-}
-
 void royale_draw(
 	short local_player_index)
 {
@@ -1274,9 +1191,9 @@ void royale_draw(
 		royale_gulag_draw();
 		return;
 	}
-	royale_draw_squadmate(player_index);
+	/* (the squadmate, the downed/out lines and the counts are the HUD's:
+	royale_hud.c) */
 	royale_draw_banner(player_index);
-	royale_draw_state(player_index);
 	royale_loot_draw();
 	royale_insertion_draw();
 	royale_beam_draw();
