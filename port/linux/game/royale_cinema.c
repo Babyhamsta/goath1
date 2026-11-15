@@ -24,9 +24,6 @@ every machine shows the same moment from its own copy of the game.
 #include "game/players.h"
 #include "interface/hud.h"
 #include "interface/hud_messaging.h"
-#include "interface/hud_definitions.h"
-#include "interface/ui_widget.h"
-#include "bitmaps/bitmap_group_lookup.h"
 #include "math/real_math.h"
 #include "objects/objects.h"
 #include "physics/collisions.h"
@@ -720,8 +717,8 @@ static void cinema_draw_victory(
 }
 
 /* the carnage report, as the game's own after a game (game_engine.c's
-carnage report): the hud globals' panel bitmap with its title, laid out in
-its 640 by 480 and scaled to the view, the game's line, the result's banner,
+carnage report): its panel and palette, laid out in its 640 by 480 and
+scaled to the view, the game's line, the result's banner,
 then a table of the squads by place: their players, each one's kills and
 the squad's. This player's squad's row lit, and shown last if below the
 rows */
@@ -852,8 +849,6 @@ static void cinema_draw_report(
 	wchar_t name[64];
 	short place;
 	short index;
-	struct bitmap_data *panel = hud_globals ?
-		bitmap_group_try_and_get_bitmap(hud_globals->carnage_report_bitmap.index, 0) : NULL;
 
 	/* (faded in after the orbit; at once when there was none) */
 	report.alpha = seconds >= 0.0f ? PIN(seconds / 0.5f, 0.0f, 1.0f) : 1.0f;
@@ -873,30 +868,14 @@ static void cinema_draw_report(
 	/* the world dimmed, then the panel */
 	cinema_quad((short)(window.x0 - 4000), (short)(window.y0 - 4000), (short)(window.x1 + 4000),
 		(short)(window.y1 + 4000), cinema_alpha(0xC0000000, report.alpha));
-	if (panel)
-	{
-		rectangle2d bounds;
-
-		bounds.x0 = report_x(&report, report.left - 24);
-		bounds.x1 = report_x(&report, report.right + 24);
-		bounds.y0 = report_y(&report, 0.0f);
-		bounds.y1 = report_y(&report, 480.0f);
-		if (report.right - report.left > 592)
-		{
-			draw_bitmap_widened_in_rect(panel, &bounds, (short)(640.0f * report.scale), (short)(40.0f * report.scale),
-				NULL, cinema_alpha(0xFFFFFFFF, report.alpha), NULL, TRUE);
-		}
-		else
-		{
-			rectangle2d source;
-
-			source.y0 = 0;
-			source.x0 = 0;
-			source.y1 = 480;
-			source.x1 = 640;
-			draw_bitmap_in_rect(panel, &bounds, &source, NULL, cinema_alpha(0xFFFFFFFF, report.alpha), NULL, TRUE);
-		}
-	}
+	/* the panel: its rules above and below, the title's band over the top
+	one (the game's report's look, in its palette) */
+	report_quad(&report, report.left - 24, 40, report.right + 24, 64, 0x60081A40);
+	report_quad(&report, report.left - 24, 64, report.right + 24, 410, 0xE0061433);
+	report_quad(&report, report.left - 24, 63, report.right + 24, 64.5f, CARNAGE_TABLE_EDGE);
+	report_quad(&report, report.left - 24, 409.5f, report.right + 24, 411, CARNAGE_TABLE_EDGE);
+	report_text(&report, report.left, 34, report.right, 62, L"ROYALE CARNAGE REPORT", large, 2, 24.0f,
+		CARNAGE_BLUE);
 	/* the game's line */
 	{
 		long match_seconds = royale_match_time() / TICKS_PER_SECOND;
