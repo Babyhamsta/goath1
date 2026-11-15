@@ -23,6 +23,10 @@ void royale_cinema_draw(short local_player_index);
 /* the cinema has this local player's screen now (the flyover, the orbit, the
 report): core draws no other Royale HUD */
 boolean royale_cinema_owns_screen(short local_player_index);
+/* (hud.c, interface.c, motion_sensor.c) the perspective the HUD draws for:
+neutral (no meters, crosshair or motion sensor) while the cinema has the
+screen, else the director's */
+short royale_cinema_hud_perspective(short local_player_index, short perspective);
 
 /* (director.c) the cinema wants this local player's camera now; the camera
 proc (a director_camera_update_proc) and its data's start (in the

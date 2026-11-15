@@ -19,6 +19,7 @@ every machine shows the same moment from its own copy of the game.
 */
 
 #include "cseries.h"
+#include "camera/director.h"
 #include "camera/observer.h"
 #include "cutscene/cinematics.h"
 #include "game/players.h"
@@ -178,7 +179,11 @@ static boolean cinema_bounds_valid(
 static enum cinema_mode cinema_mode_of(
 	short local_player_index)
 {
-	long player_index = local_player_get_player_index(local_player_index);
+	long player_index;
+
+	if (local_player_index < 0 || local_player_index >= MAXIMUM_LOCAL_PLAYERS)
+		return CINEMA_NONE;
+	player_index = local_player_get_player_index(local_player_index);
 
 	if (!royale_active() || player_index == NONE || cinematic_in_progress())
 		return CINEMA_NONE;
@@ -195,10 +200,11 @@ static enum cinema_mode cinema_mode_of(
 	{
 		real_point3d focus;
 
-		/* (the game's own scoreboard once the results are over: royale.c) */
+		/* (and once over, until the postgame: the report, in place of the
+		game's own scoreboard, game_engine.c) */
 		if (!royale_game_over() && cinema_phase_seconds() < CINEMA_ORBIT_SECONDS && cinema_winners_focus(&focus))
 			return CINEMA_ORBIT;
-		return royale_game_over() ? CINEMA_NONE : CINEMA_REPORT;
+		return CINEMA_REPORT;
 	}
 	default:
 		return CINEMA_NONE;
@@ -906,6 +912,16 @@ static void report_place(
 	text[count - 1] = 0;
 }
 
+/* a player's kills as the game's own report counts them (its statistics:
+the Reclaimer's too), so the two reports agree */
+static short cinema_kills(
+	long player_index)
+{
+	struct player_datum *player = player_index != NONE ? player_try_and_get(player_index) : NULL;
+
+	return player ? (short)player->statistics.kills[0] : 0;
+}
+
 /* a player's Reclaimer (the gulag): WON, LOST, or nothing */
 static void cinema_reclaimer(
 	struct cinema_report const *report,
@@ -957,8 +973,9 @@ static void cinema_draw_report(
 	short place;
 	short index;
 
-	/* (faded in after the orbit; at once when there was none) */
-	report.alpha = seconds >= 0.0f ? PIN(seconds / 0.5f, 0.0f, 1.0f) : 1.0f;
+	/* (faded in after the orbit; at once when there was none, or once
+	over) */
+	report.alpha = seconds >= 0.0f && !royale_game_over() ? PIN(seconds / 0.5f, 0.0f, 1.0f) : 1.0f;
 	report.scale = MIN(width / 640.0f, height / 480.0f);
 	report.x = window.x0 + 0.5f * (width - 640.0f * report.scale);
 	report.y = window.y0 + 0.5f * (height - 480.0f * report.scale);
@@ -1077,8 +1094,8 @@ static void cinema_draw_report(
 		unsigned long rgb = mine ? CARNAGE_TEXT_LIT : CARNAGE_TEXT;
 		long a = royale_squad_member(squad, 0);
 		long b = royale_squad_member(squad, 1);
-		short kills_a = royale_player_kills(a);
-		short kills_b = b != NONE ? royale_player_kills(b) : 0;
+		short kills_a = cinema_kills(a);
+		short kills_b = cinema_kills(b);
 
 		if (mine)
 			report_box(&report, column_place - 6, top + 1, column_total + 6, top + row_height - 1, CARNAGE_ROW_LIT,
@@ -1130,6 +1147,13 @@ void royale_cinema_reset(
 void royale_cinema_tick(
 	void)
 {
+}
+
+short royale_cinema_hud_perspective(
+	short local_player_index,
+	short perspective)
+{
+	return royale_cinema_owns_screen(local_player_index) ? (short)_director_perspective_neutral : perspective;
 }
 
 boolean royale_cinema_owns_screen(

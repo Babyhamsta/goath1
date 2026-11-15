@@ -815,6 +815,77 @@ static long royale_get_player_score(
 	return score;
 }
 
+/* the scoreboard's and the carnage report's score: the squad's kills, as
+their Kills column counts them (the game's statistics: the Reclaimer's
+too) */
+static wchar_t *royale_format_player_score(
+	long player_index,
+	wchar_t *text)
+{
+	struct player_datum *player = player_try_and_get(player_index);
+	long mate = royale_squadmate_of(player_index);
+	struct player_datum *mate_player = mate != NONE ? player_try_and_get(mate) : NULL;
+	long kills = (player ? player->statistics.kills[0] : 0) + (mate_player ? mate_player->statistics.kills[0] : 0);
+
+	usprintf(text, L"%ld", kills);
+	return text;
+}
+
+static wchar_t *royale_format_score_name(
+	wchar_t *text)
+{
+	usprintf(text, L"Squad kills");
+	return text;
+}
+
+/* (the game's "won" and "lost": the winning squad's players won, everyone
+else lost; NONE before there is a winner) */
+static long royale_did_player_win(
+	long player_index)
+{
+	short winners = royale_winning_squad();
+
+	if (winners == NONE)
+		return NONE;
+	return royale_squad_of(player_index) == winners ? TRUE : FALSE;
+}
+
+long royale_player_place(
+	long player_index)
+{
+	short squad = royale_squad_of(player_index);
+	short place = squad != NONE ? royale_squad_placement(squad) : 0;
+
+	return place > 0 ? (long)(place - 1) : NONE;
+}
+
+boolean royale_winners_label(
+	wchar_t *text,
+	short count)
+{
+	short squad = royale.rules.winner != 0xFF ? (short)royale.rules.winner : NONE;
+	wchar_t names[2][16];
+	short seat;
+
+	if (!royale_active() || squad == NONE || count < 2)
+		return FALSE;
+	for (seat = 0; seat < 2; seat++)
+	{
+		struct player_datum *player = player_try_and_get(royale_squad_member(squad, seat));
+		short index;
+
+		for (index = 0; player && index < (short)NUMBEROF(player->name) && index < 15 && player->name[index]; index++)
+			names[seat][index] = player->name[index];
+		names[seat][index] = 0;
+	}
+	if (names[1][0])
+		usnprintf(text, count - 1, L"%s & %s WIN", names[0], names[1]);
+	else
+		usnprintf(text, count - 1, L"%s WINS", names[0]);
+	text[count - 1] = 0;
+	return TRUE;
+}
+
 struct game_engine *royale_engine_get(
 	struct game_engine const *slayer)
 {
@@ -824,6 +895,9 @@ struct game_engine *royale_engine_get(
 	royale.engine.update = royale_update;
 	royale.engine.player_killed_player = royale_player_killed_player;
 	royale.engine.get_player_score = royale_get_player_score;
+	royale.engine.format_player_score = royale_format_player_score;
+	royale.engine.format_score_name = royale_format_score_name;
+	royale.engine.did_player_win = royale_did_player_win;
 	return &royale.engine;
 }
 
@@ -1192,9 +1266,6 @@ void royale_draw(
 	long player_index = local_player_get_player_index(local_player_index);
 
 	if (!royale_active() || player_index == NONE || cinematic_in_progress())
-		return;
-	/* (once over, the game's own end of game scoreboard alone) */
-	if (royale.rules.phase >= ROYALE_RULES_PHASE_OVER)
 		return;
 	/* (the flyover, the victory and the carnage report: the cinema's
 	alone, royale_cinema.c) */
