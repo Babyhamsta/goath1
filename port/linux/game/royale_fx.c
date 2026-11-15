@@ -658,6 +658,16 @@ static void royale_fx_render_ship(
 	real line_length, scale;
 	short node_index, function_index;
 
+	{
+		static long checked;
+
+		if (checked++ % 600 == 0)
+		{
+			platform_log("royale fx: ship check: model %08lX side %d front %.2f bounds %.0f..%.0f nodes %d",
+				(unsigned long)royale_fx.ship_model, royale_beam_side(), royale_beam_front(), royale_fx.bounds.minimum.x,
+				royale_fx.bounds.maximum.x, royale_fx.ship_model != NONE ? model_definition_get(royale_fx.ship_model)->nodes.count : -1);
+		}
+	}
 	if (royale_fx.ship_model == NONE || !royale_fx_front_line(&a, &b, &safe))
 		return;
 	model = model_definition_get(royale_fx.ship_model);
