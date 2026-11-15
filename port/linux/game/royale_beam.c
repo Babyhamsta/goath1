@@ -710,21 +710,12 @@ static void royale_beam_local_tick(
 	long blast_period = (long)(royale_beam.ticks_per_second * 0.6f);
 	boolean has_listener = royale_beam_local_listener(&listener);
 
-	/* the hum: started once the sweep is on, its volume by the distance */
-	if (royale_beam.hum != NONE)
+	/* the hum: started once the sweep is on (its loudness by the distance
+	is royale_fx.c's: the deep rumble, louder as the front nears) */
+	if (royale_beam.hum != NONE && !royale_beam.hum_playing)
 	{
-		if (!royale_beam.hum_playing)
-		{
-			scripted_looping_sound_start(royale_beam.hum, NONE, 1.0f);
-			royale_beam.hum_playing = TRUE;
-		}
-		if (has_listener)
-		{
-			real distance = fabsf(royale_beam_depth(&listener));
-			real scale = 1.0f - distance / 250.0f;
-
-			scripted_looping_sound_set_scale(royale_beam.hum, PIN(scale, 0.2f, 1.0f));
-		}
+		scripted_looping_sound_start(royale_beam.hum, NONE, 0.0f);
+		royale_beam.hum_playing = TRUE;
 	}
 	if (!has_listener || royale_beam.status.front <= 0.0f)
 		return;
