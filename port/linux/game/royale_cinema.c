@@ -65,7 +65,8 @@ enum cinema_mode
 	CINEMA_NONE = 0,
 	CINEMA_FLYOVER,
 	CINEMA_ORBIT,
-	CINEMA_REPORT
+	CINEMA_REPORT,
+	CINEMA_OVERVIEW /* (the camera's only) */
 };
 
 /* ---------- structures */
@@ -315,14 +316,92 @@ static void cinema_orbit_camera(
 		*forward = *global_forward3d;
 }
 
+/* whether a player with no unit has someone to watch (dead_spectate.c's
+choice): their squadmate, the gulag's fight they or their squadmate wait
+for, or once out, anyone still in the fight */
+static boolean cinema_anyone_to_watch(
+	long self)
+{
+	long mate = royale_squadmate_of(self);
+	enum royale_player_state state = royale_player_state(self);
+	struct data_iterator iterator;
+	struct player_datum *player;
+
+	if (royale_gulag_spectate_unit(self) != NONE || cinema_living_unit(mate) != NONE ||
+		(mate != NONE && royale_gulag_spectate_unit(mate) != NONE))
+	{
+		return TRUE;
+	}
+	if (state != ROYALE_PLAYER_ELIMINATED && state != ROYALE_PLAYER_NONE)
+		return FALSE;
+	data_iterator_new(&iterator, player_data);
+	while ((player = (struct player_datum *)data_iterator_next(&iterator)) != NULL)
+	{
+		enum royale_player_state other = royale_player_state(iterator.datum_index);
+
+		if (iterator.datum_index != self && cinema_living_unit(iterator.datum_index) != NONE &&
+			(other == ROYALE_PLAYER_ALIVE || other == ROYALE_PLAYER_DOWNED || other == ROYALE_PLAYER_FALLING))
+		{
+			return TRUE;
+		}
+	}
+	return FALSE;
+}
+
+/* the camera's mode: the flyover's, the orbit's, or for a player with no
+unit and no one to watch (the game's death camera would hang where the
+view last was, or over a body long gone: out of the level, nothing drawn)
+the island's overview */
+static enum cinema_mode cinema_camera_mode(
+	short local_player_index)
+{
+	enum cinema_mode mode = cinema_mode_of(local_player_index);
+	long player_index = local_player_get_player_index(local_player_index);
+	struct player_datum *player = player_index != NONE ? player_try_and_get(player_index) : NULL;
+
+	if (mode == CINEMA_FLYOVER || mode == CINEMA_ORBIT)
+		return mode;
+	if (!player || !royale_active() || cinematic_in_progress() || !cinema_bounds_valid() ||
+		royale_phase() < ROYALE_PHASE_PLAY || player->unit_index != NONE || cinema_anyone_to_watch(player_index))
+	{
+		return CINEMA_NONE;
+	}
+	return CINEMA_OVERVIEW;
+}
+
+/* the overview: a slow turn high over the island */
+static void cinema_overview_camera(
+	real seconds,
+	real_point3d *position,
+	real_vector3d *forward)
+{
+	struct royale_map_config const *config = cinema.config;
+	real center_x = 0.5f * (config->bounds.minimum.x + config->bounds.maximum.x);
+	real center_y = 0.5f * (config->bounds.minimum.y + config->bounds.maximum.y);
+	real half = 0.5f * MIN(config->bounds.maximum.x - config->bounds.minimum.x,
+		config->bounds.maximum.y - config->bounds.minimum.y);
+	real ground = config->bounds.minimum.z + 8.0f;
+	real top = config->drop_height > ground + 20.0f ? config->drop_height - 12.0f : ground + 38.0f;
+	real angle = (real)(royale_match_seed() % 360UL) * (_pi / 180.0f) + seconds * 0.05f;
+	real_point3d target;
+
+	position->x = center_x + cosf(angle) * half * 0.85f;
+	position->y = center_y + sinf(angle) * half * 0.85f;
+	position->z = top;
+	target.x = center_x;
+	target.y = center_y;
+	target.z = ground;
+	vector_from_points3d(position, &target, forward);
+	if (normalize3d(forward) <= 0.0001f)
+		*forward = *global_forward3d;
+}
+
 /* ---------- the camera (director.c) */
 
 boolean royale_cinema_camera_wanted(
 	short local_player_index)
 {
-	enum cinema_mode mode = cinema_mode_of(local_player_index);
-
-	return mode == CINEMA_FLYOVER || mode == CINEMA_ORBIT;
+	return cinema_camera_mode(local_player_index) != CINEMA_NONE;
 }
 
 void royale_cinema_camera_new(
@@ -344,14 +423,16 @@ void royale_cinema_camera_update(
 	struct cinema_camera *camera = (struct cinema_camera *)data;
 	struct cinema_controls const *controls = (struct cinema_controls const *)control_data;
 	struct observer_command *command = (struct observer_command *)result_data;
-	enum cinema_mode mode = cinema_mode_of(camera->local_player_index);
-	real phase_seconds = cinema_phase_seconds();
+	enum cinema_mode mode = cinema_camera_mode(camera->local_player_index);
+	/* (the overview's clock the match's, which runs on through the phases) */
+	real phase_seconds = mode == CINEMA_OVERVIEW ? (real)royale_match_time() / (real)TICKS_PER_SECOND :
+		cinema_phase_seconds();
 	real_point3d position;
 	real_vector3d forward;
 	real_vector3d up;
 	short parameter;
 
-	if (mode != CINEMA_FLYOVER && mode != CINEMA_ORBIT)
+	if (mode == CINEMA_NONE)
 		return;
 	/* (the clock runs with the frames, kept to the game's ticks) */
 	if (camera->mode != mode)
@@ -368,6 +449,8 @@ void royale_cinema_camera_update(
 	}
 	if (mode == CINEMA_FLYOVER)
 		cinema_flyover_camera(camera->clock, &position, &forward);
+	else if (mode == CINEMA_OVERVIEW)
+		cinema_overview_camera(camera->clock, &position, &forward);
 	else
 	{
 		real_point3d focus;
@@ -398,7 +481,7 @@ void royale_cinema_camera_update(
 	command->focus_position = position;
 	command->focus_offset = *global_zero_vector3d;
 	command->focus_distance = 0.0f;
-	command->field_of_view = DEGREES_TO_RADIANS(mode == CINEMA_FLYOVER ? 62.0f : 55.0f);
+	command->field_of_view = DEGREES_TO_RADIANS(mode == CINEMA_ORBIT ? 55.0f : 62.0f);
 	command->forward = forward;
 	command->up = up;
 	command->focus_velocity = *global_zero_vector3d;
@@ -823,6 +906,30 @@ static void report_place(
 	text[count - 1] = 0;
 }
 
+/* a player's Reclaimer (the gulag): WON, LOST, or nothing */
+static void cinema_reclaimer(
+	struct cinema_report const *report,
+	long player_index,
+	real x0,
+	real y0,
+	real x1,
+	real y1,
+	long font_index,
+	real height)
+{
+	switch (royale_player_reclaimer(player_index))
+	{
+	case ROYALE_RECLAIMER_WON:
+		report_text(report, x0, y0, x1, y1, L"WON", font_index, 1, height, CARNAGE_GOLD);
+		break;
+	case ROYALE_RECLAIMER_LOST:
+		report_text(report, x0, y0, x1, y1, L"LOST", font_index, 1, height, CARNAGE_HEADING);
+		break;
+	default:
+		break;
+	}
+}
+
 static void cinema_draw_report(
 	long player_index)
 {
@@ -956,6 +1063,8 @@ static void cinema_draw_report(
 	report_text(&report, column_place, top, column_a, top + 18, L"#", small, 0, 8.0f, CARNAGE_HEADING);
 	report_text(&report, column_a, top, column_a_kills, top + 18, L"PLAYER", small, 0, 8.0f, CARNAGE_HEADING);
 	report_text(&report, column_a, top, column_a_kills, top + 18, L"KILLS", small, 1, 8.0f, CARNAGE_HEADING);
+	report_text(&report, column_a, top, column_a_kills - 44, top + 18, L"RECLAIMER", small, 1, 8.0f, CARNAGE_HEADING);
+	report_text(&report, column_b, top, column_b_kills - 44, top + 18, L"RECLAIMER", small, 1, 8.0f, CARNAGE_HEADING);
 	report_text(&report, column_b, top, column_b_kills, top + 18, L"PLAYER", small, 0, 8.0f, CARNAGE_HEADING);
 	report_text(&report, column_b, top, column_b_kills, top + 18, L"KILLS", small, 1, 8.0f, CARNAGE_HEADING);
 	report_text(&report, column_b_kills, top, column_total, top + 18, L"SQUAD KILLS", small, 1, 8.0f, CARNAGE_HEADING);
@@ -979,6 +1088,7 @@ static void cinema_draw_report(
 			squad == winners ? CARNAGE_GOLD : mine ? CARNAGE_TEXT_LIT : CARNAGE_INFO);
 		cinema_name(a, name, 16);
 		report_text(&report, column_a, top, column_a_kills, top + row_height, name, small, 0, text_height, rgb);
+		cinema_reclaimer(&report, a, column_a, top, column_a_kills - 44, top + row_height, small, text_height);
 		usnprintf(text, NUMBEROF(text) - 1, L"%d", kills_a);
 		text[NUMBEROF(text) - 1] = 0;
 		report_text(&report, column_a, top, column_a_kills, top + row_height, text, small, 1, text_height, rgb);
@@ -986,6 +1096,7 @@ static void cinema_draw_report(
 		{
 			cinema_name(b, name, 16);
 			report_text(&report, column_b, top, column_b_kills, top + row_height, name, small, 0, text_height, rgb);
+			cinema_reclaimer(&report, b, column_b, top, column_b_kills - 44, top + row_height, small, text_height);
 			usnprintf(text, NUMBEROF(text) - 1, L"%d", kills_b);
 			text[NUMBEROF(text) - 1] = 0;
 			report_text(&report, column_b, top, column_b_kills, top + row_height, text, small, 1, text_height, rgb);
