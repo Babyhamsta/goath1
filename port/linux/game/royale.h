@@ -377,6 +377,12 @@ boolean royale_insertion_jump(long player_index);
 Pelicans): the game engine's remap leaves them as they are */
 boolean royale_insertion_creating(void);
 
+/* (the game's scoreboard and carnage report, game_engine.c) a player's
+place by their squad's, from 0 (the squads tie), NONE while their squad is
+still in the fight; the winners' line ("A & B WIN"), FALSE if none */
+long royale_player_place(long player_index);
+boolean royale_winners_label(wchar_t *text, short count);
+
 /* ---- core's hooks in the game (the game's code calls these) */
 
 #define ROYALE_DEFAULT_BLEED_OUT 30

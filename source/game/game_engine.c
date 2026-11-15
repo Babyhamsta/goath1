@@ -611,6 +611,7 @@ struct network_game *network_game_server_get_game(struct network_game_server *se
 #include "latency_meter.h" /* port: port/linux/game/latency_meter.c */
 #include "touch_postgame.h" /* port: port/linux/game/touch_postgame.c */
 #include "royale.h" /* port: port/linux/game/royale.c */
+#include "royale_cinema.h" /* port: port/linux/game/royale_cinema.c */
 
 /* network_game_globals.c's */
 boolean network_game_distributed_client(void);
@@ -1605,6 +1606,28 @@ long populate_statistic_buffer(
 		else
 		{
 			statistic_buffer[statistic_index].place = statistic_index;
+		}
+	}
+	/* port: Royale's places are its squads' (royale.c): squadmates tie, and
+	the next squad is the next place, as its own results say */
+	if (statistic == _postgame_statistic_ranking && royale_active())
+	{
+		for (statistic_index = 0; statistic_index < player_count; statistic_index++)
+		{
+			long place = royale_player_place(statistic_buffer[statistic_index].player_index);
+
+			if (place != NONE)
+				statistic_buffer[statistic_index].place = place;
+		}
+		for (statistic_index = 1; statistic_index < player_count; statistic_index++)
+		{
+			if ((statistic_buffer[statistic_index].place & 0x7FFFFFFF) ==
+				(statistic_buffer[statistic_index - 1].place & 0x7FFFFFFF) &&
+				royale_player_place(statistic_buffer[statistic_index].player_index) != NONE)
+			{
+				statistic_buffer[statistic_index - 1].place |= 0x80000000;
+				statistic_buffer[statistic_index].place |= 0x80000000;
+			}
 		}
 	}
 
@@ -4023,7 +4046,10 @@ static void carnage_report_banner(
 		box.x0 = left;
 		box.x1 = right;
 		carnage_report_box(&box, 0xF00A2456, 0xFF5AA9FF);
-		if (tie)
+		/* port: Royale's winners are a squad (royale.c) */
+		if (royale_winners_label(label, NUMBEROF(label)))
+			;
+		else if (tie)
 			usnprintf(label, NUMBEROF(label), L"TIED FOR FIRST");
 		else
 			usnprintf(label, NUMBEROF(label), L"%s WINS", name);
@@ -5393,7 +5419,9 @@ static void game_engine_post_rasterize_in_game(
 	if ((!gamepad ||
 		!gamepad->buttons[_gamepad_binary_button_back]) &&
 		!scoreboard_view_get(local_player_index)->pinned &&
-		(!game_engine || game_engine_globals.postgame_state != game_engine_mode_postgame_delay))
+		(!game_engine || game_engine_globals.postgame_state != game_engine_mode_postgame_delay ||
+			/* port: Royale shows its own carnage report then (royale_cinema.c) */
+			royale_active()))
 	{
 		/* a frame is no longer a tick (render_interpolation.c): fade in half
 		a second, not in 15 frames */
@@ -11122,7 +11150,9 @@ boolean game_engine_get_state_message(
 				message,
 				message_character_count);
 		}
-		else if (game_time_get() < 15 * TICKS_PER_SECOND)
+		/* port: (not over Royale's flyover, royale_cinema.c) */
+		else if (game_time_get() < 15 * TICKS_PER_SECOND &&
+			!royale_cinema_owns_screen(player->local_player_index))
 		{
 			result = multiplayer_message_internal(
 				player_index,

@@ -109,6 +109,7 @@ symbols in this file:
 #include "units/units.h"
 #include "units/vehicles.h"
 #include "royale_hud.h" /* port: port/linux/game/royale_hud.c */
+#include "royale_cinema.h" /* port: port/linux/game/royale_cinema.c */
 
 #ifdef HALO_VR
 /* port/linux/game/vr_death.c: as the player is back from the VR mode's
@@ -701,7 +702,8 @@ static void render_motion_sensor(
 	short history_index;
 
 	csmemset(stack_buffer, 0x62, sizeof(stack_buffer));
-	perspective = director_get_perspective(local_player_index);
+	perspective = (director_perspective)royale_cinema_hud_perspective(local_player_index,
+		(short)director_get_perspective(local_player_index)); /* port: royale_cinema.c */
 	if (perspective == _director_perspective_neutral ||
 		perspective == _director_perspective_scripted)
 	{

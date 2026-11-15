@@ -19,6 +19,7 @@ every machine shows the same moment from its own copy of the game.
 */
 
 #include "cseries.h"
+#include "camera/director.h"
 #include "camera/observer.h"
 #include "cutscene/cinematics.h"
 #include "game/players.h"
@@ -178,7 +179,11 @@ static boolean cinema_bounds_valid(
 static enum cinema_mode cinema_mode_of(
 	short local_player_index)
 {
-	long player_index = local_player_get_player_index(local_player_index);
+	long player_index;
+
+	if (local_player_index < 0 || local_player_index >= MAXIMUM_LOCAL_PLAYERS)
+		return CINEMA_NONE;
+	player_index = local_player_get_player_index(local_player_index);
 
 	if (!royale_active() || player_index == NONE || cinematic_in_progress())
 		return CINEMA_NONE;
@@ -195,10 +200,11 @@ static enum cinema_mode cinema_mode_of(
 	{
 		real_point3d focus;
 
-		/* (the game's own scoreboard once the results are over: royale.c) */
+		/* (and once over, until the postgame: the report, in place of the
+		game's own scoreboard, game_engine.c) */
 		if (!royale_game_over() && cinema_phase_seconds() < CINEMA_ORBIT_SECONDS && cinema_winners_focus(&focus))
 			return CINEMA_ORBIT;
-		return royale_game_over() ? CINEMA_NONE : CINEMA_REPORT;
+		return CINEMA_REPORT;
 	}
 	default:
 		return CINEMA_NONE;
@@ -957,8 +963,9 @@ static void cinema_draw_report(
 	short place;
 	short index;
 
-	/* (faded in after the orbit; at once when there was none) */
-	report.alpha = seconds >= 0.0f ? PIN(seconds / 0.5f, 0.0f, 1.0f) : 1.0f;
+	/* (faded in after the orbit; at once when there was none, or once
+	over) */
+	report.alpha = seconds >= 0.0f && !royale_game_over() ? PIN(seconds / 0.5f, 0.0f, 1.0f) : 1.0f;
 	report.scale = MIN(width / 640.0f, height / 480.0f);
 	report.x = window.x0 + 0.5f * (width - 640.0f * report.scale);
 	report.y = window.y0 + 0.5f * (height - 480.0f * report.scale);
@@ -1130,6 +1137,13 @@ void royale_cinema_reset(
 void royale_cinema_tick(
 	void)
 {
+}
+
+short royale_cinema_hud_perspective(
+	short local_player_index,
+	short perspective)
+{
+	return royale_cinema_owns_screen(local_player_index) ? (short)_director_perspective_neutral : perspective;
 }
 
 boolean royale_cinema_owns_screen(
