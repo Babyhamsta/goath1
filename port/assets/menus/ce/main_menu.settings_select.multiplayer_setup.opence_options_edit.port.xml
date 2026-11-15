@@ -245,7 +245,7 @@
 		<string text="MELEE DEMOTES:"/>
 		<string text="BLEED OUT:"/>
 		<string text="REVIVE TIME:"/>
-		<string text="GULAG:"/>
+		<string text="RECLAIMER:"/>
 	</strings>
 	<strings name="main_menu/settings_select/multiplayer_setup/opence_options_edit/cap_opence">
 		<string text="The game type's own rules."/>
@@ -299,7 +299,7 @@
 		<string text="How long a squadmate holds Action beside a\ndowned player to revive them."/>
 		<string text="How long a squadmate holds Action beside a\ndowned player to revive them."/>
 		<string text="A player who dies is out."/>
-		<string text="A player who dies fights a 1v1 in the gulag,\nonce, to come back."/>
+		<string text="A player who dies fights a 1v1 in the Reclaimer,\nonce, to come back."/>
 	</strings>
 	<widget name="main_menu/settings_select/multiplayer_setup/playlist_edit/playlist_edit_opence_item" type="text" left="51" top="309" width="232" height="32" bitmap="bitmaps/list_item_bkd" text="GOAT H1 OPTIONS" font="ui\large_ui" color="#FF2896FF" text_x="13" text_y="5" source="tools/port_settings.py multiplayer_files/_opence_options">
 		<on event="a" open="main_menu/settings_select/multiplayer_setup/opence_options_edit/opence_screen"/>

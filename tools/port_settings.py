@@ -3358,9 +3358,9 @@ OPENCE_ROWS = [
      ["How long a downed player crawls before they are\\nout, unless their squadmate revives them."] * 5),
     ("br_revive", "REVIVE TIME:", ["1 SECOND", "2 SECONDS", "3 SECONDS", "5 SECONDS"],
      ["How long a squadmate holds Action beside a\\ndowned player to revive them."] * 4),
-    ("br_gulag", "GULAG:", ["OFF", "ON"], [
+    ("br_gulag", "RECLAIMER:", ["OFF", "ON"], [
         "A player who dies is out.",
-        "A player who dies fights a 1v1 in the gulag,\\nonce, to come back."]),
+        "A player who dies fights a 1v1 in the Reclaimer,\\nonce, to come back."]),
 ]
 OPENCE_ITEM = f"{PLAYLIST_EDIT}/playlist_edit_opence_item"
 # the game's name, as players read it (#1031), and the editor's row and

@@ -1157,6 +1157,13 @@ static void royale_draw_banner(
 			return;
 		usnprintf(text, NUMBEROF(text) - 1, L"DROP  -  %d SQUADS", royale.rules.squads_alive);
 		break;
+	case ROYALE_RULES_PHASE_PLAY:
+	case ROYALE_RULES_PHASE_ENDGAME:
+		/* (a Reclaimer's winner falling back to the island) */
+		if (state != ROYALE_PLAYER_FALLING)
+			return;
+		usnprintf(text, NUMBEROF(text) - 1, L"RECLAIMED  -  REDEPLOYING");
+		break;
 	default:
 		return;
 	}
