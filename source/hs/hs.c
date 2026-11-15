@@ -2810,6 +2810,7 @@ symbols in this file:
 #include "network_host_controls.h" /* port: port/linux/game/network_host_controls.c */
 #include "network_host_game.h" /* port: port/linux/game/network_host_game.c */
 #include "server_director.h" /* port: port/linux/game/server_director.c */
+#include "bots_command.h" /* port: port/linux/game/bots_command.c */
 #include "objects/damage.h"
 #include "objects/object_lights.h"
 #include "objects/scenery.h"
@@ -13108,6 +13109,12 @@ static char const *const hs_globals_denied_to_downloaded_maps[]=
 (hs_scenario_functions_check) */
 static boolean hs_scenario_downloaded = FALSE;
 
+/* port: whether the map whose scripts are checked is a campaign level
+(hs_scenario_functions_check): its scripts may call map_name, which names the
+campaign's next level (main_script_map_name: H1A and Custom Edition campaigns
+move on so), though no other map's may (hs_function_allowed_in_maps) */
+static boolean hs_scenario_campaign = FALSE;
+
 static boolean hs_name_listed(
 	char const *name,
 	char const *const *list)
@@ -13180,8 +13187,11 @@ static short hs_syntax_node_check(
 		return _hs_node_refusal_damaged;
 	function = hs_function_get(function_index);
 	*name = function->name;
-	if (from_map && !hs_function_allowed_in_maps[function_index])
+	if (from_map && !hs_function_allowed_in_maps[function_index] &&
+		!(hs_scenario_campaign && !csstrcmp(function->name, "map_name")))
+	{
 		return _hs_node_refusal_function;
+	}
 	/* port: a downloaded map's (hs_functions_denied_to_downloaded_maps) */
 	if (from_map && hs_scenario_downloaded && hs_name_listed(function->name, hs_functions_denied_to_downloaded_maps))
 		return _hs_node_refusal_downloaded_function;
@@ -13434,6 +13444,9 @@ static void hs_scenario_functions_check(
 	short disabled_global_count = 0;
 	char reason[128];
 
+	/* port: a campaign level's scripts may name its next level
+	(hs_scenario_campaign), an MCC map's too */
+	hs_scenario_campaign = scenario->type == _scenario_type_solo;
 	/* port: an MCC map's functions are checked by mcc_syntax.c */
 	if (mcc_syntax_functions_check(scenario, hs_syntax_data, hs_syntax_node_refusal,
 		hs_scenario_disabled_scripts, hs_scenario_disabled_globals))
@@ -15332,7 +15345,28 @@ HS_EVALUATE_RETURN_BOOLEAN_NO_ARGUMENTS(player_control_action_test_move_relative
 /* port: in network co-op, also for the players the scripts can't name (coop_scripts.c) */
 HS_EVALUATE_VOID_FROM_ARGUMENTS(player_add_equipment_evaluate, struct hs_arguments_long_word_boolean, (coop_scripts_player_add_equipment(arguments->value0, arguments->value1, arguments->value2)))
 HS_EVALUATE_VOID_FROM_ARGUMENTS(debug_player_teleport_evaluate, struct hs_arguments_short_word, (debug_player_teleport(arguments->value0, arguments->value1)))
-HS_EVALUATE_VOID_STRING(main_set_map_name_evaluate, main_set_map_name)
+/* port: a campaign map's own script names its campaign's next level, which
+ends this one as game_won does (main_script_map_name); the console, any map.
+Global initializers run before the map is ready and may not change maps. */
+static void main_set_map_name_evaluate(
+	short function_index,
+	long thread_index,
+	boolean initialize)
+{
+	struct hs_arguments_string *arguments = (struct hs_arguments_string *)hs_macro_function_evaluate(function_index, thread_index, initialize);
+
+	if (arguments)
+	{
+		if (hs_runtime_port_executing_console_command())
+			main_set_map_name(arguments->value);
+		else if (hs_runtime_port_executing_script_type() != NONE)
+			main_script_map_name(arguments->value);
+		else
+			error(_error_silent, "map_name requires a script or console command; a global initializer cannot change maps");
+		hs_return(thread_index, 0);
+	}
+	return;
+}
 HS_EVALUATE_VOID_STRING(main_set_multiplayer_map_name_evaluate, main_set_multiplayer_map_name)
 HS_EVALUATE_VOID_UNSIGNED_SHORT(main_set_difficulty_evaluate, main_set_difficulty)
 /* port: a campaign script still switches, and so does a player walking
@@ -15793,6 +15827,14 @@ static boolean hs_compile_and_evaluate_command(
 
 		if (server_command_try(expression, &server_result))
 			return server_result;
+	}
+	/* port: the host's words to its bots ("bots order red defend red flag":
+	port/linux/game/bots_command.c), on the machine that hosts the game */
+	{
+		boolean bots_result;
+
+		if (bots_command_console(expression, &bots_result))
+			return bots_result;
 	}
 	/* port: the co-op host's bringto, which brings every player to the host
 	(players.c; a client is told it is the host's) */

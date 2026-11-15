@@ -50,6 +50,20 @@ with ideas from VALORANT's netcode articles, keeping the 30 Hz tick:
     host's is once that stops, or if they drift apart while it moves;
   - which named objects exist, so scripted creates and deletes match.
 
+  The camera sent is the host's first local player's. A dedicated server
+  has no local player, so while the scripts have the camera
+  (`camera_control`) its first observer films their camera as a player's
+  would (`director_unattended_scripted_camera`, director.c); before, it
+  never ran, and every client watched a cutscene from the world's origin.
+  Only the camera's values changed: no network version. A dedicated server
+  of an earlier build still sends that camera, which stays as a map's start
+  leaves an observer (at the world's origin, looking down x), where no shot
+  is. A client that gets it keeps the cutscene's view but watches the
+  cutscene's actors instead (`client_watch_cutscene`, network_coop.c): the
+  unit the host's scripts last started a custom animation on, which every
+  build sends, else its own player, framed as spectating frames a teammate
+  the scripts hold.
+
   The scripts' looping sounds (music, ambience, a cutscene's music and
   dialogue) are resent every two seconds, so a machine that joins hears
   them. The resends of one that plays once (a fake impulse looping sound)
@@ -1805,6 +1819,40 @@ machine:
   is OpenH1 protocol version 10. They change in a game only when no OpenCE
   machine is in it, as a team move does; otherwise, and in a Legacy game,
   they wait for the next game's lobby. A Legacy game is sent nothing new.
+- VEHICLE HIJACKING (any OpenH1 game, co-op too) turns the players' Halo 2
+  boarding on or off at once (below, "Vehicle hijacks").
+
+### Vehicle hijacks
+
+A player beside an enemy's seat they could get into (a Ghost's or a
+Warthog's driver, a Warthog's gunner, a Banshee's pilot on or near the
+ground) holds the action button to leap at it, strike, throw the rider out
+and take the seat (`vehicle_hijack.c`, `game.vehicle_hijack`, off by
+default). It changes what every machine simulates, so it is a rule of the
+game (its numbers pending: `port/linux/net_changes/vehicle-hijack.txt`):
+
+- The rule is the host's `game.vehicle_hijack`, read in the lobby as the
+  pickup's way is, carried in bit 7 of the record's `cooperative_flags`
+  (`_network_game_vehicle_hijack_bit`), which an OpenCE machine's copy leaves
+  clear (`network_standard_vehicle_hijack`). Host Controls' VEHICLE
+  HIJACKING changes it during a game: the host's own at once, its record's
+  bit (which a machine that joins takes, and a host's demo has each tick),
+  and its OpenH1 clients told. A Legacy game never hijacks, nor does an
+  OpenCE machine's player, nor is one hijacked, in a mixed game.
+- The host decides each hijack, at the end of its player's hold as its
+  simulation of the player has it (the client's own player waits for the
+  host's word: it begins nothing itself), and tells its OpenH1 clients
+  (`_distributed_message_vehicle_hijack`, reliably: the jacker's unit,
+  the rider's, the vehicle and the seat, with a format byte), and so when it
+  calls one off (the vehicle flipped or died, a unit died or left), and the
+  rule changed. A client takes them only from the host's stream in an
+  OpenH1 game under way. It plays the sequence from then for its own units,
+  which are its own to move: its own player's leap and the seat they take
+  (`network_objects_set_seat`, as the host's word on a seat), its own player
+  thrown out (the jolt, their controls held till they land); and the blow
+  of another's. Every other unit's place and seat is the host's word as any
+  is. `network_objects_set_seat` puts a unit in a seat beside an enemy
+  (the jacker beside a Warthog's enemy gunner) as the host has it.
 
 ### Pings
 
@@ -2201,8 +2249,13 @@ its name alone beside it, has its name given back as the map lists find it.
   others on port 5153 (of two downloading, the one of the lower machine
   connects). Each end says which files it has, whole or by piece, and tells
   the other of each piece it gets; the client asks for the rarest pieces
-  first (from a random place, so that clients ask for different pieces), two
-  at a time from each connection, sixteen in all, and the last few again of
+  first (from a random place, so that clients ask for different pieces),
+  eight at a time of the host (as many as every version sends at once: it
+  refuses more, so this needs no network version; two at a time held a
+  download from it to about 15 MB/s, a piece coming a round trip, about two
+  frames, after it is asked for), two of another player (who sends 10 MB/s
+  at most, so that a slow one holds few of the last pieces), thirty-two in
+  all, and the last few again of
   whoever is quicker. The pieces' hashes come from the host (from the
   others it named after ten seconds without them, and from the connections
   other machines made after thirty), all of them within a minute, checked
@@ -2294,7 +2347,12 @@ header is 12 bytes, including its checkpoint epoch.
   round trip carries (about 1.4 MB/s on loopback before), within the host's
   `network.map_share_upload` (1024 KB/s unless raised). The `window` case of
   `tools/test_mcc_share.py` holds a slow host's queue full at 32 and checks
-  none is dropped; its negative controls take 16 and 33.
+  none is dropped; its negative controls take 16 and 33. OpenCE's #668 let a
+  host send up to 250 MB/s and asks eight Custom Edition map pieces of the
+  host at once (above), but left the package's window and queue as they
+  were: the window stays 32, the most any host, ours or OpenCE's, queues. So
+  with the limit raised, a package's download is held by its round trip
+  (32 chunks, 96 KB, a round trip) rather than by the limit.
   Reserved fields, counts, lengths, session IDs, offsets and sender roles are
   checked. Only the sender's established reliable stream is accepted; datagrams
   and responses from other peers cannot supply content. Backpressure retries

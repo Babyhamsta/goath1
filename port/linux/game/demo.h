@@ -95,8 +95,13 @@ enum
 	_demo_rule_turns_with_aim_bit,
 	_demo_rule_walk_over_pickup_bit,
 	_demo_rule_simulation_fixes_bit,
+	_demo_rule_vehicle_hijack_bit,
 };
 boolean demo_playback_rules(unsigned long *rules);
+/* ... and in a host's recording's playback the network game its host had
+at each tick (its record, which a rule changed during the game is in:
+network_standard_vehicle_hijack); NULL otherwise */
+struct network_game *demo_playback_recorded_game(void);
 /* the connection the ticks of the demo playing run as (main.c's
 game_connection): a co-op game this machine hosted plays its ticks as its
 host's, whose code decides the game's co-op parts (network_coop.c, the
@@ -114,5 +119,8 @@ void demo_frame(boolean main_menu_loaded, real seconds);
 /* the clip key: the demo being recorded or played marked here (its last
 demo.clip_seconds) */
 void demo_bookmark(void);
+/* a line of the host's to its bots, applied in the tick (bots_command.c):
+recorded where it was, for demo_info.py and the playback's log */
+void demo_record_bot_command(char const *line);
 
 #endif

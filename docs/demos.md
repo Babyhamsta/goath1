@@ -210,6 +210,7 @@ its bytes:
 | `H` | the game state's hash, and each allocation's |
 | `V` | the game's variant and its options |
 | `B` | a bookmark: its tick and how far back it reaches |
+| `W` | a line of the host's to its bots (`docs/bot_control.md`) as the tick applied it, before the tick's `A`: its tick, then the line; the playback logs it, and the bots' recorded input (`A`) plays it |
 | `E` | the end |
 
 Each tick has one shape, whatever came when: its `T`; what came from
@@ -227,9 +228,13 @@ of its own are in the header, and the playback plays by them, not by the
 settings of the machine it plays on: the players' animation enhancements
 (`game.enhanced_animations`, which `display.graphics` chooses), their
 turning with the aim, and their way of picking up a second weapon
-(`game.auto_pickup`), and whether it played OpenH1's fixes of the
-original's simulation (a Legacy game plays the original's), as the recorded
-game had them (`network_standard.c`'s `network_standard_demo_rules`). Nothing a machine's drawing settings
+(`game.auto_pickup`), whether it played OpenH1's fixes of the
+original's simulation (a Legacy game plays the original's), and whether its
+players hijacked vehicles (`game.vehicle_hijack`), as the recorded
+game had them (`network_standard.c`'s `network_standard_demo_rules`). A
+host's recording plays the hijack rule as its record had it each tick (the
+G records' network game), so that Host Controls' change of it during the
+game plays back too. Nothing a machine's drawing settings
 choose (the graphics preset's drawing, the first-person legs, the field of
 view) reaches the game state.
 

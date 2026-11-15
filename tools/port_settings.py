@@ -1058,6 +1058,11 @@ PAGES = {
             ("WEAPON PICKUP", "game.auto_pickup", [("HOLD (XBOX)", "false"), ("WALK OVER (CE)", "true")],
              "Multiplayer, with a weapon slot empty: Hold picks up a weapon as you hold the action button, as on "
              "the Xbox; Walk Over as you walk over it, as in Custom Edition. Online: the host's choice.", None),
+            # (port/linux/game/vehicle_hijack.c: a network game's host's,
+            # network_standard.c's network_standard_vehicle_hijack)
+            ("VEHICLE HIJACKING", "game.vehicle_hijack", ON_OFF,
+             "Hold the action button beside an enemy's Ghost, Warthog or landed Banshee to throw the rider out "
+             "and take it. Online: the host's choice.", None),
             # (port/linux/game/map_share.c: this machine's part in another's
             # game)
             (SECTION, "MAP SHARING"),
@@ -4308,7 +4313,7 @@ COOP_SETUP_SCREENS = [
 # Server Setup's map sharing (port/linux/game/map_share.c), for any game,
 # laid out as co-op's options are (its key, its title, its row's help and
 # its rows: SETUP_ROW_SETTINGS gives their settings' values)
-MAP_SHARE_UPLOADS = (256, 512, 1024, 2048, 4096, 8192, 16384, 20480)
+MAP_SHARE_UPLOADS = (256, 512, 1024, 2048, 4096, 8192, 16384, 20480, 51200, 102400, 256000)
 MAP_SHARE_SETUP = ("map_share_options", "MAP SHARING",
                    "Sending players who join without the game's\\nCustom Edition map the map, and how fast.", [
     ("map_share", "SHARE MAPS:", ["ON", "OFF"], [

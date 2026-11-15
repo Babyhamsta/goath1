@@ -160,6 +160,7 @@ struct game_options;
 #include "items/projectiles.h"
 #include "main/main.h"
 #include "menu_pictures.h" /* port: port/linux/game/menu_pictures_render.c */
+#include "vehicle_hijack.h" /* port: port/linux/game/vehicle_hijack.c */
 #include "main/console.h"
 #include "math/real_math.h"
 #include "memory/data.h"
@@ -441,6 +442,12 @@ static void game_tick_macro_step(
 		!royale_map_mode())
 		profile_scope(game_tick_hs_section, hs_update();)
 	profile_scope(game_tick_recorded_animations_section, recorded_animations_update();)
+	/* port: the vehicle hijacks under way (port/linux/game/vehicle_hijack.c):
+	the vault's place, the blow, the throw and the seat taken, before the
+	objects' update poses the units there (and their nodes are kept for the
+	frames between the ticks: render_interpolation.c) and the tick's
+	sub-steps move them on, as any unit's movement */
+	vehicle_hijack_tick();
 	profile_scope(game_tick_objects_section, objects_update();)
 
 	return;
@@ -825,6 +832,8 @@ void game_initialize_for_new_map(
 	hs_initialize_for_new_map();
 	recorded_animations_initialize_for_new_map();
 	cheats_initialize_for_new_map();
+	/* port: no hijack under way (port/linux/game/vehicle_hijack.c) */
+	vehicle_hijack_reset();
 
 	game_globals->active = TRUE;
 	halo_load_trace("objects.begin", NULL); /* port: loading measurement */

@@ -91,6 +91,7 @@ machine (their datum identifiers need not be).
 #include "network_party.h"
 #include "network_host_controls.h"
 #include "network_host_rules.h"
+#include "network_hijack.h"
 #include "network_markers.h"
 #include "network_shield_effects.h"
 #include "network_substeps.h"
@@ -109,6 +110,7 @@ machine (their datum identifiers need not be).
 #include "profile_sections.h"
 #include "server_director.h"
 #include "demo.h"
+#include "bots_command.h"
 
 #include <limits.h>
 #include <stdio.h>
@@ -6413,6 +6415,8 @@ void network_distributed_player_killed(
 			killing_object->object.type == _object_type_vehicle;
 		distributed_statistics_due = TRUE;
 		server_event_player_killed(*killing_player_index, *killing_object_index, dead_player_index, *friendly_fire);
+		/* port: the bots' watch (bots_command.c) */
+		bots_command_note_kill(*killing_player_index, *killing_object_index, dead_player_index);
 	}
 	else if (game_connection() == _game_connection_network_client && death->valid)
 	{
@@ -8240,6 +8244,13 @@ void network_distributed_handle_message(
 	if (network_host_rules_handles_message(message, size))
 	{
 		network_host_rules_handle_message(machine_index, message, size, machine_index != NONE ?
+			distributed_handling_stream_message : !network_connection_last_read_was_unreliable());
+		return;
+	}
+	/* (the host's vehicle hijacks: network_hijack.c) */
+	if (network_hijack_handles_message(message, size))
+	{
+		network_hijack_handle_message(machine_index, message, size, machine_index != NONE ?
 			distributed_handling_stream_message : !network_connection_last_read_was_unreliable());
 		return;
 	}

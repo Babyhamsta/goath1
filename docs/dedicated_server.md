@@ -229,6 +229,7 @@ the game's console commands of those names.
 | `sv_map <map> [<gametype>]`, `sv_map <entry>` | moderator | Plays that game (or a rotation entry, `map:gametype+rule=value`; a co-op one too), below |
 | `sv_map_next` (`sv_next`) | moderator | Ends the game without its scores and plays the rotation's next |
 | `sv_end_game` | moderator | Ends the game: its scores, then the next |
+| `bots <command> [--json]` | admin | Directs the bots: orders, traits, adding and removing them (`bots help`; `docs/bot_control.md`) |
 | `sv_rotation_set <entries>`, `sv_rotation_add <entry>`, `sv_rotation_del <n>`, `sv_rotation_begin [<n>]` (`sv_mapcycle_add`, `_del`, `_begin`) | admin | Changes the rotation (written to `server.rotation`, 4096 characters at most) |
 | `sv_set <setting> <value>` | admin | Changes one of the server's settings, now where it can be, and in `config.toml` (below); a setting its environment variable sets is refused. A value is 256 characters at most |
 | `sv_name <name>`, `sv_maxplayers <n>`, `sv_password [<password>]`, `sv_public <0\|1>`, `sv_motd <text>` | admin | `sv_set` of `server.name`, `server.max_players`, `server.password`, `server.public`, `server.motd` |
@@ -352,7 +353,7 @@ in either case, and is kept as the table spells it:
 | `network.votekick_percent` | 1 to 100 |
 | `network.votekick_minutes` | 0 to 60 |
 | `network.votekick_ban_minutes` | 1 to 1440 |
-| `network.map_share_upload` | 16 to 20480 |
+| `network.map_share_upload` | 16 to 256000 |
 | `network.coop_friendly_fire` | `off`, `on`, `shields_only`, `explosives_only` |
 | `network.coop_team_wipe` | `auto`, `revert`, `respawn` (`auto`: a public server, `server.public` with internet play, only respawns the team) |
 | `network.shield_effects` | `stock`, `glow`, `light_show`, `overshield`, `glow_overshield`, `light_show_overshield`, `players` |

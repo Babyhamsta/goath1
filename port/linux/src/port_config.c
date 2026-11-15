@@ -1323,6 +1323,14 @@ static const struct config_setting config_settings[] =
 		"of this computer's reads it as its map begins; in a network game the\n"
 		"host's decides, read in the lobby; a Legacy game, and OpenCE's\n"
 		"players, always walk over (OpenCE's way)." },
+	{ "game.vehicle_hijack", _config_boolean, "false", "HALO_VEHICLE_HIJACK", _environment_value, _platform_all,
+		"Halo 2's boarding: a player beside an enemy's Ghost, Warthog or landed\n"
+		"Banshee holds the action button to leap at the seat, throw the rider\n"
+		"out and take it (never the Scorpion, a turret or a passenger's seat;\n"
+		"never an ally). The campaign and multiplayer alike. A game of this\n"
+		"computer's reads it as its map begins; in a network game the host's\n"
+		"decides, read in the lobby (Host Controls' VEHICLE HIJACKING changes\n"
+		"it during a game); a Legacy game never hijacks (OpenCE's way)." },
 	{ "game.spectate_on_death", _config_string, "\"off\"", "HALO_SPECTATE_ON_DEATH", _environment_value,
 		_platform_all,
 		"While you are dead in co-op or a team game, waiting to respawn:\n"
@@ -1374,6 +1382,17 @@ static const struct config_setting config_settings[] =
 	{ "bots.share_delay", _config_real, "1.0", "HALO_BOTS_SHARE_DELAY", _environment_value, _platform_all,
 		"With bots.share_sightings: the seconds from a bot's sighting of an\n"
 		"enemy to its teammates' knowing of it (0 to 5)." },
+	{ "bots.control", _config_boolean, "false", "HALO_BOT_CONTROL", _environment_value, _platform_all,
+		"The host's control of its bots from outside the game (scripts, agents,\n"
+		"`halo bots <command>`): orders, traits, adding and removing bots. true:\n"
+		"a game this computer runs listens on 127.0.0.1 alone, with a token it\n"
+		"writes to bot_control.txt next to config.toml, new each time. Also\n"
+		"`halo --bot-control`. A dedicated server takes the same commands from its\n"
+		"admins (RCON, HTTP: \"bots <command>\") whatever this says\n"
+		"(docs/bot_control.md)." },
+	{ "bots.control_port", _config_integer, "25190", "HALO_BOT_CONTROL_PORT", _environment_value, _platform_all,
+		"With bots.control: the TCP port of 127.0.0.1 it listens on (the next\n"
+		"nine if that one is taken)." },
 	{ "bots.vehicles", _config_boolean, "true", "HALO_BOTS_VEHICLES", _environment_value, _platform_all,
 		"On maps with open ground, the bots use the vehicles as people do: they\n"
 		"ride a teammate's Warthog (the gun first), drive a Warthog, a Ghost or\n"
@@ -1701,8 +1720,8 @@ static const struct config_setting config_settings[] =
 	{ "network.map_share_upload", _config_integer, "1024", "HALO_NET_MAP_SHARE_UPLOAD", _environment_value,
 		_platform_all,
 		"Hosting: the most kilobytes a second the host sends of maps (16 to\n"
-		"20480: 20 MB/s), so that the game's own traffic keeps the rest of the\n"
-		"upload." },
+		"256000: 250 MB/s), so that the game's own traffic keeps the rest of\n"
+		"the upload." },
 	{ "network.map_seed", _config_boolean, "true", "HALO_NET_MAP_SEED", _environment_value, _platform_all,
 		"Playing in another's game: help send its map to players who join\n"
 		"without it, as a torrent's peers do (the pieces this machine has, at\n"
@@ -2223,6 +2242,20 @@ static const struct config_setting config_settings[] =
 	{ "debug.network_test_vehicle", _config_real, "0.0", "HALO_NETWORK_TEST_VEHICLE", _environment_value, _platform_all,
 		"This many seconds into an automated test game the host seats its last\n"
 		"player as a vehicle's driver (and out 15 seconds on); 0 never." },
+	{ "debug.network_test_hijack", _config_string, "\"\"", "HALO_NETWORK_TEST_HIJACK", _environment_value, _platform_all,
+		"\"<seconds>[:watch|:client]\": that many seconds into an automated test\n"
+		"game the host seats an enemy (a bot, else a split screen's second\n"
+		"player, else the campaign's nearest enemy that can drive it) in the\n"
+		"Ghost nearest the first player (or the vehicle\n"
+		"debug.network_test_vehicle_seat names; a campaign level's made first)\n"
+		"and holds it still a while; a second on it stands its own player (a\n"
+		"split screen's first) at the driver's entrance, to hijack it, and the\n"
+		"other players off to its side, facing it (:client: another machine's\n"
+		"player jacks; :watch, a client's own: it watches). The jacker holds the\n"
+		"action button as debug.test_input's script says. Each machine saves a\n"
+		"frame a tick (hijack<tick>.bmp) from 1 second on to 7, and six\n"
+		"seconds on logs who drives it and where its riders went\n"
+		"(vehicle_hijack.c). Empty never." },
 	{ "debug.network_test_vehicle_seat", _config_string, "\"\"", "HALO_NETWORK_TEST_VEHICLE_SEAT", _environment_value,
 		_platform_all,
 		"\"<vehicle>:<seat>\": debug.network_test_vehicle seats the player in the nearest\n"
@@ -3047,6 +3080,18 @@ int config_command_line_value(const char *name, char *value, unsigned long size)
 	(void)name;
 	if (size)
 		value[0] = 0;
+	return 0;
+#endif
+}
+
+/* whether the command line has the argument (halo --bot-control), for the
+game's port code */
+int config_command_line_flag(const char *name)
+{
+#ifndef HALO_ANDROID
+	return config_argument(name, NULL, 0);
+#else
+	(void)name;
 	return 0;
 #endif
 }

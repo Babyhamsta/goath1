@@ -31,6 +31,8 @@ password's command is never logged nor answered with the password.
 #include "network_host_game.h"
 #include "server_director.h"
 #include "server_gametypes.h"
+#include "math/real_math.h"
+#include "bots_command.h"
 
 #include "../src/p2p.h" /* port: port/linux/src/p2p.c */
 #include "../src/server_console.h" /* port: port/linux/src/server_console.c */
@@ -574,6 +576,34 @@ static boolean command_help(char const *line, long count, char **words)
 	return TRUE;
 }
 
+/* the host's words to its bots (bots_command.c; docs/bot_control.md): the
+line after "bots", each line of its answer said */
+static boolean command_bots(char const *line, long count, char **words)
+{
+	static char reply[60 * 1024];
+	char *cursor;
+	boolean succeeded;
+
+	(void)count;
+	(void)words;
+	while (*line == ' ' || *line == '\t')
+		line++;
+	line += 4;
+	succeeded = bots_command_run(line, reply, sizeof(reply));
+	for (cursor = reply; *cursor;)
+	{
+		char *end = strchr(cursor, '\n');
+
+		if (end)
+			*end = 0;
+		say("%s", cursor);
+		if (!end)
+			break;
+		cursor = end + 1;
+	}
+	return succeeded;
+}
+
 static boolean command_status(char const *line, long count, char **words)
 {
 	struct server_json json;
@@ -874,7 +904,7 @@ static struct
 	{ "network.votekick_percent", NULL, "1", "100" },
 	{ "network.votekick_minutes", NULL, "0", "60" },
 	{ "network.votekick_ban_minutes", NULL, "1", "1440" },
-	{ "network.map_share_upload", NULL, "16", "20480" },
+	{ "network.map_share_upload", NULL, "16", "256000" },
 	{ "network.coop_friendly_fire", "off|on|shields_only|explosives_only", NULL, NULL },
 	{ "network.coop_team_wipe", "auto|revert|respawn", NULL, NULL },
 	{ "network.shield_effects", "stock|glow|light_show|overshield|glow_overshield|light_show_overshield|players", NULL,
@@ -2311,6 +2341,7 @@ static struct server_command const server_command_table[] =
 {
 	{ "help", NULL, _server_role_viewer, "[command]", "the commands, or one's use", command_help },
 	{ "sv_status", NULL, _server_role_viewer, "[--json]", "the server and its game", command_status },
+	{ "bots", NULL, _server_role_admin, "<command> [--json]", "direct the bots: orders, traits (bots help)", command_bots },
 	{ "sv_players", NULL, _server_role_viewer, "[--json]", "the players", command_players },
 	{ "sv_rotation", "sv_mapcycle", _server_role_viewer, "", "the rotation", command_rotation },
 	{ "sv_maps", NULL, _server_role_viewer, "", "the multiplayer maps there are", command_maps },
