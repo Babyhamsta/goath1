@@ -96,6 +96,7 @@ machine (their datum identifiers need not be).
 #include "network_shield_effects.h"
 #include "network_substeps.h"
 #include "bots.h"
+#include "royale.h"
 #include "sim_rate.h"
 #include "network_standard.h"
 #include "network_riding_map.h"
@@ -5780,13 +5781,15 @@ static word distributed_substep_state_read(
 controls hold through its tick's sub-steps, which every OpenH1 machine
 steps alike from the tick's input, so its state of a sub-step tells a
 client nothing its tick's state does not (NETCODE.md's "Bots in network
-games"); a game of many bots near a client spent most of its bytes on them */
+games"); a game of many bots near a client spent most of its bytes on them.
+Royale's games alone for now, the big ones (royale.c), every other game's
+bots sent as they were */
 static boolean distributed_player_is_bot(
 	short player_index)
 {
 	struct player_datum const *player = distributed_player(player_index);
 
-	return player && player->local_player_index == NONE &&
+	return royale_active() && player && player->local_player_index == NONE &&
 		bots_machine_is_bot(player->network_player_data.machine_index);
 }
 

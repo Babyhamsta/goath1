@@ -123,7 +123,8 @@ static boolean game_modes_melee_kill;
 short game_modes_gametype_count(
 	void)
 {
-	return NUMBER_OF_GAMETYPES;
+	/* (Royale's, the last, only with game.royale on: royale_enabled) */
+	return royale_enabled() ? NUMBER_OF_GAMETYPES : NUMBER_OF_GAMETYPES - 1;
 }
 
 wchar_t const *game_modes_gametype_name(

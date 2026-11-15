@@ -391,8 +391,12 @@ boolean royale_winners_label(wchar_t *text, short count);
 struct game_engine;
 struct unit_control_data;
 
+/* Royale is offered here: game.royale, an experimental setting (off by
+default), on. Off, no menu or gametype list has it */
+boolean royale_enabled(void);
 /* a Royale game may be played here: a GOAT H1 Standard game (or a game of
-this machine alone) */
+this machine alone) whose host has game.royale on (a client and a film take
+the host's game as it is) */
 boolean royale_game_allowed(void);
 /* Slayer's engine with Royale's rules (game_modes_engine) */
 struct game_engine *royale_engine_get(struct game_engine const *slayer);

@@ -69,6 +69,9 @@ reads a map config from a file.
 #include <stdlib.h>
 #include <string.h>
 
+/* port/linux/src/port_config.c */
+int config_boolean(char const *name);
+
 void platform_log(char const *format, ...);
 long game_engine_slayer_write_network_state(byte *buffer, long size);
 boolean game_engine_slayer_read_network_state(byte const *buffer, long size, boolean first);
@@ -188,11 +191,21 @@ static long royale_living_unit(
 
 /* ---- the interface (royale.h) */
 
+boolean royale_enabled(
+	void)
+{
+	return config_boolean("game.royale") != 0;
+}
+
 boolean royale_game_allowed(
 	void)
 {
-	/* (a Standard game's host or client, or a game of this machine alone) */
-	return network_standard_simulation_fixes();
+	/* (a Standard game's host or client, or a game of this machine alone;
+	the host's or this machine's game.royale on, as a client plays its
+	host's game and a film its recording's) */
+	return network_standard_simulation_fixes() &&
+		(royale_enabled() || network_game_distributed_client() ||
+			game_connection() == _game_connection_film_playback);
 }
 
 boolean royale_active(

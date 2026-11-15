@@ -117,6 +117,7 @@ their handlers open opens.
 #include "mcc_cache.h"
 #include "custom_edition_maps.h"
 #include "game_modes.h"
+#include "royale.h"
 #include "network_voice.h"
 #include "network_chat.h"
 #include "network_party.h"
@@ -15132,6 +15133,15 @@ static struct gametype_option const *gametype_option_named(char const *spinner)
 	return NULL;
 }
 
+/* a spinner's last items not offered, past which it stops
+(ui_widget_port_spinner_stops): OPENCE OPTIONS' MODE has its last, an
+experimental game type's, only with its hidden setting on (royale.h's
+royale_enabled) */
+short pc_menu_spinner_hidden_items(struct widget_instance *spinner)
+{
+	return spinner && !strncmp(spinner->name, "oce_mode_spinner", WIDGET_NAME_LENGTH) && !royale_enabled() ? 1 : 0;
+}
+
 static long gametype_option_value(struct gametype_option const *option, struct game_variant *variant,
 	struct game_variant_options *options)
 {
@@ -15253,8 +15263,14 @@ static void gametype_options_each(struct widget_instance *list, boolean save)
 				gametype_option_value_set(option, option->values[index], variant, options);
 			}
 			else
-				spinner->parameters.list.selected_index =
-					gametype_option_index(option, gametype_option_value(option, variant, options));
+			{
+				short index = gametype_option_index(option, gametype_option_value(option, variant, options));
+
+				/* (an item not offered shows as the first: MODE's NONE) */
+				if (index >= option->count - pc_menu_spinner_hidden_items(spinner))
+					index = 0;
+				spinner->parameters.list.selected_index = index;
+			}
 		}
 	}
 }

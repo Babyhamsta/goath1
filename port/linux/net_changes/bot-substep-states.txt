@@ -1,4 +1,4 @@
-a host sends no sub-step states of its own bots (network_distributed.c's
-network_distributed_host_substep_ended, distributed_player_is_bot): every GOAT
-H1 machine steps a bot alike from its tick's input; any GOAT H1 game, not only
-Royale
+a host sends no sub-step states of its own bots in a Royale game
+(network_distributed.c's network_distributed_host_substep_ended,
+distributed_player_is_bot): every GOAT H1 machine steps a bot alike from its
+tick's input
