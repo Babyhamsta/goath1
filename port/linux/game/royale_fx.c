@@ -49,6 +49,7 @@ same thing; nothing here changes a rule or an object.
 #include "royale_loot.h"
 
 #include <math.h>
+#include <stdlib.h>
 #include <string.h>
 
 void platform_log(char const *format, ...);
@@ -657,6 +658,16 @@ static void royale_fx_render_ship(
 	real line_length, scale;
 	short node_index, function_index;
 
+	{
+		static long checked;
+
+		if (checked++ % 600 == 0)
+		{
+			platform_log("royale fx: ship check: model %08lX side %d front %.2f bounds %.0f..%.0f nodes %d",
+				(unsigned long)royale_fx.ship_model, royale_beam_side(), royale_beam_front(), royale_fx.bounds.minimum.x,
+				royale_fx.bounds.maximum.x, royale_fx.ship_model != NONE ? model_definition_get(royale_fx.ship_model)->nodes.count : -1);
+		}
+	}
 	if (royale_fx.ship_model == NONE || !royale_fx_front_line(&a, &b, &safe))
 		return;
 	model = model_definition_get(royale_fx.ship_model);
@@ -675,6 +686,30 @@ static void royale_fx_render_ship(
 	forward.k = 0.0f;
 	up = *global_up3d;
 	scale = ROYALE_FX_SHIP_LENGTH_SHARE * 0.5f * line_length / MAX(royale_fx.ship_radius, 1.0f);
+	/* (test: HALO_ROYALE_FX_SHIP_TEST=<units> puts it that far ahead of the
+	camera, to see it drawn) */
+	{
+		static long test_distance = -1;
+		static long logged;
+
+		if (test_distance < 0)
+		{
+			char const *text = royale_test_setting("HALO_ROYALE_FX_SHIP_TEST");
+
+			test_distance = text ? atol(text) : 0;
+		}
+		if (test_distance > 0)
+		{
+			position.x = render.camera.position.x + render.camera.forward.i * (real)test_distance;
+			position.y = render.camera.position.y + render.camera.forward.j * (real)test_distance;
+			position.z = render.camera.position.z + render.camera.forward.k * (real)test_distance + 5.0f;
+		}
+		if (logged++ % 600 == 0)
+		{
+			platform_log("royale fx: ship at %.0f %.0f %.0f, scale %.1f (camera %.0f %.0f %.0f)", position.x, position.y,
+				position.z, scale, render.camera.position.x, render.camera.position.y, render.camera.position.z);
+		}
+	}
 	model_get_node_matrices(model, node_matrices, &position, &forward, &up);
 	for (node_index = 0; node_index < model->nodes.count; node_index++)
 	{
@@ -818,8 +853,9 @@ void royale_fx_draw(
 
 		rows.x0 = screen.x0;
 		rows.x1 = screen.x1;
-		rows.y0 = (short)(screen.y0 + span * 0.7f * t);
-		rows.y1 = (short)(screen.y0 + span * 0.7f * (t + 1.0f / ROYALE_FX_SKY_BANDS) + 1);
+		/* (edge to edge, no overlap: an overlap is a brighter line) */
+		rows.y0 = (short)(screen.y0 + (long)(span * 0.7f) * band / ROYALE_FX_SKY_BANDS);
+		rows.y1 = (short)(screen.y0 + (long)(span * 0.7f) * (band + 1) / ROYALE_FX_SKY_BANDS);
 		color = ((pixel32)(PIN(alpha, 0.0f, 1.0f) * 255.0f + 0.5f) << 24) |
 			((pixel32)255 << 16) | ((pixel32)(110 + 40 * t) << 8) | (pixel32)30;
 		draw_quad(&rows, color);
