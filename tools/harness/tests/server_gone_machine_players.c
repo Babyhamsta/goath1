@@ -53,7 +53,8 @@ struct network_game_server_client_machine
 	long last_received_update_sequence_number;
 	unsigned long last_heard_time;
 	short machine_index;
-	unsigned long flags;
+	byte state;
+	byte flags;
 };
 
 struct network_game_server
@@ -75,7 +76,9 @@ static struct network_game_server server;
 static struct network_game_server *server_pointer = &server;
 static struct network_connection connection;
 static unsigned long network_game_server_client_machine_addresses[MAXIMUM_NETWORK_MACHINE_COUNT];
-static boolean network_game_server_map_pending[MAXIMUM_NETWORK_MACHINE_COUNT];
+/* (the machines' states' code reads a join time and the clock) */
+static unsigned long network_game_server_client_machine_join_times[MAXIMUM_NETWORK_MACHINE_COUNT];
+static unsigned long system_milliseconds(void) { return 1000; }
 static struct network_player network_game_server_held_players[MAXIMUM_NETWORK_PLAYER_COUNT];
 static long network_game_server_held_player_count;
 
@@ -238,7 +241,6 @@ static void lobby(void)
 
 	memset(&server, 0, sizeof(server));
 	memset(downloading, 0, sizeof(downloading));
-	memset(network_game_server_map_pending, 0, sizeof(network_game_server_map_pending));
 	network_game_server_held_player_count = 0;
 	for (index = 0; index < MAXIMUM_NETWORK_PLAYER_COUNT; index++)
 		invalidate_player(&server.game.players[index]);
@@ -255,8 +257,7 @@ static void lobby(void)
 
 		server.client_machines[index].connection = &connection;
 		server.client_machines[index].machine_index = (short)index;
-		server.client_machines[index].flags = FLAG(_network_client_machine_connected_bit) |
-			FLAG(_network_client_machine_validated_bit);
+		server.client_machines[index].state = _machine_state_lobby;
 		server.game.machines[index].machine_index = (signed char)index;
 		CHECK(network_game_add_player(&server.game, &player), "fixture: no room");
 	}
@@ -283,7 +284,7 @@ static void start_while_downloading(void)
 {
 	downloading[GONE] = TRUE;
 	network_game_server_hold_map_fetcher_players(&server);
-	network_game_server_map_pending[GONE] = TRUE;
+	server.client_machines[GONE].state = _machine_state_held;
 	server.sent_start_game_message = TRUE;
 	CHECK(players_of(GONE) == 0 && network_game_server_held_player_count == 1, "fixture: the player was not held");
 }
@@ -301,7 +302,6 @@ static void back_to_lobby(void)
 {
 	server.state = _network_game_server_state_pregame;
 	server.sent_start_game_message = FALSE;
-	memset(network_game_server_map_pending, 0, sizeof(network_game_server_map_pending));
 	network_game_server_restore_held_players(&server);
 }
 
@@ -310,7 +310,7 @@ static void player_of_gone_machine(void)
 {
 	server.client_machines[GONE].connection = NULL;
 	server.client_machines[GONE].machine_index = NONE;
-	server.client_machines[GONE].flags = 0;
+	server.client_machines[GONE].state = _machine_state_free;
 	server.game.machines[GONE].machine_index = NONE;
 }
 
@@ -326,7 +326,7 @@ int main(int argc, char **argv)
 		server.state = _network_game_server_state_postgame;
 		machine_gone();
 		CHECK(network_game_server_held_player_count == 0, "its held player outlived the machine");
-		CHECK(!network_game_server_map_pending[GONE], "its pending download outlived the machine");
+		CHECK(server.client_machines[GONE].state == _machine_state_free, "its pending download outlived the machine");
 		back_to_lobby();
 		CHECK(players_of(GONE) == 0, "a player of a machine that had gone was put back in the lobby");
 		CHECK(players_of(0) == 1 && players_of(OTHER) == 1, "the others' players were lost");
@@ -339,8 +339,7 @@ int main(int argc, char **argv)
 		machine_gone();
 		server.client_machines[GONE].connection = &connection;
 		server.client_machines[GONE].machine_index = GONE;
-		server.client_machines[GONE].flags = FLAG(_network_client_machine_connected_bit) |
-			FLAG(_network_client_machine_validated_bit);
+		server.client_machines[GONE].state = _machine_state_lobby;
 		server.game.machines[GONE].machine_index = GONE;
 		back_to_lobby();
 		CHECK(players_of(GONE) == 0, "the machine that joined at the index was given the old machine's player");
@@ -349,7 +348,7 @@ int main(int argc, char **argv)
 	{
 		/* a held player whose machine is not in the game is not put back */
 		start_while_downloading();
-		server.client_machines[GONE].flags = FLAG(_network_client_machine_connected_bit);
+		server.client_machines[GONE].state = _machine_state_connected;
 		back_to_lobby();
 		CHECK(players_of(GONE) == 0, "a player of a machine not in the game was put back");
 	}
@@ -365,7 +364,7 @@ int main(int argc, char **argv)
 		/* another machine leaving takes nothing held of machine 5 */
 		start_while_downloading();
 		CHECK(network_game_server_remove_client_machine_from_game(&server, &server.client_machines[OTHER]), "not removed");
-		CHECK(network_game_server_held_player_count == 1 && network_game_server_map_pending[GONE],
+		CHECK(network_game_server_held_player_count == 1 && server.client_machines[GONE].state == _machine_state_held,
 			"another machine's leaving took machine 5's held player");
 	}
 	else if (!strcmp(name, "kick-in-game"))
