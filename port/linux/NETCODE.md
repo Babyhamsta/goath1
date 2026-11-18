@@ -719,7 +719,9 @@ the line's address or hardware id (`network_game_server_port_forget_kicked_addre
 
 The players' votes to kick a player and to end the game
 (`network_votekick.c`): a client sends `_distributed_message_votekick` (the
-vote's kind, the player's absolute index for a kick, and yes or no)
+vote's kind, the player's absolute index for a kick, yes or no, and in its
+last byte the serial of the vote the choice is in, from the status's last
+byte; 0 starts a vote and is always a yes)
 reliably, and the host takes it only from the client's stream. The host
 alone counts:
 one vote per real address (an internet play peer's endpoint, not its
@@ -733,7 +735,9 @@ fixed percentage of them (`network.votekick_threshold` `static`,
 once;
 starting one needs `network.votekick_minutes` played on this host in its
 own ticks, voting two minutes; one vote runs at a time, and a failed vote
-cools its starter down and protects its target. A vote that passes kicks as
+cools its starter down and protects its target. A choice naming a vote that
+is not running is refused, and a kick vote ended by a new game cools its
+starter down and keeps the gap after it. A vote that passes kicks as
 the `kick` command does, and the host refuses the address and hardware id
 for `network.votekick_ban_minutes`. The host sends each client
 `_distributed_message_votekick_status` every second while a vote runs (and
