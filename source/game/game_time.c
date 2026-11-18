@@ -465,6 +465,7 @@ void game_time_finish_tick(
 		if (game_time_run_substep())
 			game_time_substeps.ticks_ended_ahead++;
 	}
+	demo_steps_end(); /* port: port/linux/game/demo.c */
 	game_time_substeps.boundary_wanted = FALSE;
 	game_time_substeps.boundary_waits = 0;
 
@@ -790,6 +791,9 @@ void game_time_update(
 						ticks_ended_run++;
 					game_time_substeps.boundary_waits = 0;
 				}
+				/* port: the open tick copied as its last sub-step left it, once
+				(port/linux/game/demo.c) */
+				demo_steps_end();
 
 				/* (none while a client's clock waits: a frame that runs no tick
 				reports none; port: with sub-steps, the ticks that ended) */

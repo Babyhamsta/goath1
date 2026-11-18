@@ -121,8 +121,10 @@ take (`source/math/random_math.c`) and the players' input of each tick
   later frame (`render_interpolation.c`), which decides whether the tick's
   local seed makes it.
 - **A hash of the game state three times a second**, and of each allocation, which
-  the playback compares with its own (a data array's free datums left out:
-  what the frames made and deleted again there, which no tick reads).
+  the playback compares with its own (a data array's free datums and the
+  objects' pool's holes left out: what the frames made and deleted again
+  there, which no tick reads). The recording takes it on a thread of its
+  own, from the copy of the game state the tick's end takes anyway.
 - **A snapshot every `demo.snapshot_seconds`** (10), for seeking.
 - **Bookmarks** (the clip key) and the game's variant.
 

@@ -378,6 +378,8 @@ static struct
 	unsigned long long between_microseconds;
 	/* (inside the timed work of a tick's start or end) */
 	boolean timed;
+	/* an open tick's copy not yet taken (demo_steps_end) */
+	boolean pause_copy_due;
 } demo_recorder;
 
 /* told as a recording starts and stops, in the order added
@@ -2007,6 +2009,7 @@ static void demo_record_start(
 	demo_recorder.written = 0;
 	demo_recorder.work_microseconds = 0;
 	demo_recorder.between_microseconds = 0;
+	demo_recorder.pause_copy_due = FALSE;
 	demo_recorder.loaded = FALSE;
 	demo_recorder.input_valid = FALSE;
 	demo_recorder.cameras_valid = FALSE;
@@ -2401,9 +2404,21 @@ void demo_tick_pause(
 	}
 	if (demo_player.playing || !demo_recorder.recording)
 		return;
-	demo_shadow_take();
+	/* (the copy taken once the frame's steps are run, demo_steps_end: none
+	if the next sub-step runs straight after this one, nothing between) */
 	random_math_port_seeds(&demo_recorder.pause_seeds[0], &demo_recorder.pause_seeds[1]);
 	demo_recorder.paused = TRUE;
+	demo_recorder.pause_copy_due = TRUE;
+}
+
+void demo_steps_end(
+	void)
+{
+	if (!demo_recorder.pause_copy_due)
+		return;
+	demo_recorder.pause_copy_due = FALSE;
+	if (demo_recorder.recording && !demo_player.playing)
+		demo_shadow_take();
 }
 
 static void demo_playback_resume(short substep_index);
@@ -2428,6 +2443,12 @@ void demo_substep_resume(
 	if (!demo_recorder.paused)
 		return;
 	demo_recorder.paused = FALSE;
+	/* (run straight after the sub-step before: nothing came between) */
+	if (demo_recorder.pause_copy_due)
+	{
+		demo_recorder.pause_copy_due = FALSE;
+		return;
+	}
 	demo_open_patch_write(substep_index);
 	/* (and the frames' input, which they moved meanwhile and the sub-step
 	reads: the HUD's crosshair by the aim assist's level; the cameras, by

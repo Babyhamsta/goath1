@@ -31,6 +31,10 @@ next of them begun: what the frames put into the game state in between
 (a host's netcode dealing a client's reported hits) */
 void demo_tick_pause(void);
 void demo_substep_resume(short substep_index);
+/* a frame's steps all run (after game_time.c's loops of them): the open
+tick's state, as its last sub-step left it, is copied now, before anything
+else runs; a sub-step run straight after another needs none */
+void demo_steps_end(void);
 
 /* the tick's players' input (players.c): TRUE if a demo's playback gave it
 (the bots then take no part); else, around the bots' turn, it is recorded */
