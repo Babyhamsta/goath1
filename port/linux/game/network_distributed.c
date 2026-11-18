@@ -2151,6 +2151,15 @@ static void distributed_packer_flush(
 	packer->size = packer->prefix_size;
 }
 
+/* whether an entry of the size goes into the message packed so far (else
+distributed_packer_add begins another with it) */
+static boolean distributed_packer_joins(
+	struct distributed_packer const *packer,
+	word entry_size)
+{
+	return packer->count && packer->size + entry_size <= packer->room && packer->count < 255;
+}
+
 /* an entry into the message, which goes into the batch first when the
 entry would not fit it (and a batch full goes first then) */
 static void distributed_packer_add(
@@ -6809,6 +6818,214 @@ static word distributed_relayed_action_read(
 	return (word)(cursor - buffer);
 }
 
+/* ---------- relayed actions packed
+To an OpenH1 client, unless debug.network_forms_before
+(_distributed_message_relayed_actions_packed): the entries of a
+_distributed_message_relayed_actions message, each without what is at its
+usual value, which most of a bot's are (no choice, no trigger, no buttons):
+its parts byte first, with the buttons' history bits as before and a bit
+each for its choices, sticks, trigger and latest buttons, there only where
+not none (NONE for a choice, 0 else), and one for its player being the one
+after the entry before's in the message (else its byte); then the choices,
+the facing, the sticks, the trigger, the latest buttons and the ticks'
+before as before. Every value exact: the client makes the message of the
+entries back, every byte as it was (distributed_relayed_actions_unpack),
+and takes it as before. 7 or 8 bytes a bot's, not 14 */
+enum
+{
+	_relayed_packed_choices_bit = DISTRIBUTED_INPUT_HISTORY - 1,
+	_relayed_packed_sticks_bit,
+	_relayed_packed_trigger_bit,
+	_relayed_packed_buttons_bit,
+	_relayed_packed_next_player_bit,
+};
+
+typedef char relayed_packed_parts_assert[_relayed_packed_next_player_bit <= 7 ? 1 : -1];
+
+/* the action's bytes packed (at most DISTRIBUTED_RELAYED_ACTION_MAXIMUM_SIZE),
+before the player of the entry before it in the message (NONE for none) */
+static word distributed_relayed_action_pack(
+	struct distributed_relayed_action const *relayed,
+	short before,
+	byte *buffer)
+{
+	byte parts = 0;
+	byte *cursor = buffer + 1;
+	short history;
+
+	if (before != NONE && relayed->player_index == before + 1)
+		SET_FLAG(parts, _relayed_packed_next_player_bit, TRUE);
+	else
+		cursor = distributed_put(cursor, &relayed->player_index, sizeof(relayed->player_index));
+	if (relayed->desired_weapon_index != NONE || relayed->desired_grenade_index != NONE ||
+		relayed->desired_zoom_level != NONE)
+	{
+		SET_FLAG(parts, _relayed_packed_choices_bit, TRUE);
+		cursor = distributed_put(cursor, &relayed->desired_weapon_index, sizeof(relayed->desired_weapon_index));
+		cursor = distributed_put(cursor, &relayed->desired_grenade_index, sizeof(relayed->desired_grenade_index));
+		cursor = distributed_put(cursor, &relayed->desired_zoom_level, sizeof(relayed->desired_zoom_level));
+	}
+	cursor = distributed_put(cursor, &relayed->yaw, sizeof(relayed->yaw));
+	cursor = distributed_put(cursor, &relayed->pitch, sizeof(relayed->pitch));
+	if (relayed->throttle_i || relayed->throttle_j)
+	{
+		SET_FLAG(parts, _relayed_packed_sticks_bit, TRUE);
+		cursor = distributed_put(cursor, &relayed->throttle_i, sizeof(relayed->throttle_i));
+		cursor = distributed_put(cursor, &relayed->throttle_j, sizeof(relayed->throttle_j));
+	}
+	if (relayed->primary_trigger)
+	{
+		SET_FLAG(parts, _relayed_packed_trigger_bit, TRUE);
+		cursor = distributed_put(cursor, &relayed->primary_trigger, sizeof(relayed->primary_trigger));
+	}
+	if (relayed->control_flags[0])
+	{
+		SET_FLAG(parts, _relayed_packed_buttons_bit, TRUE);
+		cursor = distributed_put(cursor, &relayed->control_flags[0], sizeof(relayed->control_flags[0]));
+	}
+	for (history = 1; history < DISTRIBUTED_INPUT_HISTORY; history++)
+	{
+		if (relayed->control_flags[history] != relayed->control_flags[history - 1])
+		{
+			SET_FLAG(parts, history - 1, TRUE);
+			cursor = distributed_put(cursor, &relayed->control_flags[history], sizeof(relayed->control_flags[history]));
+		}
+	}
+	buffer[0] = parts;
+	return (word)(cursor - buffer);
+}
+
+/* a packed action from its bytes, no further than end, after the entry of
+the player before (NONE for none): the bytes it took, 0 for none that make one */
+static word distributed_relayed_action_unpack(
+	byte const *buffer,
+	byte const *end,
+	short before,
+	struct distributed_relayed_action *relayed)
+{
+	byte const *cursor = buffer;
+	byte parts;
+	short history;
+
+	csmemset(relayed, 0, sizeof(*relayed));
+	relayed->desired_weapon_index = NONE;
+	relayed->desired_grenade_index = NONE;
+	relayed->desired_zoom_level = NONE;
+	if (!distributed_take(&cursor, end, &parts, sizeof(parts)))
+		return 0;
+	if (TEST_FLAG(parts, _relayed_packed_next_player_bit))
+	{
+		if (before == NONE || before + 1 > 0xFF)
+			return 0;
+		relayed->player_index = (byte)(before + 1);
+	}
+	else if (!distributed_take(&cursor, end, &relayed->player_index, sizeof(relayed->player_index)))
+		return 0;
+	if (TEST_FLAG(parts, _relayed_packed_choices_bit) &&
+		(!distributed_take(&cursor, end, &relayed->desired_weapon_index, sizeof(relayed->desired_weapon_index)) ||
+		!distributed_take(&cursor, end, &relayed->desired_grenade_index, sizeof(relayed->desired_grenade_index)) ||
+		!distributed_take(&cursor, end, &relayed->desired_zoom_level, sizeof(relayed->desired_zoom_level))))
+	{
+		return 0;
+	}
+	if (!distributed_take(&cursor, end, &relayed->yaw, sizeof(relayed->yaw)) ||
+		!distributed_take(&cursor, end, &relayed->pitch, sizeof(relayed->pitch)))
+	{
+		return 0;
+	}
+	if (TEST_FLAG(parts, _relayed_packed_sticks_bit) &&
+		(!distributed_take(&cursor, end, &relayed->throttle_i, sizeof(relayed->throttle_i)) ||
+		!distributed_take(&cursor, end, &relayed->throttle_j, sizeof(relayed->throttle_j))))
+	{
+		return 0;
+	}
+	if (TEST_FLAG(parts, _relayed_packed_trigger_bit) &&
+		!distributed_take(&cursor, end, &relayed->primary_trigger, sizeof(relayed->primary_trigger)))
+	{
+		return 0;
+	}
+	if (TEST_FLAG(parts, _relayed_packed_buttons_bit) &&
+		!distributed_take(&cursor, end, &relayed->control_flags[0], sizeof(relayed->control_flags[0])))
+	{
+		return 0;
+	}
+	for (history = 1; history < DISTRIBUTED_INPUT_HISTORY; history++)
+	{
+		if (!TEST_FLAG(parts, history - 1))
+			relayed->control_flags[history] = relayed->control_flags[history - 1];
+		else if (!distributed_take(&cursor, end, &relayed->control_flags[history],
+			sizeof(relayed->control_flags[history])))
+		{
+			return 0;
+		}
+	}
+	return (word)(cursor - buffer);
+}
+
+/* (the host) an action into the packer's message of them, packed or (not
+packed) whole; before is the player of the entry before it in the message
+(NONE for none), the action's after */
+static void distributed_relayed_action_add(
+	struct distributed_packer *packer,
+	struct distributed_relayed_action const *action,
+	boolean packed,
+	short *before)
+{
+	byte entry[DISTRIBUTED_RELAYED_ACTION_MAXIMUM_SIZE];
+	word size;
+
+	if (!packed)
+		size = distributed_relayed_action_write(action, entry);
+	else
+	{
+		size = distributed_relayed_action_pack(action, *before, entry);
+		/* (the first of another message: its player whole) */
+		if (*before != NONE && !distributed_packer_joins(packer, size))
+			size = distributed_relayed_action_pack(action, NONE, entry);
+	}
+	distributed_packer_add(packer, entry, size);
+	*before = packer->count ? (short)action->player_index : NONE;
+}
+
+/* (a client) a packed message of the relayed actions made back into the
+message of them (_distributed_message_relayed_actions) at unpacked, of at
+most maximum bytes: its size, 0 for one that makes none */
+static word distributed_relayed_actions_unpack(
+	void const *message,
+	word size,
+	void *unpacked,
+	word maximum)
+{
+	struct distributed_message_header header;
+	byte const *cursor = (byte const *)message + sizeof(header);
+	byte const *end = (byte const *)message + size;
+	long update_number;
+	word used = (word)(sizeof(header) + sizeof(update_number));
+	short before = NONE;
+	short index;
+
+	if (size < sizeof(header) || maximum < used)
+		return 0;
+	csmemcpy(&header, message, sizeof(header));
+	if (!distributed_take(&cursor, end, &update_number, sizeof(update_number)))
+		return 0;
+	csmemcpy((byte *)unpacked + sizeof(header), &update_number, sizeof(update_number));
+	for (index = 0; index < header.count; index++)
+	{
+		struct distributed_relayed_action relayed;
+		word taken = distributed_relayed_action_unpack(cursor, end, before, &relayed);
+
+		if (!taken || maximum - used < DISTRIBUTED_RELAYED_ACTION_MAXIMUM_SIZE)
+			return 0;
+		cursor += taken;
+		used = (word)(used + distributed_relayed_action_write(&relayed, (byte *)unpacked + used));
+		before = relayed.player_index;
+	}
+	header.type = _distributed_message_relayed_actions;
+	csmemcpy(unpacked, &header, sizeof(header));
+	return used;
+}
+
 /* ---------- forwarded input
 An OpenH1 game's host sends a client's players' input on to its other OpenH1
 clients as it comes (NETCODE.md, "Forwarded input"), not at its next tick:
@@ -8141,19 +8358,22 @@ static void distributed_host_send_players(
 		long machine_index = machine_indices[machine_number];
 		short player_index;
 
-		distributed_packer_begin(&distributed_packer, (short)machine_index, _distributed_message_relayed_actions,
-			&distributed_host_update_number, sizeof(distributed_host_update_number));
-		for (player_index = 0; player_index < MAXIMUM_TRACKED_PLAYERS; player_index++)
+		/* (to an OpenH1 client packed, each entry against the one before it
+		in its message: distributed_relayed_action_pack) */
 		{
-			byte entry[DISTRIBUTED_RELAYED_ACTION_MAXIMUM_SIZE];
+			boolean packed = !network_legacy_machine(machine_index) && !config_boolean("debug.network_forms_before");
+			short before = NONE;
 
-			if (TEST_FLAG(distributed_sends[machine_index][player_index], _distributed_send_action_bit))
+			distributed_packer_begin(&distributed_packer, (short)machine_index,
+				packed ? _distributed_message_relayed_actions_packed : _distributed_message_relayed_actions,
+				&distributed_host_update_number, sizeof(distributed_host_update_number));
+			for (player_index = 0; player_index < MAXIMUM_TRACKED_PLAYERS; player_index++)
 			{
-				distributed_packer_add(&distributed_packer, entry,
-					distributed_relayed_action_write(&distributed_host_actions[player_index], entry));
+				if (TEST_FLAG(distributed_sends[machine_index][player_index], _distributed_send_action_bit))
+					distributed_relayed_action_add(&distributed_packer, &distributed_host_actions[player_index], packed, &before);
 			}
+			distributed_packer_flush(&distributed_packer);
 		}
-		distributed_packer_flush(&distributed_packer);
 		/* (an OpenH1 game's: the sub-steps the tick ran for the same players,
 		network_substeps.c) */
 		{
@@ -10658,6 +10878,23 @@ void network_distributed_handle_message(
 				distributed_handling_batch = FALSE;
 			}
 		}
+		return;
+	}
+	/* (an OpenH1 host's relayed actions packed: taken as the message of them
+	they make) */
+	if (header.type == _distributed_message_relayed_actions_packed)
+	{
+		static union
+		{
+			long alignment;
+			byte bytes[sizeof(struct distributed_message_header) + sizeof(long) +
+				255 * DISTRIBUTED_RELAYED_ACTION_MAXIMUM_SIZE];
+		} unpacked;
+		word unpacked_size = distributed_relayed_actions_unpack(message, size, unpacked.bytes,
+			(word)sizeof(unpacked.bytes));
+
+		if (unpacked_size)
+			network_distributed_handle_message(machine_index, (word const *)unpacked.bytes, unpacked_size);
 		return;
 	}
 	/* (an OpenH1 host's tick states' entries joined: taken as the message of

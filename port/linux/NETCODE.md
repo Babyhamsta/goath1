@@ -1641,6 +1641,18 @@ client's prediction went from 1.45 to 0.52 KB/s (to the host, 120 Hz).
 `debug.network_forms_before` (`HALO_NETWORK_FORMS_BEFORE`) sends both as
 before (`tools/harness/tests/test_unit_difference.py`).
 
+**Relayed input packed.** A host sends an OpenH1 client the players' relayed
+input packed (`_distributed_message_relayed_actions_packed`, 159, in place of
+15): each entry without the parts at their usual values (no choice, sticks,
+trigger or latest buttons, which a bot's mostly are), a bit each in its parts
+byte saying which are there, and its player a bit where it is the one after
+the entry before's in the message; every value exact. The client makes the
+message of 15 back, byte for byte (`distributed_relayed_actions_unpack`), and
+takes it as before. A bot's entry is 7 or 8 bytes, not 14: at 120 Hz on
+crowded Blood Gulch the relayed input went from 3.9 to 2.5 KB/s a client.
+`debug.network_forms_before` sends 15
+(`tools/harness/tests/test_relayed_action_packed.py`).
+
 ### Actors to far clients
 
 Only the host runs the AI. It sends each client its actors' units as it
@@ -2993,7 +3005,8 @@ Unity's Netcode for Entities, lightyear, netfox and the Ares source):
   predicted it at to any other client), 35 bytes for a player on foot
   instead of 64; a player's input goes with its tick's update once a
   message, and the buttons of the three ticks before only where they
-  differ from the tick after (14 to 20 bytes instead of 24); what a unit
+  differ from the tick after (14 to 20 bytes instead of 24; to an OpenH1
+  client 7 to 20, packed: "Relayed input packed"); what a unit
   carries is sent when it changes (and once a second); the moving objects
   as often as they are near the client's players, the objects at rest
   round all of them, four a tick; the players' statistics when

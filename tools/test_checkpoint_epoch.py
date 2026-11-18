@@ -95,6 +95,8 @@ static int world_kind(byte type);
 static word network_objects_unpack_states(void const *m,word s,void *u,word mx){(void)m;(void)s;(void)u;(void)mx;return 0;}
 #define DISTRIBUTED_UNIT_STATE_MAXIMUM_SIZE 128
 static word distributed_unit_differences_unjoin(void const *m,word s,void *u,word mx){(void)m;(void)s;(void)u;(void)mx;return 0;}
+#define DISTRIBUTED_RELAYED_ACTION_MAXIMUM_SIZE 20
+static word distributed_relayed_actions_unpack(void const *m,word s,void *u,word mx){(void)m;(void)s;(void)u;(void)mx;return 0;}
 '''
     sizes = sorted(set(re.findall(r"\b(\w+_entry_size|\w+_minimum_size)\(", dispatch)) - {"network_objects_entry_size"})
     prefix += "\n".join(f"#define {name}(...) 1" for name in sizes) + "\n"
