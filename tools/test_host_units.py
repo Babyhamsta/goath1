@@ -254,3 +254,18 @@ def test_host_stall(tmp_path, broken):
         return
     with pytest.raises(AssertionError):
         run_test(tmp_path, "host_stall_test", sources)
+
+
+@pytest.mark.parametrize("broken", [False, True])
+def test_host_log_queue(tmp_path, broken):
+    """the log's queue (host_log_queue.c) with a writer that blocks, as a
+    full pipe does: the callers not held up, the lines in order once it is
+    not, those past its room dropped and counted in a line of their own, a
+    flush that writes them all. The negative control writes each line on its
+    caller's thread, as before, and is held up as long as the writer is"""
+    sources = [TESTS / "host_log_queue_test.c", HOST / "host_log_queue.c"]
+    if not broken:
+        run_test(tmp_path, "host_log_queue_test", sources)
+        return
+    with pytest.raises(AssertionError):
+        run_test(tmp_path, "host_log_queue_test", sources, flags=["-DLOG_DIRECT"])
