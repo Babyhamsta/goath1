@@ -111,5 +111,11 @@ had; the part of the time planned a frame takes */
 long network_clock_window_figure(long *samples, short count);
 void network_clock_plan_report(long early_microseconds, long ticks_ahead, struct network_clock_plan *plan);
 real network_clock_frame_part(real *seconds, boolean *at_once, real time_delta_sec);
+/* (a client) the host's figure as the plan is to take it, of a client whose
+steps run up to quantum_microseconds after they fall due (its frames paced by
+its display): one whose input comes up to that much earlier than the band
+by its frames' phase is held there, as one in the band, not moved back
+toward the target and across the frame's phase, late every other report */
+long network_clock_quantized_early(long early_microseconds, long quantum_microseconds);
 
 #endif

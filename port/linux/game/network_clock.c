@@ -41,8 +41,9 @@ game, and an OpenCE machine in a mixed game, play as before.
 /* xbox_kernel.c's and game_time.c's */
 unsigned long long platform_shared_clock_microseconds(void);
 void game_time_port_advance(long ticks);
-/* port_config.c's */
+/* port_config.c's; unseen_frames.c's */
 int config_boolean(char const *name);
+int halo_frames_unseen(void);
 
 /* ---------- globals */
 
@@ -73,6 +74,11 @@ static unsigned long long clock_latest_began;
 /* the host: its frames, counted as each frame's datagrams have been read
 (network_clock_frame_read) */
 static unsigned long clock_frame;
+/* a client whose frames the display paces: about its longest frame of late
+(microseconds; 0, its frames paced by its clock), which its steps run up to
+after they fall due, and so its input comes to the host up to that much
+earlier than it might, by its frames' phase (network_clock_quantized_early) */
+static long clock_frame_quantum_microseconds;
 
 /* a client: the host's tick of the latest report taken (NONE: none), the
 move planned and not yet made, and what the network test logs */
@@ -154,6 +160,19 @@ void network_clock_plan_report(
 		clock held to one figure would go back and forth across a frame) */
 		plan->seconds = 0.0f;
 	}
+}
+
+long network_clock_quantized_early(
+	long early_microseconds,
+	long quantum_microseconds)
+{
+	if (quantum_microseconds <= 0 || early_microseconds < CLOCK_EARLY_LOW_MICROSECONDS)
+		return early_microseconds;
+	/* (within a frame of the band: as it is; further, back to a frame
+	above the target, not to it) */
+	if (early_microseconds <= CLOCK_EARLY_HIGH_MICROSECONDS + quantum_microseconds)
+		return CLOCK_EARLY_TARGET_MICROSECONDS;
+	return early_microseconds - quantum_microseconds;
 }
 
 real network_clock_frame_part(
@@ -362,6 +381,17 @@ real network_clock_frame_seconds(
 
 	if (game_connection() != _game_connection_network_client || !network_standard_agreed_rate() || game_time_held())
 		return 0.0f;
+	/* (the longest frame of the last second or so, of a client whose frames
+	the display paces, not its clock: network_clock_quantized_early) */
+	if (halo_frames_unseen() || config_boolean("debug.network_timing_before"))
+		clock_frame_quantum_microseconds = 0;
+	else
+	{
+		long frame = (long)(time_delta_sec * 1000000.0f);
+
+		clock_frame_quantum_microseconds = MAX(MIN(frame, CLOCK_TICK_MICROSECONDS),
+			clock_frame_quantum_microseconds - clock_frame_quantum_microseconds / 128);
+	}
 	part = network_clock_frame_part(&clock_client.plan.seconds, &clock_client.plan.at_once, time_delta_sec);
 	clock_client.seconds_moved += part;
 	return part;
@@ -440,8 +470,8 @@ void network_clock_handle_message(
 	clock_client.early_microseconds = PIN(report.early_microseconds,
 		-CLOCK_SAMPLE_LIMIT_MICROSECONDS, CLOCK_SAMPLE_LIMIT_MICROSECONDS);
 	clock_client.reports++;
-	network_clock_plan_report(clock_client.early_microseconds,
-		host_time == NONE ? 0 : game_time_get() - host_time, &clock_client.plan);
+	network_clock_plan_report(network_clock_quantized_early(clock_client.early_microseconds,
+		clock_frame_quantum_microseconds), host_time == NONE ? 0 : game_time_get() - host_time, &clock_client.plan);
 	if (clock_client.plan.ticks || clock_client.plan.at_once)
 	{
 		error(_error_silent, "clock: the host heard this machine's input %ld us before its tick: %ld ticks skipped, %ld us run at once",
