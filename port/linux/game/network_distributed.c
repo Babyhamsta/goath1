@@ -67,6 +67,7 @@ machine (their datum identifiers need not be).
 #include "game/player_queues_new.h"
 #include "networking/network_game_globals.h"
 #include "networking/network_connection.h"
+#include "networking/network_server_manager.h"
 #include "objects/objects.h"
 #include "objects/damage.h"
 #include "scenario/scenario.h"
@@ -218,6 +219,20 @@ enum
 	at once */
 	GAME_STATE_MINIMUM_TICKS = 2 * GAME_STATE_INTERVAL_TICKS,
 	MAXIMUM_GAME_STATE_SIZE = 0xF00,
+	/* an OpenH1 client of an OpenH1 game is sent the state's changes since
+	the state last sent it (the header's count GAME_STATE_CHANGES; 0, the
+	whole state, as an OpenCE machine is sent it), and the whole state again
+	this long after its last whole one where changes went since (a client
+	that could not take them heals by it) */
+	GAME_STATE_CHANGES = 1,
+	GAME_STATE_REFRESH_TICKS = 10 * TICKS_PER_SECOND,
+	/* (a run of changed bytes: its offset in 16 bits and its length in a
+	byte; runs nearer than their own header joined) */
+	GAME_STATE_RUN_HEADER_SIZE = 3,
+	GAME_STATE_MAXIMUM_RUN = 255,
+	/* (the changes' own header: the state's size, 16 bits, and the
+	checksum of the state they make) */
+	GAME_STATE_CHANGES_HEADER_SIZE = 2 + 4,
 	MAXIMUM_STATISTICS_PER_MESSAGE = 64,
 	/* the players' pings sent, for the scoreboard */
 	PING_INTERVAL_TICKS = 2 * TICKS_PER_SECOND,
@@ -900,6 +915,22 @@ leading postgame state), and when */
 static unsigned long distributed_game_state_checksum;
 static long distributed_game_state_postgame;
 static long distributed_game_state_time;
+/* the host: the game type's state as last sent every client, and each
+client's: whether what it has is that (shared: it is sent its changes),
+when it was last sent the whole state, and whether changes went since */
+static byte distributed_game_state_sent[MAXIMUM_GAME_STATE_SIZE];
+static long distributed_game_state_sent_size;
+struct distributed_game_state_machine
+{
+	boolean shared;
+	boolean changed_since_whole;
+	long whole_time;
+};
+static struct distributed_game_state_machine distributed_game_state_machines[HALO_PORT_MAXIMUM_NETWORK_MACHINES];
+/* a client: the game type's state as the host last sent it (0 bytes: none,
+and its changes are not taken until a whole state comes) */
+static byte distributed_game_state_had[MAXIMUM_GAME_STATE_SIZE];
+static long distributed_game_state_had_size;
 
 /* the latest tick of each kind of message had in a datagram from each sender
 (a machine, or the host), NONE for none: the kinds whose every message is the
@@ -6875,9 +6906,153 @@ static void distributed_send_all_statistics(
 
 /* ---------- the game type's state */
 
+/* the changes from base (base_size bytes) to state (size) as a message's
+entries: the state's size and the checksum of the state they make, then
+each run of changed bytes, its offset, length and bytes; 0 where they are
+not fewer bytes than the whole state, or the sizes differ */
+static long distributed_game_state_changes_write(
+	byte const *base,
+	long base_size,
+	byte const *state,
+	long size,
+	byte *buffer,
+	long maximum)
+{
+	unsigned long checksum;
+	word size_word = (word)size;
+	long written = GAME_STATE_CHANGES_HEADER_SIZE;
+	long offset = 0;
+
+	if (base_size != size || size <= written || size > 0xFFFF || maximum < size)
+		return 0;
+	checksum = distributed_checksum(state, size);
+	csmemcpy(buffer, &size_word, sizeof(size_word));
+	/* (its 32 bits, low first) */
+	buffer[2] = (byte)checksum;
+	buffer[3] = (byte)(checksum >> 8);
+	buffer[4] = (byte)(checksum >> 16);
+	buffer[5] = (byte)(checksum >> 24);
+	while (offset < size)
+	{
+		long end;
+		long same;
+		word offset_word;
+
+		if (base[offset] == state[offset])
+		{
+			offset++;
+			continue;
+		}
+		/* (the run to its last changed byte, over same bytes no more than a
+		run's header) */
+		end = offset + 1;
+		same = 0;
+		while (end + same < size && end + same - offset < GAME_STATE_MAXIMUM_RUN)
+		{
+			if (base[end + same] != state[end + same])
+			{
+				end += same + 1;
+				same = 0;
+			}
+			else if (++same > GAME_STATE_RUN_HEADER_SIZE)
+				break;
+		}
+		if (written + GAME_STATE_RUN_HEADER_SIZE + (end - offset) >= size)
+			return 0;
+		offset_word = (word)offset;
+		csmemcpy(buffer + written, &offset_word, sizeof(offset_word));
+		buffer[written + sizeof(offset_word)] = (byte)(end - offset);
+		csmemcpy(buffer + written + GAME_STATE_RUN_HEADER_SIZE, state + offset, end - offset);
+		written += GAME_STATE_RUN_HEADER_SIZE + (end - offset);
+		offset = end;
+	}
+	return written;
+}
+
+/* (a client) the host's changes (distributed_game_state_changes_write) to
+the state it had (*state_size bytes, 0 for none): TRUE, the state they make
+in its place, where they make the state the host sent (its size and
+checksum); else FALSE and the state none, until a whole one comes */
+static boolean distributed_game_state_changes_read(
+	byte *state,
+	long *state_size,
+	byte const *changes,
+	long changes_size)
+{
+	byte made[MAXIMUM_GAME_STATE_SIZE];
+	unsigned long checksum;
+	word size;
+	long cursor = GAME_STATE_CHANGES_HEADER_SIZE;
+
+	if (*state_size <= 0 || *state_size > (long)sizeof(made) || changes_size < GAME_STATE_CHANGES_HEADER_SIZE)
+	{
+		*state_size = 0;
+		return FALSE;
+	}
+	csmemcpy(&size, changes, sizeof(size));
+	checksum = (unsigned long)changes[2] | ((unsigned long)changes[3] << 8) | ((unsigned long)changes[4] << 16) |
+		((unsigned long)changes[5] << 24);
+	if ((long)size != *state_size)
+	{
+		*state_size = 0;
+		return FALSE;
+	}
+	csmemcpy(made, state, size);
+	while (cursor + GAME_STATE_RUN_HEADER_SIZE <= changes_size)
+	{
+		word offset;
+		byte length;
+
+		csmemcpy(&offset, changes + cursor, sizeof(offset));
+		length = changes[cursor + sizeof(offset)];
+		if (!length || cursor + GAME_STATE_RUN_HEADER_SIZE + length > changes_size ||
+			(long)offset + length > (long)size)
+		{
+			break;
+		}
+		cursor += GAME_STATE_RUN_HEADER_SIZE;
+		csmemcpy(made + offset, changes + cursor, length);
+		cursor += length;
+	}
+	if (cursor != changes_size || (distributed_checksum(made, size) & 0xFFFFFFFFUL) != checksum)
+	{
+		*state_size = 0;
+		return FALSE;
+	}
+	csmemcpy(state, made, size);
+	return TRUE;
+}
+
+enum
+{
+	_game_state_send_none = 0,
+	_game_state_send_whole,
+	_game_state_send_changes,
+};
+
+/* (the host) what a client is sent of the game type's state at a look:
+the whole state again GAME_STATE_REFRESH_TICKS after its last whole one
+where changes went since (changed or not: a king's score changes at every
+look); else, when it changed (changed), its changes where it has the state
+last sent (shared) and they were written (changes), else the whole state;
+else nothing */
+static short distributed_game_state_due(
+	struct distributed_game_state_machine const *machine,
+	boolean changed,
+	boolean changes,
+	long now)
+{
+	if (machine->changed_since_whole && now - machine->whole_time >= GAME_STATE_REFRESH_TICKS)
+		return _game_state_send_whole;
+	if (changed)
+		return machine->shared && changes ? _game_state_send_changes : _game_state_send_whole;
+	return _game_state_send_none;
+}
+
 /* the game type's state (larger than a datagram: reliably) to a machine
 that has loaded, or (NONE) to every client when it changed (at most every
-other look, unless the game ended) */
+other look, unless the game ended): to an OpenH1 client of an OpenH1 game
+that has the state last sent, its changes alone (distributed_game_state_due) */
 static void distributed_send_game_state(
 	long machine_index)
 {
@@ -6886,32 +7061,117 @@ static void distributed_send_game_state(
 		struct distributed_message_header header;
 		byte data[MAXIMUM_GAME_STATE_SIZE];
 	} message;
+	static struct
+	{
+		struct distributed_message_header header;
+		byte data[MAXIMUM_GAME_STATE_SIZE];
+	} changes;
 	long size = game_engine_write_network_state(message.data, sizeof(message.data));
+	long now = game_time_get();
+	long machine_indices[HALO_PORT_MAXIMUM_NETWORK_MACHINES];
+	short machine_count;
+	short machine_number;
 	unsigned long checksum;
+	boolean changed;
+	boolean same_as_sent;
+	long changes_size = 0;
 
 	if (size <= 0)
 		return;
+	same_as_sent = size == distributed_game_state_sent_size &&
+		!csmemcmp(message.data, distributed_game_state_sent, size);
 	if (machine_index != NONE)
 	{
 		distributed_send_to_machine_reliably(machine_index, &message, _distributed_message_game_state, 0,
 			(word)(sizeof(message.header) + size));
+		/* (what it has now: the state last sent, whose changes it takes) */
+		if (machine_index >= 0 && machine_index < HALO_PORT_MAXIMUM_NETWORK_MACHINES)
+		{
+			distributed_game_state_machines[machine_index].shared = same_as_sent;
+			distributed_game_state_machines[machine_index].changed_since_whole = FALSE;
+			distributed_game_state_machines[machine_index].whole_time = now;
+		}
 		return;
 	}
 	checksum = distributed_checksum(message.data, size);
-	if (distributed_game_state_time != NONE &&
+	changed = !(distributed_game_state_time != NONE &&
 		(checksum == distributed_game_state_checksum ||
-			(game_time_get() - distributed_game_state_time < GAME_STATE_MINIMUM_TICKS &&
+			(now - distributed_game_state_time < GAME_STATE_MINIMUM_TICKS &&
 				(size < (long)sizeof(long) ||
-					csmemcmp(message.data, &distributed_game_state_postgame, sizeof(long)) == 0))))
+					csmemcmp(message.data, &distributed_game_state_postgame, sizeof(long)) == 0))));
+	if (changed)
+	{
+		if (size >= (long)sizeof(long))
+			csmemcpy(&distributed_game_state_postgame, message.data, sizeof(long));
+		distributed_game_state_checksum = checksum;
+		distributed_game_state_time = now;
+		changes_size = distributed_game_state_changes_write(distributed_game_state_sent,
+			distributed_game_state_sent_size, message.data, size, changes.data, sizeof(changes.data));
+		csmemcpy(distributed_game_state_sent, message.data, size);
+		distributed_game_state_sent_size = size;
+		same_as_sent = TRUE;
+	}
+	machine_count = distributed_client_machines(machine_indices, HALO_PORT_MAXIMUM_NETWORK_MACHINES);
+	for (machine_number = 0; machine_number < machine_count; machine_number++)
+	{
+		long index = machine_indices[machine_number];
+		struct distributed_game_state_machine *machine = &distributed_game_state_machines[index];
+		/* (an OpenCE machine, or a Legacy game's: the whole state, as the
+		original game sends it) */
+		boolean openh1 = network_standard_hosting() && network_standard_machine_is_openh1(index);
+
+		/* (one not in the game the host plays, loading it again: the state
+		whole when it changes once it is) */
+		if (!openh1 || network_game_server_machine_phase(global_network_game_server_get(), index) !=
+			_network_machine_phase_loaded)
+		{
+			machine->shared = FALSE;
+			machine->changed_since_whole = FALSE;
+		}
+		switch (distributed_game_state_due(machine, changed, openh1 && changes_size > 0, now))
+		{
+		case _game_state_send_whole:
+			distributed_send_to_machine_reliably(index, &message, _distributed_message_game_state, 0,
+				(word)(sizeof(message.header) + size));
+			machine->shared = openh1 && same_as_sent;
+			machine->changed_since_whole = FALSE;
+			machine->whole_time = now;
+			break;
+		case _game_state_send_changes:
+			distributed_send_to_machine_reliably(index, &changes, _distributed_message_game_state,
+				GAME_STATE_CHANGES, (word)(sizeof(changes.header) + changes_size));
+			machine->changed_since_whole = TRUE;
+			break;
+		}
+	}
+}
+
+/* (a client) the host's game type's state: whole (count 0), or its changes
+since the last it sent (GAME_STATE_CHANGES, over the stream alone), taken
+where they make the state the host has (else none taken until a whole one) */
+static void distributed_handle_game_state(
+	byte const *data,
+	long size,
+	short count,
+	boolean from_stream)
+{
+	if (count == 0)
+	{
+		distributed_game_state_had_size = 0;
+		if (size > 0 && size <= (long)sizeof(distributed_game_state_had))
+		{
+			csmemcpy(distributed_game_state_had, data, size);
+			distributed_game_state_had_size = size;
+		}
+		game_engine_read_network_state(data, size);
+		return;
+	}
+	if (count != GAME_STATE_CHANGES || !from_stream ||
+		!distributed_game_state_changes_read(distributed_game_state_had, &distributed_game_state_had_size, data, size))
 	{
 		return;
 	}
-	if (size >= (long)sizeof(long))
-		csmemcpy(&distributed_game_state_postgame, message.data, sizeof(long));
-	distributed_game_state_checksum = checksum;
-	distributed_game_state_time = game_time_get();
-	distributed_send(&message, _distributed_message_game_state, 0, (word)(sizeof(message.header) + size),
-		_distributed_to_clients_reliably);
+	game_engine_read_network_state(distributed_game_state_had, distributed_game_state_had_size);
 }
 
 /* ---------- the game */
@@ -6970,6 +7230,9 @@ static void distributed_reset_checkpoint_state(boolean reset_received_times)
 	distributed_statistics_due = TRUE;
 	distributed_game_state_checksum = 0;
 	distributed_game_state_time = NONE;
+	/* (the host's next state whole to every client) */
+	distributed_game_state_sent_size = 0;
+	csmemset(distributed_game_state_machines, 0, sizeof(distributed_game_state_machines));
 	distributed_host_update_number = NONE;
 	distributed_sent_structure_bsp_index = NONE;
 	distributed_pickup_count = 0;
@@ -7133,6 +7396,7 @@ void network_distributed_new_game(
 	}
 	network_clock_new_game();
 	distributed_game_state_postgame = 0;
+	distributed_game_state_had_size = 0;
 	distributed_own_round_trip = 0.0f;
 	csmemset(distributed_player_pings, 0xFF, sizeof(distributed_player_pings));
 	distributed_own_ping_valid = FALSE;
@@ -8915,7 +9179,7 @@ void network_distributed_handle_message(
 		network_objects_handle_states(entries, header.count, header.game_time);
 		break;
 	case _distributed_message_game_state:
-		game_engine_read_network_state((byte const *)entries, size - sizeof(header));
+		distributed_handle_game_state((byte const *)entries, size - sizeof(header), header.count, from_stream);
 		break;
 	case _distributed_message_objects_synchronized:
 		network_objects_handle_synchronized();
@@ -9023,7 +9287,10 @@ void network_distributed_handle_message(
 		network_objects_client_asked(machine_index, header.count != 0);
 		/* (a machine new at its index, which may have joined the game in
 		progress: every player's statistics and the game type's state, after
-		the objects it names) */
+		the objects it names; one that asks again, the game type's state
+		whole at its next change, whatever it had) */
+		if (machine_index >= 0 && machine_index < HALO_PORT_MAXIMUM_NETWORK_MACHINES)
+			distributed_game_state_machines[machine_index].shared = FALSE;
 		if (loaded)
 		{
 			distributed_send_all_statistics(machine_index);
