@@ -1119,15 +1119,23 @@ void network_substeps_host_send(
 			used = 0;
 			entries = 0;
 		}
-		if (!ran || player_index < 0 || player_index >= MAXIMUM_TRACKED_PLAYERS || !substep_record_complete(ran) ||
-			!network_substeps_globals.start_valid[player_index] ||
-			substep_record_unchanged(ran, &network_substeps_globals.start[player_index]))
-		{
+		if (!ran || !network_substeps_host_relays(player_index))
 			continue;
-		}
 		used = (word)(used + relayed_record_write(player_index, ran, message.entries + used));
 		entries++;
 	}
+}
+
+boolean network_substeps_host_relays(
+	short player_index)
+{
+	struct substep_record const *ran;
+
+	if (!network_substeps_active() || player_index < 0 || player_index >= MAXIMUM_TRACKED_PLAYERS)
+		return FALSE;
+	ran = &network_substeps_globals.ran[player_index];
+	return substep_record_complete(ran) && network_substeps_globals.start_valid[player_index] &&
+		!substep_record_unchanged(ran, &network_substeps_globals.start[player_index]);
 }
 
 word network_substeps_forward_write(

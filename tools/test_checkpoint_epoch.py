@@ -511,7 +511,7 @@ static struct {long taken_time[2],taken_host_time[2],input_heard_time[2],input_t
 #define UNIT_BASE_TICKS 2
 #define UNIT_SENT_TICKS 2
 static int distributed_predictions_heard[2],distributed_predictions_earlier[2];
-static int distributed_forwards[2],distributed_forward_periods[2],distributed_far_live[2];
+static int distributed_forwards[2],distributed_forward_periods[2],distributed_far_live[2],distributed_relayed_sent[2];
 static long distributed_forwarded_ticks[2],distributed_forwarded_times[2],distributed_host_run_times[2];
 static struct {long last_run[2];int count;} distributed_host_takes;
 static struct {long key,unit_index;} distributed_remote_positions[2][REMOTE_POSITION_TICKS],
