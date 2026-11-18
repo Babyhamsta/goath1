@@ -7289,6 +7289,15 @@ static void distributed_forward_flush(
 	{
 		return;
 	}
+	/* (a host's own step due within the interval: with its datagram, at the
+	step's end, not in one of their own just before it; a dedicated server,
+	and debug.network_timing_before, at once) */
+	if (occasion == _forward_at_read && !halo_server_mode() && game_time_seconds_to_next_step() >= 0.0f &&
+		game_time_seconds_to_next_step() * 1000.0f < (real)FORWARDED_INPUT_INTERVAL_MILLISECONDS &&
+		!config_boolean("debug.network_timing_before"))
+	{
+		return;
+	}
 	machine_count = distributed_client_machines(machine_indices, HALO_PORT_MAXIMUM_NETWORK_MACHINES);
 	for (machine_number = 0; machine_number < machine_count; machine_number++)
 	{
@@ -7409,7 +7418,8 @@ nobody sees, waiting for its step: unseen_frame_wait_receiving) waits up to
 milliseconds for datagrams, reads those that come as its frame's read does
 and sends the input in them on at once, as the frame does after its read: a
 client's press goes on to the others as it comes, not at the server's next
-frame (at most 120 a second). With debug.network_latency, what is held back is
+frame (at most 120 a second; a host's, within its interval, with its step:
+distributed_forward_flush). With debug.network_latency, what is held back is
 read as it comes due, a millisecond's wait at a time (xnet.c). FALSE when it
 cannot wait so (no game in progress): the frame sleeps */
 int network_distributed_server_receive(

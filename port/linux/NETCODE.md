@@ -3479,6 +3479,85 @@ a game, and the positions apart are 0.017 to 0.057 world units on average,
 latency games, against up to 83% before. The host's states at the sub-step rate (version 14) are measured in "States
 at the sub-steps".
 
+### Latency by hop
+
+`debug.network_latency_trace` (`HALO_NETWORK_LATENCY_TRACE`, a file in the
+data folder) has each machine of a network test write when each control
+change of a player was sampled, sent, received, read, applied and shown, on
+the computer's own monotonic clock (`port/linux/game/network_latency_trace.c`;
+nothing goes on the wire, and off it costs a flag's test at each place).
+A change is keyed by its player and its tick and sub-step: a client's live
+control (`L`, 60 and 120), the host's own player's (`H`) and a client's
+input of a tick (`I`, the one path at 30). The arrival is the kernel's
+timestamp of the datagram (`SIOCGSTAMPNS` on Linux, carried through the
+connection's queue to the message's handling; elsewhere the read's time).
+`tools/net_latency.py p1/latency.txt p2/latency.txt p3/latency.txt` joins
+the files and prints each hop's median, 95th percentile and worst: the
+owner's input read to its step and its datagram handed to the socket; the
+host's arrival, read, handling, the step that applies it to its copy and the
+datagram that sends it on; each other client's arrival, read, the step that
+applies it and the first frame presented after (a client that draws). It also
+prints how long before the host's tick of its number each client's input
+came, each client's lead over the host's latest tick it has, and the
+datagrams that left within 1 ms of another to the same peer.
+
+What it showed (three copies on one computer's loopback, Slayer on
+bloodgulch with 13 bots, the host and the third copy without a renderer, the
+second drawing at 120 frames a second): a machine whose frames nobody sees
+read its datagrams once a frame, before its wait for the next step
+(`unseen_frames.c`), so a datagram that came in the wait waited for the
+next frame's read, after the step it could have made: a sub-step at 120 (8.3
+ms), a tick at 30 (33 ms). On the host the client's clock then aimed its
+input at that read, not the tick ("The client's clock": an input read in the
+frame its tick begins in is taken for on time), so every input waited on the
+host for the wait as well: 10 to 13 ms before the host's tick at 120, 46 to
+48 at 30, where 2 ms is the target.
+
+From then on, in an OpenH1 game, such a frame waits for its step before it
+reads (`network_clock_unseen_wait_first`, main.c), and a host reads what
+comes in the wait as a dedicated server does (`unseen_frame_wait_receiving`
+with `network_distributed_server_receive`), so that each input is timed by
+when it came. What a host reads with its own step due within the forwarding
+interval (8 ms) is sent on in the step's datagram, at its end, not in one of
+its own just before it (`distributed_forward_flush`). A client whose frames
+the display paces runs a step up to a frame after it falls due, so its
+input comes up to a frame earlier or later by its frames' phase: its clock
+takes a figure up to that frame above the band as in it
+(`network_clock_quantized_early`; without it such a client's clock went
+back and forth across its frame, its input after the host's tick in 39% of
+the ticks at 120). `debug.network_timing_before` (`HALO_NETWORK_TIMING_BEFORE`)
+keeps the reads, the forwards and the clock as before. A Legacy game, a
+dedicated server and a machine that draws its frames read as before.
+
+Medians in ms (95th percentile in brackets), the same build with
+`debug.network_timing_before` and without; measured, but the bots' places
+(near or aimed at, forwarded; else relayed) differ from game to game:
+
+| Path | 120 before | 120 after | 30 before | 30 after |
+| --- | --- | --- | --- | --- |
+| A client's input came before the host's tick that runs it: the drawing client | 11.1 | 13.2 | 47.9 | 10.3 |
+| ... the client without a renderer | 12.7 | 4.5 | 46.3 | 4.4 |
+| A client's input, arrived to read on the host | 2.9 (5.8) | 0.01 (0.02) | 14.8 (15.3) | 0.01 (0.02) |
+| A client's live control, input to the other client's step (no renderer) | 23.4 (26.4) | 11.0 (12.4)* | | |
+| A client's input, input to the other client's step (no renderer) | 32.1 (35.1) | 4.6 (36.5)* | 68.7 (69.0) | 6.3 (6.7) |
+| ... to the drawing client's presented frame | 51.2 (51.4) | 46.8 (47.1)* | 72.6 (73.0) | 68.5 (69.3) |
+| The host's player, sampled to a client's step (no renderer) | 20.3 (21.5) | 11.7 (13.3) | | |
+| ... to the drawing client's presented frame | 21.9 (22.1) | 19.7 (19.9) | | |
+
+(* another game of the same build, whose players met: in the one beside it
+the clients' players were never near enough to be forwarded.)
+
+The drawing client's own input waits longer on the host at 120 (its clock
+now covers its frame: 13 ms early, where it came 11 ms early to the host's
+once-a-frame read); what a drawing machine reads waits
+for its frame (the present's wait, 3 to 8 ms at 120 frames a second), which
+only a thread of its own reading and sending on could shorten. The host's
+datagrams were 160 and 164 a second (its batches 159 and 163) at 120, 92
+and 76 at 30; those within 1 ms of another to the same peer 9 and 7 a
+second at 120, 30 and 2 at 30. The transit of the loopback is under 0.01 ms
+each way; the measurement cannot see the time between a frame presented and
+its light on a screen, nor a real network's.
+
 ## Numbers on parallel branches
 
 GOAT H1's own numbers (`HALO_PORT_STANDARD_NETWORK_VERSION`, its
