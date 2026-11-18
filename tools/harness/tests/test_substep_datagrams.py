@@ -14,12 +14,17 @@ from harness import CHECK_FAILED, build, constant, enum_with, function, mutated,
 SOURCE = "port/linux/game/network_distributed.c"
 HEADER = "port/linux/game/network_distributed.h"
 SUBSTEPS_HEADER = "port/linux/game/network_substeps.h"
-CASES = ["substep", "substep-after-read", "step-due", "tick-end", "split", "held", "react", "defer", "into-view", "compact", "opence"]
+CASES = ["substep", "substep-after-read", "step-due", "display-wait", "tick-end", "split", "held", "react", "defer", "into-view", "compact", "opence"]
 
 NEGATIVE_CONTROLS = {
     # what came read just before the host's step in a datagram of its own, beside the step's
-    "step-due-alone": (("game_time_seconds_to_next_step() * 1000.0f < (real)FORWARDED_INPUT_INTERVAL_MILLISECONDS &&",
-                        "FALSE &&"), "step-due"),
+    "step-due-alone": (("return step_milliseconds >= 0.0f && step_milliseconds < (real)FORWARDED_INPUT_INTERVAL_MILLISECONDS;",
+                        "return FALSE;"), "step-due"),
+    # in a drawing host's wait for the display, held for a step that runs only once the wait ends
+    "display-wait-as-step": (("\tif (display_wait)\n", "\tif (FALSE)\n"), "display-wait"),
+    # ... or held for it though the wait's end is not known
+    "display-wait-unknown-held": (("\t\tif (wait_left_milliseconds < 0.0f)\n\t\t\treturn FALSE;\n", ""),
+                                  "display-wait"),
     # a tick's last sub-step's controls in a datagram of their own, before the tick's
     "tick-end-alone": (("if (occasion == _forward_at_tick_end)\n\t\t\t\tdistributed_forward_held = TRUE;\n"
                         "\t\t\telse\n\t\t\t\tdistributed_batch_flush((short)machine_index);",
@@ -58,7 +63,7 @@ FUNCTIONS = ("distributed_far_owed_any", "distributed_forward_reacts", "distribu
              "distributed_batch_compact", "distributed_compact_batch_handle", "distributed_batch_room", "distributed_batch_append", "distributed_batch_add",
              "distributed_batches_flush", "distributed_fill_header", "distributed_entry_size",
              "distributed_send_to_machine", "distributed_packer_begin", "distributed_packer_flush",
-             "distributed_packer_add", "distributed_forward_flush", "network_distributed_frame_received",
+             "distributed_packer_add", "distributed_forward_waits_for_step", "distributed_forward_flush", "network_distributed_frame_received",
              "network_distributed_host_substep_ended")
 
 

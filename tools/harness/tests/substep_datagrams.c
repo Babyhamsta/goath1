@@ -102,6 +102,15 @@ static void network_latency_trace_queued(char kind, short player, long key, shor
 }
 static real next_step_seconds = 1.0f;
 static real game_time_seconds_to_next_step(void) { return next_step_seconds; }
+/* (network_receive.c: a frame's wait for the display, how long it is likely
+to last yet; none) */
+static boolean display_waiting;
+static real display_wait_left = -1.0f;
+static boolean network_receive_in_wait(real *left)
+{
+	*left = display_waiting ? display_wait_left : -1.0f;
+	return display_waiting;
+}
 static boolean network_substeps_active(void) { return TRUE; }
 static void error(int kind, char const *format, ...) { (void)kind; (void)format; }
 static void build_message_header(message_header *header, word size, int a, int b) { (void)a; (void)b; *header = size; }
@@ -408,6 +417,51 @@ static void step_due_case(void)
 		CHECK(count == 2 && messages[1].type == _distributed_message_forwarded_live_controls,
 			"the controls with the states");
 	}
+	next_step_seconds = 1.0f;
+}
+
+/* a drawing host's read in its frame's wait for the display
+(network_receive.c's thread): its step, due or not, runs once the wait ends,
+so what it reads goes at once unless the wait is likely to end within the
+interval (then with the step's datagram), and at once where how soon is not
+known */
+static void display_wait_case(void)
+{
+	static const struct
+	{
+		real step_seconds, left;
+		boolean at_once;
+		char const *what;
+	} reads[] =
+	{
+		{ 0.002f, 12.0f, TRUE, "the step due within the interval, the wait not: at once" },
+		{ -0.004f, 12.0f, TRUE, "the step overdue, the wait not near its end: at once" },
+		{ 0.002f, 3.0f, FALSE, "the wait to end within the interval: with the step" },
+		{ -0.004f, 3.0f, FALSE, "the step overdue, the wait near its end: with the step" },
+		{ 0.020f, 3.0f, TRUE, "the step not due for longer than the interval: at once" },
+		{ 0.002f, -1.0f, TRUE, "the wait's end not known: at once" },
+		{ -0.004f, 0.0f, FALSE, "the wait past the last one's length, to end any moment: with the step" },
+	};
+	short index;
+
+	for (index = 0; index < (short)(sizeof(reads) / sizeof(reads[0])); index++)
+	{
+		reset();
+		set_near(3);
+		live_pending[6] = TRUE;
+		distributed_forward_periods[1][6] = 1;
+		distributed_forward_periods[2][6] = 1;
+		now_microseconds += 1000000;
+		next_step_seconds = reads[index].step_seconds;
+		display_waiting = TRUE;
+		display_wait_left = reads[index].left;
+		network_distributed_frame_received();
+		CHECK((datagram_count[1] == 1 && datagram_count[2] == 1) == reads[index].at_once, "%s: %d and %d",
+			reads[index].what, datagram_count[1], datagram_count[2]);
+		CHECK(live_pending[6] == !reads[index].at_once, "%s: what is held", reads[index].what);
+	}
+	display_waiting = FALSE;
+	display_wait_left = -1.0f;
 	next_step_seconds = 1.0f;
 }
 
@@ -784,6 +838,8 @@ int main(int argc, char **argv)
 		substep_after_read_case();
 	else if (!strcmp(name, "step-due"))
 		step_due_case();
+	else if (!strcmp(name, "display-wait"))
+		display_wait_case();
 	else if (!strcmp(name, "tick-end"))
 		tick_end_case();
 	else if (!strcmp(name, "split"))

@@ -60,6 +60,12 @@ void host_render_stream_wait(unsigned int position);
 void host_render_stream_close(void);
 
 void xgpu_stream_encode_close(void);
+#ifndef XGPU_STREAM_TEST
+/* port/linux/game/network_receive.c: the frame's wait for the host and the
+display, begun and ended (a host reads its datagrams meanwhile) */
+void network_receive_frame_wait_begin(void);
+void network_receive_frame_wait_end(void);
+#endif
 
 /* the guest address of guest memory; guest memory at one of the
 interface's addresses (DWORD, unsigned long); and at one of the stream's
@@ -2117,6 +2123,13 @@ void xgpu_backend_frame_end(void)
 	record_body = record(XGPU_STREAM_FRAME_END, sizeof(*record_body));
 	record_body->input_low = (uint32_t)input;
 	record_body->input_high = (uint32_t)(input >> 32);
+#ifndef XGPU_STREAM_TEST
+	/* (from here to the frame cap's sleep's end the game's thread waits for
+	the host and the display and touches nothing of the game: a host of a
+	network game reads its datagrams meanwhile on a thread of its own,
+	network_receive.c) */
+	network_receive_frame_wait_begin();
+#endif
 	commit(XGPU_STREAM_SUBMIT_FRAME);
 #ifndef XGPU_STREAM_TEST
 	/* (the deleted images' pixels freed once no frame in flight reads them) */
@@ -2143,6 +2156,7 @@ void xgpu_backend_frame_end(void)
 		stream.waited_nanoseconds += swapped;
 		stream.capped_nanoseconds += swapped;
 	}
+	network_receive_frame_wait_end();
 #endif
 }
 
