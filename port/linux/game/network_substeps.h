@@ -60,11 +60,14 @@ which the host sends on to its clients as they come, with its own players'
 (network_distributed.c's forwarded input), and a client gives another
 player's unit while they are later than the input its tick took. Not at 30.
 
-(the host) a player's latest not yet sent on, in LIVE_CONTROL_FORWARD_SIZE
-bytes (0: none), and all of them sent; whether any is to send */
+(the host) a player's latest not yet sent on, in at most
+LIVE_CONTROL_FORWARD_MAXIMUM_SIZE bytes (0: none), and all of them sent;
+whether any is to send. Its tick is written against the tick the message
+goes at (the host's game time, its header's): 12 bytes within 127 ticks of
+it, 15 further (network_substeps.c's live_control_forward_pack) */
 enum
 {
-	LIVE_CONTROL_FORWARD_SIZE = 19,
+	LIVE_CONTROL_FORWARD_MAXIMUM_SIZE = 15,
 };
 word network_substeps_live_forward_write(short player_index, byte *buffer);
 /* (the host) a player's controls as its own sub-steps ran them, at their

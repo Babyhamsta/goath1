@@ -101,9 +101,9 @@ static word network_substeps_live_forward_write(short player_index, byte *buffer
 {
 	if (!live_pending[player_index])
 		return 0;
-	memset(buffer, 0, LIVE_CONTROL_FORWARD_SIZE);
+	memset(buffer, 0, LIVE_CONTROL_FORWARD_MAXIMUM_SIZE);
 	buffer[0] = (byte)player_index;
-	return LIVE_CONTROL_FORWARD_SIZE;
+	return LIVE_CONTROL_FORWARD_MAXIMUM_SIZE;
 }
 static boolean network_substeps_live_far_due(short player_index, struct live_control_far *last)
 {

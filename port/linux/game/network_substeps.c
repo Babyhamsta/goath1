@@ -82,7 +82,30 @@ enum
 	(network_substeps_live_far_due) */
 	LIVE_CONTROL_FAR_STICK_STEP = 32,
 	LIVE_CONTROL_FAR_TRIGGER_STEP = 64,
+	/* a forwarded live control's bytes on the wire (live_control_forward_pack):
+	its player and whether of the host's update (1), its held controls, its
+	sub-step and whether its tick is whole (1), its tick (1 written against
+	the message's, or 4 whole), sticks (2), trigger (1) and aim (6) */
+	LIVE_CONTROL_FORWARD_SHORT_SIZE = 12,
+	LIVE_CONTROL_FORWARD_HOST_UPDATE_BIT = 7,
+	LIVE_CONTROL_FORWARD_SUBSTEP_SHIFT = 5,
+	LIVE_CONTROL_FORWARD_WHOLE_KEY_BIT = 7,
 };
+
+/* the held controls (SUBSTEP_HELD_FLAGS, below) in the bits of a forwarded
+live control's byte (its sub-step fits the rest of it: MAXIMUM_SIM_SUBSTEPS) */
+static short const live_control_held_bits[] =
+{
+	_unit_control_crouch_modifier_bit,
+	_unit_control_jump_bit,
+	_unit_control_weapon_primary_trigger_bit,
+	_unit_control_weapon_secondary_trigger_bit,
+	_unit_control_throw_grenade_bit,
+};
+typedef char live_control_held_bits_assert[
+	NUMBEROF(live_control_held_bits) <= LIVE_CONTROL_FORWARD_SUBSTEP_SHIFT &&
+	MAXIMUM_SIM_SUBSTEPS <= 1 << (LIVE_CONTROL_FORWARD_WHOLE_KEY_BIT - LIVE_CONTROL_FORWARD_SUBSTEP_SHIFT) &&
+	MAXIMUM_TRACKED_PLAYERS <= 1 << LIVE_CONTROL_FORWARD_HOST_UPDATE_BIT ? 1 : -1];
 
 /* the unit controls a sub-step's reading changes (player_control.c's
 PLAYER_CONTROL_SUBSTEP_HELD_FLAGS) */
@@ -769,36 +792,120 @@ static void network_substeps_handle_live(
 	}
 }
 
-/* (a client) the live controls the host sent on: entries of
-LIVE_CONTROL_FORWARD_SIZE (network_substeps_live_forward_write) */
+/* a live control's bytes as the host sends it on, its tick written against
+the message's (time: the host's game time it goes at), at most
+LIVE_CONTROL_FORWARD_MAXIMUM_SIZE: the bytes written. Every part as the
+whole entry had it: its count of sub-steps, which is the game's, not sent;
+its held controls, the five a sub-step's reading changes, in a byte with the
+sub-step; its tick whole only when further than a byte reaches from the
+message's (live_control_forward_unpack) */
+static word live_control_forward_pack(
+	short player_index,
+	struct live_control const *live,
+	long time,
+	byte *buffer)
+{
+	struct distributed_vector aim;
+	long offset = live->key - time;
+	byte held = 0;
+	byte *cursor = buffer + 2;
+	short bit;
+
+	for (bit = 0; bit < (short)NUMBEROF(live_control_held_bits); bit++)
+	{
+		if (TEST_FLAG(live->held_flags, live_control_held_bits[bit]))
+			held |= (byte)FLAG(bit);
+	}
+	buffer[0] = (byte)(player_index | (live->host_update ? FLAG(LIVE_CONTROL_FORWARD_HOST_UPDATE_BIT) : 0));
+	buffer[1] = (byte)(held | (live->substep << LIVE_CONTROL_FORWARD_SUBSTEP_SHIFT));
+	if (offset >= -128 && offset <= 127)
+		*cursor++ = (byte)(signed char)offset;
+	else
+	{
+		/* (its 4 bytes, least first, as the whole entry had them) */
+		buffer[1] |= (byte)FLAG(LIVE_CONTROL_FORWARD_WHOLE_KEY_BIT);
+		for (bit = 0; bit < 4; bit++)
+			*cursor++ = (byte)((unsigned long)live->key >> (8 * bit));
+	}
+	*cursor++ = (byte)(signed char)(long)floor(PIN(live->throttle.i, -1.0f, 1.0f) * 127.0f + 0.5f);
+	*cursor++ = (byte)(signed char)(long)floor(PIN(live->throttle.j, -1.0f, 1.0f) * 127.0f + 0.5f);
+	*cursor++ = (byte)(long)floor(PIN(live->primary_trigger, 0.0f, 1.0f) * 255.0f + 0.5f);
+	distributed_vector_pack(&live->aim, DISTRIBUTED_UNIT_SCALE, &aim);
+	csmemcpy(cursor, &aim, sizeof(aim));
+	cursor += sizeof(aim);
+	return (word)(cursor - buffer);
+}
+
+/* (a client) a forwarded live control from its bytes, no further than end,
+of a message of the host's game time: the bytes it took (0: none that make
+one), its player, and the control (of the game's count of sub-steps; its aim
+as sent, not yet checked) */
+static word live_control_forward_unpack(
+	byte const *data,
+	byte const *end,
+	long time,
+	short count,
+	short *player_index,
+	struct live_control *live)
+{
+	byte const *cursor = data + 2;
+	struct distributed_vector aim;
+	short bit;
+
+	if (end - data < LIVE_CONTROL_FORWARD_SHORT_SIZE)
+		return 0;
+	csmemset(live, 0, sizeof(*live));
+	*player_index = (short)(data[0] & ~FLAG(LIVE_CONTROL_FORWARD_HOST_UPDATE_BIT));
+	live->host_update = TEST_FLAG(data[0], LIVE_CONTROL_FORWARD_HOST_UPDATE_BIT);
+	for (bit = 0; bit < (short)NUMBEROF(live_control_held_bits); bit++)
+	{
+		if (TEST_FLAG(data[1], bit))
+			live->held_flags |= FLAG(live_control_held_bits[bit]);
+	}
+	live->substep = (short)((data[1] & ~FLAG(LIVE_CONTROL_FORWARD_WHOLE_KEY_BIT)) >> LIVE_CONTROL_FORWARD_SUBSTEP_SHIFT);
+	live->count = count;
+	if (!TEST_FLAG(data[1], LIVE_CONTROL_FORWARD_WHOLE_KEY_BIT))
+		live->key = time + (signed char)*cursor++;
+	else
+	{
+		unsigned long key = 0;
+
+		if (end - data < LIVE_CONTROL_FORWARD_MAXIMUM_SIZE)
+			return 0;
+		for (bit = 0; bit < 4; bit++)
+			key |= (unsigned long)*cursor++ << (8 * bit);
+		live->key = (long)(int)key;
+	}
+	live->throttle.i = PIN((real)(signed char)cursor[0] / 127.0f, -1.0f, 1.0f);
+	live->throttle.j = PIN((real)(signed char)cursor[1] / 127.0f, -1.0f, 1.0f);
+	live->primary_trigger = (real)cursor[2] / 255.0f;
+	cursor += 3;
+	csmemcpy(&aim, cursor, sizeof(aim));
+	cursor += sizeof(aim);
+	distributed_unit_vector_unpack(&aim, &live->aim);
+	return (word)(cursor - data);
+}
+
+/* (a client) the live controls the host sent on, of a message of the host's
+game time: entries of live_control_forward_pack's */
 static void network_substeps_handle_forwarded_live(
 	byte const *data,
 	byte const *end,
-	short count)
+	short count,
+	long time)
 {
 	short index;
 
-	for (index = 0; index < count && end - data >= LIVE_CONTROL_FORWARD_SIZE; index++, data += LIVE_CONTROL_FORWARD_SIZE)
+	for (index = 0; index < count; index++)
 	{
 		struct live_control live;
-		struct distributed_vector aim;
-		short player_index = data[0];
-		word held;
+		short player_index;
+		word size = live_control_forward_unpack(data, end, time, network_substeps_count(), &player_index, &live);
 
-		csmemset(&live, 0, sizeof(live));
-		live.substep = data[1];
-		live.count = data[2];
-		live.host_update = (data[3] & 1) != 0;
-		csmemcpy(&live.key, data + 4, sizeof(live.key));
-		csmemcpy(&held, data + 8, sizeof(held));
-		live.held_flags = held & SUBSTEP_HELD_FLAGS;
-		live.throttle.i = PIN((real)(signed char)data[10] / 127.0f, -1.0f, 1.0f);
-		live.throttle.j = PIN((real)(signed char)data[11] / 127.0f, -1.0f, 1.0f);
-		live.primary_trigger = (real)data[12] / 255.0f;
-		csmemcpy(&aim, data + 13, sizeof(aim));
-		distributed_unit_vector_unpack(&aim, &live.aim);
-		if (player_index >= MAXIMUM_TRACKED_PLAYERS || live.count != network_substeps_count() ||
-			live.substep >= live.count ||
+		if (!size)
+			break;
+		data += size;
+		if (player_index >= MAXIMUM_TRACKED_PLAYERS || live.substep >= live.count ||
 			(distributed_player(player_index) && distributed_player(player_index)->local_player_index != NONE) ||
 			normalize3d(&live.aim) == 0.0f)
 		{
@@ -1243,7 +1350,7 @@ void network_substeps_handle_message(
 		/* (a client's, from the host) */
 		if (game_connection() != _game_connection_network_client || machine_index != NONE)
 			return;
-		network_substeps_handle_forwarded_live(entries, end, header.count);
+		network_substeps_handle_forwarded_live(entries, end, header.count, header.game_time);
 	}
 }
 
@@ -1444,30 +1551,15 @@ static void network_substeps_substep_end(
 	}
 }
 
-/* a live control's bytes as the host sends it on (0: none to send) */
+/* a live control's bytes as the host sends it on now (0: none to send) */
 static word live_control_forward_write(
 	short player_index,
 	struct live_control const *live,
 	byte *buffer)
 {
-	struct distributed_vector aim;
-	word held;
-
 	if (!live->valid || !live->pending)
 		return 0;
-	held = (word)live->held_flags;
-	distributed_vector_pack(&live->aim, DISTRIBUTED_UNIT_SCALE, &aim);
-	buffer[0] = (byte)player_index;
-	buffer[1] = (byte)live->substep;
-	buffer[2] = (byte)live->count;
-	buffer[3] = (byte)(live->host_update ? 1 : 0);
-	csmemcpy(buffer + 4, &live->key, sizeof(live->key));
-	csmemcpy(buffer + 8, &held, sizeof(held));
-	buffer[10] = (byte)(signed char)(long)floor(PIN(live->throttle.i, -1.0f, 1.0f) * 127.0f + 0.5f);
-	buffer[11] = (byte)(signed char)(long)floor(PIN(live->throttle.j, -1.0f, 1.0f) * 127.0f + 0.5f);
-	buffer[12] = (byte)(long)floor(PIN(live->primary_trigger, 0.0f, 1.0f) * 255.0f + 0.5f);
-	csmemcpy(buffer + 13, &aim, sizeof(aim));
-	return LIVE_CONTROL_FORWARD_SIZE;
+	return live_control_forward_pack(player_index, live, game_time_get(), buffer);
 }
 
 word network_substeps_live_forward_write(

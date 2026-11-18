@@ -5558,7 +5558,7 @@ static void distributed_forward_flush(
 				_distributed_message_forwarded_live_controls, NULL, 0);
 			for (player_index = 0; player_index < MAXIMUM_TRACKED_PLAYERS; player_index++)
 			{
-				byte entry[LIVE_CONTROL_FORWARD_SIZE];
+				byte entry[LIVE_CONTROL_FORWARD_MAXIMUM_SIZE];
 				byte period = distributed_forward_periods[machine_index][player_index];
 				word size;
 
