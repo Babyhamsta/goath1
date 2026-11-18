@@ -18,7 +18,7 @@ so each machine needs each player's sub-steps too, not only their ticks:
   packed (_distributed_message_player_substeps_packed, substep_input_pack),
   as its live controls are (_distributed_message_player_live_controls_packed,
   live_control_up_pack), each number the host reads exactly as the whole
-  record gave it, unless debug.network_controls_unpacked.
+  record gave it, unless debug.network_forms_before.
 - Replayed: in the next tick that runs the input of a tick, each sub-step
   past the first gives the player's unit that sub-step's controls, before
   the units and bipeds move (network_substeps_replay). A record is taken
@@ -1538,7 +1538,7 @@ void network_substeps_client_send(
 		struct distributed_message_header header;
 		byte data[MAXIMUM_LOCAL_PLAYERS * sizeof(struct distributed_substep_input)];
 	} message;
-	boolean unpacked = config_boolean("debug.network_controls_unpacked") != 0;
+	boolean unpacked = config_boolean("debug.network_forms_before") != 0;
 	short count = 0;
 	word used = 0;
 	short local_player_index;
@@ -1945,7 +1945,7 @@ static void network_substeps_substep_end(
 	}
 	if (connection == _game_connection_network_client)
 	{
-		if (count && config_boolean("debug.network_controls_unpacked"))
+		if (count && config_boolean("debug.network_forms_before"))
 		{
 			word size = (word)(sizeof(message.header) + count * sizeof(struct distributed_live_control));
 

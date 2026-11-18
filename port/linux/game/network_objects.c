@@ -1953,7 +1953,7 @@ static boolean distributed_host_moving_state_due(
 
 /* (the host) a message of the objects' states to a client: to an OpenH1
 client of an OpenH1 game packed (network_objects_pack_state) where that is
-fewer bytes, unless debug.network_states_unpacked; else whole */
+fewer bytes, unless debug.network_forms_before; else whole */
 static void distributed_host_send_state_message(
 	long machine_index,
 	struct distributed_object_state_message *message,
@@ -1961,7 +1961,7 @@ static void distributed_host_send_state_message(
 {
 	word whole_size = (word)(sizeof(message->header) + count * sizeof(struct distributed_object_state));
 
-	if (!network_legacy_machine(machine_index) && !config_boolean("debug.network_states_unpacked"))
+	if (!network_legacy_machine(machine_index) && !config_boolean("debug.network_forms_before"))
 	{
 		static struct
 		{

@@ -2,7 +2,7 @@
 distributed_client_send_substep_requests, distributed_handle_substep_requests, distributed_substep_states_wanted,
 network_distributed_host_substep_ended): a client asks where its copy went wrong (a correction past the tolerance,
 a forwarded input missed), for a window renewed while it keeps going wrong and ending once it stops; none while
-every input comes; debug.network_substep_states_always sends them as before."""
+every input comes; debug.network_forms_before sends them as before."""
 import re
 import sys
 from pathlib import Path

@@ -6,7 +6,7 @@ past the tolerance, or a forwarded input missed
 (distributed_client_send_substep_requests). The ask opens a window of
 SUBSTEP_REQUEST_TICKS of the host's ticks, renewed while the copy keeps
 going wrong (at most once in SUBSTEP_REQUEST_RENEW_TICKS), and the window
-ends once it stops. debug.network_substep_states_always sends them as
+ends once it stops. debug.network_forms_before sends them as
 before. Each tick: the client's end of tick (its asks, delivered to the host
 as machine 1's), then the host's sub-steps but the last. */
 #include "harness.h"
@@ -50,7 +50,7 @@ static boolean network_standard_machine_is_openh1(long machine_index) { (void)ma
 static boolean network_substeps_active(void) { return TRUE; }
 static int config_boolean(char const *name)
 {
-	CHECK(!strcmp(name, "debug.network_substep_states_always"), "the setting read: %s", name);
+	CHECK(!strcmp(name, "debug.network_forms_before"), "the setting read: %s", name);
 	return always;
 }
 static long network_substeps_forwarded_key(short player_index) { return keys[player_index]; }
@@ -286,7 +286,7 @@ static void lost_case(void)
 	CHECK(asks == 1 && states_sent[1][PLAYER] == SUBSTEPS - 1, "asked again, and sent");
 }
 
-/* debug.network_substep_states_always: every near player's states to
+/* debug.network_forms_before: every near player's states to
 every client, asked for or not, as before */
 static void always_case(void)
 {

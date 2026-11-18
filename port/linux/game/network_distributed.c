@@ -392,7 +392,7 @@ last run). The host sends them for SUBSTEP_REQUEST_TICKS of its ticks from
 the ask (at most SUBSTEP_REQUEST_MAXIMUM_TICKS), and the client asks again
 while the copy keeps going wrong, at most once in SUBSTEP_REQUEST_RENEW_TICKS
 a player; a lost ask is made again at the next correction past the
-tolerance. debug.network_substep_states_always sends them every sub-step
+tolerance. debug.network_forms_before sends them every sub-step
 as before */
 enum
 {
@@ -474,7 +474,7 @@ enum
 	_unit_difference_powerups_bit,
 	_unit_difference_camouflage_bit,
 };
-/* a packed difference (unless debug.network_states_unpacked, which sends the
+/* a packed difference (unless debug.network_forms_before, which sends the
 forms above): its first byte its high bit, the deck bit (the deck part
 follows, as a deck form's) and the host's ticks since the state it is a
 difference from (5 bits: UNIT_BASE_TICKS); the player's byte; then in bits
@@ -1009,7 +1009,7 @@ static long distributed_unit_sent_times[HALO_PORT_MAXIMUM_NETWORK_MACHINES][MAXI
 static long distributed_unit_acked_times[HALO_PORT_MAXIMUM_NETWORK_MACHINES];
 /* (the host) whether the client being sent its tick states
 (distributed_tick_states_begin) takes them in the forms before packing
-(debug.network_states_unpacked) */
+(debug.network_forms_before) */
 static boolean distributed_tick_states_unpacked;
 /* a client: the host's states of each player it took of the host's last
 UNIT_BASE_TICKS ticks, as written to it, by the host's tick (NONE: none);
@@ -7755,7 +7755,7 @@ static boolean distributed_substep_state_unchanged(
 }
 
 /* (the host) whether a client asked for a player's states at the host's
-sub-steps within its window (or debug.network_substep_states_always: always) */
+sub-steps within its window (or debug.network_forms_before: always) */
 static boolean distributed_substep_states_wanted(
 	boolean always,
 	long machine_index,
@@ -7811,7 +7811,7 @@ void network_distributed_host_substep_ended(
 	{
 		static struct distributed_unit_state states[MAXIMUM_TRACKED_PLAYERS];
 		boolean made[MAXIMUM_TRACKED_PLAYERS];
-		boolean always = config_boolean("debug.network_substep_states_always") != 0;
+		boolean always = config_boolean("debug.network_forms_before") != 0;
 		byte prefix[2];
 
 		csmemset(made, 0, sizeof(made));
@@ -8323,7 +8323,7 @@ static void distributed_tick_states_begin(
 	long machine_index)
 {
 	distributed_tick_states_legacy = network_legacy_machine(machine_index);
-	distributed_tick_states_unpacked = config_boolean("debug.network_states_unpacked") != 0;
+	distributed_tick_states_unpacked = config_boolean("debug.network_forms_before") != 0;
 	/* (an OpenH1 client's entries joined, as it reads them: not the forms
 	before, nor the unpacked ones, whose entries are not the packed ones) */
 	distributed_tick_states_joined = !distributed_tick_states_legacy && !distributed_tick_states_unpacked &&

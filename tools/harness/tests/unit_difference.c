@@ -8,7 +8,7 @@ been (the same bytes written again), through a chain of ticks whose acks
 lag; a difference from a state the client has not is passed over, the
 entries after it read as sent. Machine 1 is the client. Each case packed
 (distributed_unit_packed_write, as the host sends them) and, -unpacked, in
-the forms before (debug.network_states_unpacked). */
+the forms before (debug.network_forms_before). */
 #include "harness.h"
 #include <math.h>
 typedef unsigned short word;
@@ -200,7 +200,7 @@ int main(int argc, char **argv)
 
 	snprintf(which, sizeof(which), "%s", argc > 1 ? argv[1] : "");
 	length = strlen(which);
-	/* (the forms before packing: debug.network_states_unpacked) */
+	/* (the forms before packing: debug.network_forms_before) */
 	if (length > 9 && !strcmp(which + length - 9, "-unpacked"))
 	{
 		distributed_tick_states_unpacked = TRUE;

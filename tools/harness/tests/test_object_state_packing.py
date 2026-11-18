@@ -2,7 +2,7 @@
 network_objects_unpack_state, network_objects_unpack_states and distributed_host_send_state_message, with
 network_bits.h): each read back as the whole entry, its position on a grid of 1/4096 of a world unit; at the map's
 bounds, at the fastest speeds, every part set and none; outside the world or not a number, whole and exact; an OpenCE
-machine and debug.network_states_unpacked sent the whole message; a message cut short is none."""
+machine and debug.network_forms_before sent the whole message; a message cut short is none."""
 import re
 import sys
 from pathlib import Path

@@ -1119,8 +1119,8 @@ exactly, else its 4 bytes; the aim whole. A sub-step's sticks and trigger
 are left out where every bit is the one before's, and its facing where it
 did not turn (the host reads a facing only of a sub-step that turned). The
 record still carries every later sub-step, so a lost live control is made
-good by it as before. `debug.network_controls_unpacked`
-(`HALO_NETWORK_CONTROLS_UNPACKED`) sends the forms before; the host takes
+good by it as before. `debug.network_forms_before`
+(`HALO_NETWORK_FORMS_BEFORE`) sends the forms before; the host takes
 both (`tools/harness/tests/test_controls_packing.py`). Slayer at 120 (13 bots,
 two clients, loopback, the same build either way): a client's live control
 39 bytes a message with the batch's 3, now 26, and its sub-steps 84, now
@@ -1523,7 +1523,7 @@ at its sub-steps to a client only while that client asks for them
   could have moved it by (under a tick of its speed). Nothing else reads the positions noted at the sub-steps
   (`distributed_remote_substep_positions`): they are compared with a
   sub-step's state when one comes, and moved with a correction.
-- `debug.network_substep_states_always` (`HALO_NETWORK_SUBSTEP_STATES_ALWAYS`)
+- `debug.network_forms_before` (`HALO_NETWORK_FORMS_BEFORE`)
   on the host sends them every sub-step as before. `debug.network_test`
   logs a client's asks, the copies found wrong each way, and the host's
   asks taken (`substep asks`).
@@ -1587,7 +1587,7 @@ players where the host has them as before.
 
 The host packs the tick states' differences and the objects' states into
 bits (`network_bits.h`), sent at the same moments as before.
-`debug.network_states_unpacked` sends both in their old encoding, and an
+`debug.network_forms_before` sends both in their old encoding, and an
 OpenCE machine always gets the old encoding.
 
 - **Tick states.** A difference's first byte has its high bit set, a deck

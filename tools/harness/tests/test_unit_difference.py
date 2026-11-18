@@ -3,7 +3,7 @@ OpenH1 protocol version 23): each state read back is exactly the whole state's b
 acks lag (running, turning, hurt, killed, respawned); whole where the client asked for it, nothing was sent at or before
 its ack, a part does not fit or the ack is older than the client keeps; a difference from a state the client has not
 passed over, the entries after it read as sent; cut short, no entry. Each entry joined (158) and read back as its bytes. Packed (network_bits.h), as the host sends them,
-and (-unpacked) in the forms before, as debug.network_states_unpacked sends them: at the map's bounds, the fastest
+and (-unpacked) in the forms before, as debug.network_forms_before sends them: at the map's bounds, the fastest
 speeds, every part changed and none; a state off the grid whole. A client's prediction trimmed; a unit at rest's the
 same bytes each tick (held), a moving one's velocity exact."""
 import re

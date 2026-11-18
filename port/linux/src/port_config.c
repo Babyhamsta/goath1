@@ -2571,27 +2571,13 @@ static const struct config_setting config_settings[] =
 		"machines of twice it), to test the netcode as over the internet; 0 none." },
 	{ "debug.network_loss", _config_real, "0.0", "HALO_NETWORK_LOSS", _environment_value, _platform_all,
 		"Percent of datagrams received that are dropped, for the same; 0 none." },
-	{ "debug.network_substep_states_always", _config_boolean, "false", "HALO_NETWORK_SUBSTEP_STATES_ALWAYS",
-		_environment_set_is_true, _platform_all,
-		"Host: send each client the players near it at every sub-step (60 and\n"
-		"120 Hz), as before, not only those whose copy the client says went\n"
-		"wrong; to compare the two, and as a fallback." },
-	{ "debug.network_states_unpacked", _config_boolean, "false", "HALO_NETWORK_STATES_UNPACKED",
-		_environment_set_is_true, _platform_all,
-		"Host: send each client the players' tick states and the objects' states\n"
-		"in the encoding before they were packed into fewer bits; to compare the\n"
-		"two, and as a fallback." },
 	{ "debug.network_forms_before", _config_boolean, "false", "HALO_NETWORK_FORMS_BEFORE",
 		_environment_set_is_true, _platform_all,
-		"Send the players' tick states to each client entry by entry, and a\n"
-		"client's predictions to the host with every part, in the forms before\n"
-		"they were joined and trimmed; to compare the two, and as a fallback." },
-	{ "debug.network_controls_unpacked", _config_boolean, "false", "HALO_NETWORK_CONTROLS_UNPACKED",
-		_environment_set_is_true, _platform_all,
-		"Send the players' controls at 60 and 120 Hz (a client's live controls\n"
-		"and sub-steps to the host, the host's forwarded live controls to its\n"
-		"clients) in the encodings before they were packed; to compare the two,\n"
-		"and as a fallback." },
+		"Send an OpenH1 game's messages in the forms and at the rates before\n"
+		"they were cut down (the players' states at every sub-step, the tick\n"
+		"states, objects, controls, relayed input and predictions unpacked, the\n"
+		"statistics and inventories every second); to compare the two, and as\n"
+		"a fallback." },
 	{ "debug.network_relay_only", _config_boolean, "false", "HALO_NETWORK_RELAY_ONLY", _environment_set_is_true,
 		_platform_all,
 		"Send internet play's tunnel packets to other players only through a\n"

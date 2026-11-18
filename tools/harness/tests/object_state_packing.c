@@ -5,7 +5,7 @@ state read back is the whole entry's exactly, but its position, which is on
 a grid of 1/4096 of a world unit (an 8192th off at most); at the map's
 bounds, at the fastest speeds, with every part set and with none; a
 position outside the world or not a number goes whole, read back exactly;
-an OpenCE machine, and a host with debug.network_states_unpacked, sends the
+an OpenCE machine, and a host with debug.network_forms_before, sends the
 whole message as before; a message cut short is none. */
 #include "harness.h"
 #include <math.h>
@@ -33,7 +33,7 @@ static boolean unpacked_setting;
 static boolean network_legacy_machine(long machine_index) { (void)machine_index; return legacy_machine; }
 static int config_boolean(char const *name)
 {
-	CHECK(!strcmp(name, "debug.network_states_unpacked"), "the setting read: %s", name);
+	CHECK(!strcmp(name, "debug.network_forms_before"), "the setting read: %s", name);
 	return unpacked_setting;
 }
 /* what went: its type, count and bytes */
@@ -244,7 +244,7 @@ int main(int argc, char **argv)
 		legacy_machine = FALSE;
 		unpacked_setting = TRUE;
 		distributed_host_send_state_message(1, &message, count);
-		CHECK(sent_type == _distributed_message_object_states, "debug.network_states_unpacked: whole (type %u)",
+		CHECK(sent_type == _distributed_message_object_states, "debug.network_forms_before: whole (type %u)",
 			sent_type);
 		return 0;
 	}

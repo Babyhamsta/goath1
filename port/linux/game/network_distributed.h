@@ -236,7 +236,7 @@ enum
 	unreliable, to each OpenH1 client): the sub-step and the count, then
 	the states as the tick's; only of the players the client asked for
 	(_distributed_message_substep_state_requests), unless
-	debug.network_substep_states_always */
+	debug.network_forms_before */
 	_distributed_message_substep_states = 136,
 	/* a dedicated server's admins in the game (network_admin.c), reliably,
 	over the host's connection alone: the host's to each OpenH1 client (its
@@ -288,12 +288,12 @@ enum
 	_distributed_message_compact_batch = 148,
 	/* an OpenH1 game's objects' states (network_objects.c, unreliable, to each
 	OpenH1 client, in place of _distributed_message_object_states unless
-	debug.network_states_unpacked): each in bits (network_objects_pack_state),
+	debug.network_forms_before): each in bits (network_objects_pack_state),
 	read as the whole one would be (network_objects_unpack_states) */
 	_distributed_message_object_states_packed = 149,
 	/* an OpenH1 client's controls packed (network_substeps.c, unreliable, to
 	an OpenH1 host), at the moments the forms before go, in their place
-	unless debug.network_controls_unpacked: its live controls (of
+	unless debug.network_forms_before: its live controls (of
 	_distributed_message_player_live_controls) and its sub-steps (of
 	_distributed_message_player_substeps), every number the host reads as it
 	read the whole ones. (150 to 154 are kept for other kinds) */
