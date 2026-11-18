@@ -2111,6 +2111,13 @@ long network_substeps_forwarded_key(
 	return network_substeps_globals.tick_key[player_index];
 }
 
+boolean network_substeps_host_live_heard(
+	short player_index)
+{
+	return player_index >= 0 && player_index < MAXIMUM_TRACKED_PLAYERS &&
+		network_substeps_globals.live[player_index].valid && network_substeps_globals.live[player_index].host_update;
+}
+
 long network_substeps_bytes_sent(
 	void)
 {

@@ -113,6 +113,7 @@ machine (their datum identifiers need not be).
 #include "server_director.h"
 #include "demo.h"
 #include "bots_command.h"
+#include "bots.h"
 
 #include <limits.h>
 #include <stdio.h>
@@ -1299,6 +1300,24 @@ static struct
 	long remote_history_corrections;
 	long remote_history_kept;
 } distributed_statistics;
+/* ... and (a client) those by the kind of player (a bot, the host's own, a
+client's its forwarded input drives, a client's the relayed input does),
+with the copies found wrong by them */
+enum
+{
+	_remote_kind_bot,
+	_remote_kind_host,
+	_remote_kind_forwarded,
+	_remote_kind_relayed,
+	NUMBER_OF_REMOTE_KINDS
+};
+static struct
+{
+	long corrections;
+	long history_corrections;
+	long history_kept;
+	long wrong;
+} distributed_remote_kinds[NUMBER_OF_REMOTE_KINDS];
 /* ... and (the host) how far apart a client's player moved in a tick on the
 client and on the host, where the host took the client's last prediction
 the tick before, that was of the client's tick before, and the host's tick
@@ -1407,6 +1426,21 @@ void network_distributed_remote_statistics(
 	*corrections = distributed_statistics.remote_corrections;
 	*history_corrections = distributed_statistics.remote_history_corrections;
 	*history_kept = distributed_statistics.remote_history_kept;
+}
+
+void network_distributed_remote_kind_statistics(
+	short kind,
+	long *corrections,
+	long *history_corrections,
+	long *history_kept,
+	long *wrong)
+{
+	if (kind < 0 || kind >= NUMBER_OF_REMOTE_KINDS)
+		kind = 0;
+	*corrections = distributed_remote_kinds[kind].corrections;
+	*history_corrections = distributed_remote_kinds[kind].history_corrections;
+	*history_kept = distributed_remote_kinds[kind].history_kept;
+	*wrong = distributed_remote_kinds[kind].wrong;
 }
 
 void network_distributed_substep_request_statistics(
@@ -5445,6 +5479,12 @@ static void distributed_place_remote_unit(
 	short substep_index)
 {
 	real_point3d before = object_get(unit_index)->object.position;
+	short kind = bots_machine_is_bot(player->network_player_data.machine_index) ? _remote_kind_bot :
+		network_substeps_forwarded_key(state->player_index) != NONE ? _remote_kind_forwarded :
+		network_substeps_host_live_heard(state->player_index) ? _remote_kind_host : _remote_kind_relayed;
+	long corrections = distributed_statistics.remote_corrections;
+	long history_corrections = distributed_statistics.remote_history_corrections;
+	long history_kept = distributed_statistics.remote_history_kept;
 
 	/* (a rider on a vehicle's deck: where on this machine's copy of the deck,
 	theirs, distributed_apply_remote_unit) */
@@ -5483,7 +5523,13 @@ static void distributed_place_remote_unit(
 	{
 		distributed_substep_wants[state->player_index].wrong = TRUE;
 		distributed_substep_request_counts.corrected++;
+		distributed_remote_kinds[kind].wrong++;
 	}
+	/* (the tests' reports, by kind) */
+	distributed_remote_kinds[kind].corrections += distributed_statistics.remote_corrections - corrections;
+	distributed_remote_kinds[kind].history_corrections +=
+		distributed_statistics.remote_history_corrections - history_corrections;
+	distributed_remote_kinds[kind].history_kept += distributed_statistics.remote_history_kept - history_kept;
 	/* moved further than a step at once (the host's teleporter sent it): on
 	the teleporter it lands on, as a teleporter leaves the player it sends,
 	so that this machine's does not send it back each time the host's word

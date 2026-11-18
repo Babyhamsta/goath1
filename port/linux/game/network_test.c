@@ -159,6 +159,8 @@ void network_damage_demo_hit_begin(struct damage_data const *damage, long object
 /* network_distributed.c's */
 void network_distributed_statistics(long *sent, long *received, long *corrections);
 void network_distributed_remote_statistics(long *corrections, long *history_corrections, long *history_kept);
+void network_distributed_remote_kind_statistics(short kind, long *corrections, long *history_corrections,
+	long *history_kept, long *wrong);
 void network_distributed_substep_request_statistics(long *asked, long *corrected, long *missed, long *taken);
 void network_distributed_batch_bytes(long *to_host, long *to_clients, short *clients);
 void network_distributed_batch_datagrams(long *to_host, long *to_clients);
@@ -781,6 +783,23 @@ static void network_test_log_players(
 			network_distributed_remote_statistics(&remote_corrections, &history_corrections, &history_kept);
 			platform_log("network test: remote corrected %ld history %ld kept %ld", remote_corrections,
 				history_corrections, history_kept);
+			/* (by kind: a bot, the host's player, a client's the forwarded
+			input drives, a client's the relayed input does; each corrected,
+			against its history, kept by it, and copies found wrong) */
+			{
+				static char const *const kinds[] = { "bot", "host", "forwarded", "relayed" };
+				short kind;
+
+				for (kind = 0; kind < (short)(sizeof(kinds) / sizeof(kinds[0])); kind++)
+				{
+					long wrong;
+
+					network_distributed_remote_kind_statistics(kind, &remote_corrections, &history_corrections,
+						&history_kept, &wrong);
+					platform_log("network test: remote %s corrected %ld history %ld kept %ld wrong %ld", kinds[kind],
+						remote_corrections, history_corrections, history_kept, wrong);
+				}
+			}
 		}
 		/* (an OpenH1 game of several sub-steps a tick: a client's asks for
 		the host's states at its sub-steps, and its copies found wrong by a
