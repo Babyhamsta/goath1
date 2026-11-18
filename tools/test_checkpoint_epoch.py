@@ -1,4 +1,6 @@
-"""Exercise the production dispatcher up to its handlers across world boundaries."""
+"""Exercise the production dispatcher up to its handlers across world boundaries, through its one world gate
+(distributed_world_gate): the epoch, the sender's clock, staleness by kind or by thing."""
+import re
 from pathlib import Path
 
 import pytest
@@ -16,7 +18,10 @@ def generated(checkpoint_reset=None):
     dispatch = function(source, "network_distributed_handle_message")
     # Preserve all real framing, batch recursion, source, epoch and stale checks.
     # Only the final gameplay handlers are replaced by observable deliveries.
-    dispatch = dispatch[:dispatch.rindex("\tswitch (header.type)")] + "\tdelivered[header.type]++;\n}\n"
+    dispatch = dispatch[:dispatch.rindex("\tswitch (header.type)")] + \
+        "\tif (world_kind(header.type)) { delivered[header.type]++; return; }\n" \
+        "\tdelivered[header.type]++;delivered_count[header.type]=header.count;\n" \
+        "\tif (header.count) memcpy(&delivered_key[header.type],entries,4);\n}\n"
     prefix = r'''
 #include <assert.h>
 #include <string.h>
@@ -35,6 +40,10 @@ typedef float real;
 #define HOST_SENDER 4
 #define DATAGRAM_MAXIMUM_SIZE 1200
 #define DISTRIBUTED_TIME_WINDOW_TICKS 450
+#define DISTRIBUTED_TICK_LEAD_TICKS 30
+#define MAXIMUM_MESSAGE_SIZE 0x400
+#define NUMBEROF(a) ((long)(sizeof(a)/sizeof((a)[0])))
+#define csmemmove memmove
 #define DISTRIBUTED_UNIT_STATE_MINIMUM_SIZE 1
 #define DISTRIBUTED_RELAYED_ACTION_MINIMUM_SIZE 1
 #define DISTRIBUTED_FORWARDED_INPUT_MINIMUM_SIZE 1
@@ -50,6 +59,11 @@ struct distributed_client_identity {byte data;};
 struct distributed_client_build {byte data;};
 static int connection=1, unreliable, in_game=1, mcc=1, resets, clock_notes;
 static int delivered[256];
+/* the entries each delivery handed on, and the first's key (a keyed kind's: 4 bytes) */
+static int delivered_count[256];
+static long delivered_key[256];
+static long now_tick=100;
+static long game_time_get(void){return now_tick;}
 static int distributed_handling_batch, distributed_handling_stream_message;
 static unsigned long distributed_checkpoint_epoch, distributed_host_epoch;
 static boolean distributed_checkpoint_synchronized;
@@ -73,26 +87,61 @@ static void error(int level,char const *fmt,...){(void)level;(void)fmt;}
    network_standard.c's; every one goes to everyone in a Classic game) */
 static boolean network_standard_message_goes_to(long machine,byte type){(void)machine;(void)type;return TRUE;}
 static void network_standard_message_heard(byte type){(void)type;}
+static int world_kind(byte type);
 '''
-    import re
-    sizes = sorted(set(re.findall(r"\b(\w+_entry_size|\w+_minimum_size)\(", dispatch)))
+    sizes = sorted(set(re.findall(r"\b(\w+_entry_size|\w+_minimum_size)\(", dispatch)) - {"network_objects_entry_size"})
     prefix += "\n".join(f"#define {name}(...) 1" for name in sizes) + "\n"
-    # the other modules' messages (chat, voice, map sharing, the host's
-    # controls...), each claimed by its own module: none of them here
+    # (the keyed kinds' entries begin with the thing's key: a long, as the inventories' unit and the objects')
+    prefix += "#define network_objects_entry_size(type) ((type)==_distributed_message_inventories || " \
+              "(type)==_distributed_message_object_states ? 4 : 1)\n"
+    # the other modules' messages (chat, voice, map sharing...), each claimed
+    # by its own module: none of them here; OpenH1's own of the game world
+    # (sub-steps, hijacks, the clock, pings, the host's team moves), seen
+    # delivered as the dispatcher's own are, wherever it hands them on
+    world = {"network_substeps": ("player_substeps", "relayed_substeps", "player_live_controls",
+                                  "forwarded_live_controls"),
+             "network_standard": ("opence_players",), "network_host_controls": ("host_team", "host_teleport"),
+             "network_hijack": ("vehicle_hijack",), "network_clock": ("clock_phase",),
+             "network_markers": ("marker_up", "marker_down")}
     hooks = sorted(set(re.findall(r"\b(\w+_handles_(?:lobby_)?message)\(", dispatch)))
-    prefix += "\n".join(f"#define {name}(...) 0" for name in hooks) + "\n"
+    for name in hooks:
+        module = name[:-len("_handles_message")]
+        if module in world:
+            test = " || ".join(f"t==_distributed_message_{kind}" for kind in world[module])
+            prefix += f"#define {name}(m,s) ((s)>=12 && ((t=((byte const *)(m))[2]),({test})))\n"
+        else:
+            prefix += f"#define {name}(...) 0\n"
+    prefix += "static byte t;\n"
     handlers = sorted(set(re.findall(r"\b(\w+_handle_(?:lobby_)?message)\(", dispatch)) -
                       {"network_distributed_handle_message"})
-    prefix += "\n".join(f"#define {name}(...) ((void)0)" for name in handlers) + "\n"
+    for name in handlers:
+        if name[:-len("_handle_message")] in world:
+            prefix += f"#define {name}(machine,m,...) (delivered[((byte const *)(m))[2]]++)\n"
+        else:
+            prefix += f"#define {name}(...) ((void)0)\n"
+    if "distributed_keyed_reset" in source:
+        prefix += "#define KEYED 1\n"
     code = prefix + kinds + structure(header, "distributed_message_header")
     code += r'''
+static long distributed_sender_offsets[MAXIMUM_SENDERS];
 static long distributed_sender_times[MAXIMUM_SENDERS];
 static long distributed_received_times[MAXIMUM_SENDERS][NUMBER_OF_DISTRIBUTED_MESSAGES];
+static int distributed_tick_stuck(long last,long tick,long now)
+{return last>now+DISTRIBUTED_TICK_LEAD_TICKS && tick<=now+DISTRIBUTED_TICK_LEAD_TICKS;}
 '''
+    # (the keyed kinds' table and each thing's latest: distributed_keyed_fresh)
+    keyed = re.search(r"enum\n\{\n\tKEYED_FRESHNESS_SLOTS.*?\} distributed_keyed_times\[[^;]*;", source, re.S)
+    if keyed:
+        code += keyed.group(0) + "\n" + function(source, "distributed_keyed_reset")
     code += checkpoint_reset or "static void distributed_reset_checkpoint_state(boolean receive){(void)receive;}\n"
     for name in ("distributed_advance_checkpoint", "distributed_message_epoch_valid",
-                 "distributed_message_time_bounded", "distributed_message_stale"):
-        code += function(source, name)
+                 "distributed_sender_clock", "distributed_message_time_bounded", "distributed_keyed_kind",
+                 "distributed_keyed_fresh", "distributed_message_stale", "distributed_world_side_kind",
+                 "distributed_world_gate"):
+        try:
+            code += function(source, name)
+        except LookupError:
+            pass  # (an older dispatcher's: no world gate of its own)
     code += dispatch
     code += r'''
 static void send(long machine,byte type,unsigned long epoch,long time,byte count,word size){
@@ -116,12 +165,36 @@ static void batch(byte type,unsigned long epoch,long time){
 static void setup(void){
  memset(distributed_sender_times,255,sizeof(distributed_sender_times));
  memset(distributed_received_times,255,sizeof(distributed_received_times));
+#ifdef KEYED
+ distributed_keyed_reset();
+#endif
+}
+/* a message of a keyed kind (4-byte entries): its things' keys */
+static void send_keyed(long machine,byte type,unsigned long epoch,long time,int count,long const *keys){
+ union {word alignment;byte bytes[128];} message;
+ struct distributed_message_header h;int i;
+ memset(&message,0,sizeof(message));memset(&h,0,sizeof(h));
+ h.type=type;h.count=(byte)count;h.checkpoint_epoch=epoch;h.game_time=time;
+ memcpy(message.bytes,&h,sizeof(h));
+ for(i=0;i<count;i++)memcpy(message.bytes+sizeof(h)+4*i,&keys[i],4);
+ network_distributed_handle_message(machine,(word *)message.bytes,(word)(sizeof(h)+4*count));
+}
+static word sized(byte type){return 12+(type==_distributed_message_inventories||type==_distributed_message_object_states?4:1);}
+static int world_kind(byte type){
+ switch(type){
+ case _distributed_message_player_substeps:case _distributed_message_relayed_substeps:
+ case _distributed_message_player_live_controls:case _distributed_message_forwarded_live_controls:
+ case _distributed_message_opence_players:case _distributed_message_host_team:case _distributed_message_host_teleport:
+ case _distributed_message_vehicle_hijack:case _distributed_message_clock_phase:
+ case _distributed_message_marker_up:case _distributed_message_marker_down:return 1;}
+ return 0;
 }
 '''
     return code
 
 
-@pytest.mark.parametrize("case", ["barrier", "late_packets", "ready", "batch", "clock", "rollover"])
+@pytest.mark.parametrize("case", ["barrier", "late_packets", "ready", "batch", "clock", "rollover",
+                                  "first_datagram", "stream_snapshot", "keyed_reorder", "world_epoch", "legit_window"])
 def test_epoch_dispatch(tmp_path, case):
     cases = {
         "barrier": r'''
@@ -152,15 +225,15 @@ def test_epoch_dispatch(tmp_path, case):
  _distributed_message_mcc_grenades,_distributed_message_mcc_object_names};
  send(NONE,_distributed_message_checkpoint,1,100,0,12);
  send(NONE,_distributed_message_objects_synchronized,1,100,0,12);
- for(i=0;i<sizeof(types);i++)send(NONE,types[i],1,100,1,13);
+ for(i=0;i<sizeof(types);i++)send(NONE,types[i],1,100,1,sized(types[i]));
  send(NONE,_distributed_message_checkpoint,2,100,0,12); /* Same host tick, new world. */
  send(NONE,_distributed_message_objects_synchronized,2,100,0,12);
  for(i=0;i<sizeof(types);i++){
   assert(delivered[types[i]]==1);
-  send(NONE,types[i],1,101,1,13); /* Old world, newer timestamp. */
-  unreliable=1;send(NONE,types[i],1,100,1,13);unreliable=0;
+  send(NONE,types[i],1,101,1,sized(types[i])); /* Old world, newer timestamp. */
+  unreliable=1;send(NONE,types[i],1,100,1,sized(types[i]));unreliable=0;
   assert(delivered[types[i]]==1);
-  send(NONE,types[i],2,101,1,13);assert(delivered[types[i]]==2);
+  send(NONE,types[i],2,101,1,sized(types[i]));assert(delivered[types[i]]==2);
  }
 ''',
         "ready": r'''
@@ -170,7 +243,7 @@ def test_epoch_dispatch(tmp_path, case):
  send(0,_distributed_message_client_ready,0,100,0,12);
  send(0,_distributed_message_client_ready,1,100,1,12);
  assert(delivered[_distributed_message_client_ready]==2 && !resets);
- assert(!clock_notes && distributed_sender_times[0]==NONE);
+ assert(!clock_notes && distributed_sender_offsets[0]==0);
  send(0,_distributed_message_client_ready,4,100,2,12);
  send(0,_distributed_message_client_ready,4,100,0,13);
  send(4,_distributed_message_client_ready,4,100,0,12);
@@ -186,9 +259,9 @@ def test_epoch_dispatch(tmp_path, case):
  send(NONE,_distributed_message_checkpoint,2,100,0,12);
  send(NONE,_distributed_message_object_changes,2,100,1,13);
  assert(delivered[_distributed_message_object_changes]==1);
- unreliable=1;send(NONE,_distributed_message_inventories,2,100,1,13);unreliable=0;
+ unreliable=1;send(NONE,_distributed_message_inventories,2,100,1,16);unreliable=0;
  assert(!delivered[_distributed_message_inventories]);
- send(NONE,_distributed_message_inventories,2,100,1,13);
+ send(NONE,_distributed_message_inventories,2,100,1,16);
  assert(delivered[_distributed_message_inventories]==1);
  batch(_distributed_message_damage_events,1,101);assert(!delivered[_distributed_message_damage_events]);
  batch(_distributed_message_damage_events,2,101);assert(!delivered[_distributed_message_damage_events]);
@@ -205,16 +278,141 @@ def test_epoch_dispatch(tmp_path, case):
 ''',
         "clock": r'''
  send(NONE,_distributed_message_damage_events,3,LONG_MAX,0,12);
- assert(distributed_host_time==NONE && distributed_sender_times[HOST_SENDER]==NONE);
+ assert(distributed_host_time==NONE && distributed_sender_offsets[HOST_SENDER]==0);
  send(NONE,_distributed_message_checkpoint,2,100,0,12);
  send(NONE,_distributed_message_objects_synchronized,2,100,0,12);
  send(NONE,_distributed_message_unit_states,2,100,0,12);
  send(NONE,_distributed_message_unit_states,1,LONG_MAX,0,12);
- assert(distributed_host_time==100 && distributed_sender_times[HOST_SENDER]==100);
- send(NONE,_distributed_message_unit_states,2,101,0,12);
+ assert(distributed_host_time==100 && distributed_sender_offsets[HOST_SENDER]==0);
+ unreliable=1;send(NONE,_distributed_message_unit_states,2,101,0,12);
  assert(delivered[_distributed_message_unit_states]==2);
- send(NONE,_distributed_message_unit_states,2,100,0,12);
+ send(NONE,_distributed_message_unit_states,2,100,0,12);unreliable=0;
  assert(delivered[_distributed_message_unit_states]==2); /* Ordinary stale checks retained. */
+''',
+        # after a reset (a client machine ready: its anchor cleared), a datagram stamped far off comes
+        # first: it does not set the sender's clock, and the sender's real ones after it are taken; the sender's own
+        # stream still moves it
+        "first_datagram": r'''
+ connection=2;distributed_checkpoint_epoch=2;distributed_handling_stream_message=0;
+ send(0,_distributed_message_player_inputs,2,100+5000,0,12);
+ send(0,_distributed_message_player_inputs,2,101,0,12);
+ send(0,_distributed_message_player_inputs,2,102,0,12);
+ assert(delivered[_distributed_message_player_inputs]==2);
+ /* (a client: the host's, the same) */
+ connection=1;distributed_checkpoint_epoch=0;
+ send(NONE,_distributed_message_checkpoint,2,100,0,12);
+ send(NONE,_distributed_message_objects_synchronized,2,100,0,12);
+ unreliable=1;
+ send(NONE,_distributed_message_unit_states,2,100+5000,0,12);
+ assert(!delivered[_distributed_message_unit_states]);
+ send(NONE,_distributed_message_unit_states,2,101,0,12);
+ send(NONE,_distributed_message_unit_states,2,102,0,12);
+ assert(delivered[_distributed_message_unit_states]==2 && distributed_host_time==102);
+ /* (the sender's own stream, far off: its clock moved, its datagrams taken there) */
+ unreliable=0;
+ send(NONE,_distributed_message_unit_states,2,100+5000,0,12);
+ assert(delivered[_distributed_message_unit_states]==3 && distributed_sender_offsets[HOST_SENDER]==5000);
+ unreliable=1;send(NONE,_distributed_message_unit_states,2,100+5001,0,12);
+ send(NONE,_distributed_message_unit_states,2,103,0,12);
+ assert(delivered[_distributed_message_unit_states]==4);
+''',
+        # the ordered inventory snapshot after a revert or a join, overtaken by a newer datagram of one
+        # unit: the snapshot's other units taken, the one it overtook left out
+        "stream_snapshot": r'''
+ long a=0x10001,b=0x20002,both[2];both[0]=a;both[1]=b;
+ send(NONE,_distributed_message_checkpoint,2,100,0,12);
+ send(NONE,_distributed_message_objects_synchronized,2,100,0,12);
+ unreliable=1;send_keyed(NONE,_distributed_message_inventories,2,105,1,&a);unreliable=0;
+ assert(delivered[_distributed_message_inventories]==1);
+ send_keyed(NONE,_distributed_message_inventories,2,103,2,both);
+ assert(delivered[_distributed_message_inventories]==2);
+ assert(delivered_count[_distributed_message_inventories]==1 && delivered_key[_distributed_message_inventories]==b);
+ /* (an older datagram of a unit after the snapshot: stale) */
+ unreliable=1;send_keyed(NONE,_distributed_message_inventories,2,102,1,&b);
+ assert(delivered[_distributed_message_inventories]==2);
+''',
+        # a partial inventory datagram reordered behind a newer one of another unit: taken; one of the
+        # same unit: stale, as before
+        "keyed_reorder": r'''
+ long a=0x10001,b=0x20002,c=7;
+ send(NONE,_distributed_message_checkpoint,2,100,0,12);
+ send(NONE,_distributed_message_objects_synchronized,2,100,0,12);
+ unreliable=1;
+ send_keyed(NONE,_distributed_message_inventories,2,110,1,&a);
+ send_keyed(NONE,_distributed_message_inventories,2,108,1,&b);
+ assert(delivered[_distributed_message_inventories]==2 && delivered_key[_distributed_message_inventories]==b);
+ send_keyed(NONE,_distributed_message_inventories,2,109,1,&a);
+ assert(delivered[_distributed_message_inventories]==2);
+ /* (a tick's several messages alike: taken) */
+ send_keyed(NONE,_distributed_message_inventories,2,110,1,&a);
+ assert(delivered[_distributed_message_inventories]==3);
+ /* (the objects' states alike, by object) */
+ send_keyed(NONE,_distributed_message_object_states,2,110,1,&a);
+ send_keyed(NONE,_distributed_message_object_states,2,109,1,&c);
+ send_keyed(NONE,_distributed_message_object_states,2,109,1,&a);
+ assert(delivered[_distributed_message_object_states]==2);
+ /* (a whole-state kind's: by the kind, as before) */
+ send(NONE,_distributed_message_actor_states,2,110,1,13);
+ send(NONE,_distributed_message_actor_states,2,109,1,13);
+ assert(delivered[_distributed_message_actor_states]==1);
+''',
+        # OpenH1's own kinds of the world handled in their own files pass the same gate: another world's
+        # (wrong epoch) not handed on, the current world's are; during a snapshot only the clock's and team moves
+        "world_epoch": r'''
+ int i;byte host_kinds[]={_distributed_message_relayed_substeps,_distributed_message_forwarded_live_controls,
+ _distributed_message_vehicle_hijack,_distributed_message_marker_down,_distributed_message_host_teleport,
+ _distributed_message_opence_players,_distributed_message_clock_phase,_distributed_message_host_team};
+ byte client_kinds[]={_distributed_message_player_substeps,_distributed_message_player_live_controls,
+ _distributed_message_marker_up};
+ send(NONE,_distributed_message_checkpoint,2,100,0,12);
+ send(NONE,_distributed_message_objects_synchronized,2,100,0,12);
+ for(i=0;i<sizeof(host_kinds);i++){
+  send(NONE,host_kinds[i],1,101,1,13);
+  assert(!delivered[host_kinds[i]]);
+  send(NONE,host_kinds[i],2,101,1,13);
+  assert(delivered[host_kinds[i]]==1);
+ }
+ /* (a far-stamped datagram of them: dropped as the rest are) */
+ unreliable=1;send(NONE,_distributed_message_relayed_substeps,2,100+5000,1,13);unreliable=0;
+ assert(delivered[_distributed_message_relayed_substeps]==1);
+ /* (a new world's snapshot under way: world kinds wait for its end) */
+ send(NONE,_distributed_message_checkpoint,3,102,0,12);
+ for(i=0;i<sizeof(host_kinds);i++)send(NONE,host_kinds[i],3,102,1,13);
+ assert(delivered[_distributed_message_relayed_substeps]==1 && delivered[_distributed_message_vehicle_hijack]==1);
+ assert(delivered[_distributed_message_clock_phase]==2 && delivered[_distributed_message_host_team]==2);
+ /* (the host: a client machine's, of its world alone) */
+ connection=2;distributed_checkpoint_epoch=3;distributed_handling_stream_message=1;
+ for(i=0;i<sizeof(client_kinds);i++){
+  send(0,client_kinds[i],2,102,1,13);
+  assert(!delivered[client_kinds[i]]);
+  send(0,client_kinds[i],3,102,1,13);
+  assert(delivered[client_kinds[i]]==1);
+ }
+ /* (a host's kind from a client: not its) */
+ send(0,_distributed_message_vehicle_hijack,3,102,1,13);
+ assert(delivered[_distributed_message_vehicle_hijack]==1);
+''',
+        # (negative control) legitimate traffic: a client's clock leading the host's by its trip, trailing it by a
+        # high ping or a second's hitch, the host's ticks in order, a stream message queued behind others
+        "legit_window": r'''
+ now_tick=1000;
+ send(NONE,_distributed_message_checkpoint,2,1000,0,12);
+ send(NONE,_distributed_message_objects_synchronized,2,1000,0,12);
+ unreliable=1;
+ send(NONE,_distributed_message_unit_states,2,1000-12,0,12);
+ send(NONE,_distributed_message_unit_states,2,1000-11,0,12);
+ now_tick=1030;
+ send(NONE,_distributed_message_unit_states,2,1000+30,0,12);
+ now_tick=1040;
+ send(NONE,_distributed_message_unit_states,2,1040+60,0,12);
+ send(NONE,_distributed_message_unit_states,2,1040+400,0,12);
+ assert(delivered[_distributed_message_unit_states]==5);
+ connection=2;distributed_handling_stream_message=0;
+ now_tick=2000;
+ send(0,_distributed_message_player_inputs,2,2000+12,0,12);
+ send(0,_distributed_message_player_inputs,2,2000+13,0,12);
+ send(0,_distributed_message_player_inputs,2,2000-60,0,12);
+ assert(delivered[_distributed_message_player_inputs]==2);
 ''',
         "rollover": r'''
  distributed_host_epoch=ULONG_MAX-1;distributed_advance_checkpoint();assert(distributed_checkpoint_epoch==ULONG_MAX);
@@ -233,7 +431,6 @@ def test_outgoing_snapshot_boundary(tmp_path):
     code = generated() + enum_with(header, "_distributed_to_clients")
     code += structure(source, "distributed_packer") + r'''
 static int wire_calls;
-static long game_time_get(void){return 100;}
 static void build_message_header(message_header *h,word size,int type,int version){*h=size;(void)type;(void)version;}
 static short distributed_client_machines(long *ids,short n){assert(n==4);ids[0]=1;return 1;}
 static void distributed_batch_add(short sender,void const *message,word size,word entry){
@@ -351,10 +548,10 @@ static void provisional(void){
 int main(void){
  int i,j;long received,sender;
  setup();send(NONE,_distributed_message_checkpoint,2,100,0,12);
- send(NONE,_distributed_message_inventories,2,100,1,13);
+ send(NONE,_distributed_message_inventories,2,100,1,16);
  assert(delivered[_distributed_message_inventories]==1);
- received=distributed_received_times[HOST_SENDER][_distributed_message_inventories];
- sender=distributed_sender_times[HOST_SENDER];assert(received==100);
+ received=distributed_keyed_times[0][0].time;
+ sender=distributed_sender_offsets[HOST_SENDER];assert(received==100);
  provisional();
  send(NONE,_distributed_message_objects_synchronized,2,100,1,12);
  assert(!distributed_checkpoint_synchronized && provisional_inputs==3);
@@ -370,18 +567,19 @@ int main(void){
   for(j=0;j<4;j++)assert(distributed_own_positions[i][j].time==NONE && distributed_own_positions[i][j].unit_index==NONE);
  }
  for(i=0;i<MAXIMUM_SENDERS;i++)assert(!distributed_batches[i].size);
- assert(distributed_received_times[HOST_SENDER][_distributed_message_inventories]==received);
- assert(distributed_sender_times[HOST_SENDER]==sender);
- unreliable=1;send(NONE,_distributed_message_inventories,2,99,1,13);unreliable=0;
+ assert(distributed_keyed_times[0][0].time==received);
+ assert(distributed_sender_offsets[HOST_SENDER]==sender);
+ unreliable=1;send(NONE,_distributed_message_inventories,2,99,1,16);unreliable=0;
  assert(delivered[_distributed_message_inventories]==1); /* Snapshot remains newer. */
- send(NONE,_distributed_message_inventories,2,101,1,13);
+ send(NONE,_distributed_message_inventories,2,101,1,16);
  assert(delivered[_distributed_message_inventories]==2);
  provisional();send(NONE,_distributed_message_objects_synchronized,2,101,0,12);
  assert(provisional_inputs==3 && distributed_own_positions[0][0].time==111);
  assert(distributed_batches[HOST_SENDER].size==17); /* Duplicate marker preserves current work. */
  distributed_reset_checkpoint_state(TRUE);
+ assert(distributed_keyed_times[0][0].time==NONE);
  for(i=0;i<MAXIMUM_SENDERS;i++){
-  assert(distributed_sender_times[i]==NONE);
+  assert(distributed_sender_offsets[i]==0);
   for(j=0;j<NUMBER_OF_DISTRIBUTED_MESSAGES;j++)assert(distributed_received_times[i][j]==NONE);
  }
  return 0;

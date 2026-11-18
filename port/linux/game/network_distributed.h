@@ -469,6 +469,10 @@ ticks (and its jitter), as its players' input messages tell */
 real distributed_machine_round_trip_ticks(long machine_index);
 /* (a client) the host's latest tick it has had a message of, NONE for none */
 long distributed_latest_host_time(void);
+/* the clock a sender's ticks are checked by (the world gate's): this
+machine's own, moved by the offset the sender's stream last set; the host's
+of a client machine (machine_index), a client's of the host (NONE) */
+long distributed_sender_clock(long machine_index);
 /* (a client) how long the host takes to have this machine's players and
 tell it back, in ticks (0 before it is measured) */
 real distributed_own_round_trip_ticks(void);
