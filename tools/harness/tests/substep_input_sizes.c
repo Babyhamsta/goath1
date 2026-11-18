@@ -68,7 +68,7 @@ int main(int argc, char **argv)
 		substep_count = !strcmp(name, "read") ? 2 : MAXIMUM_SIM_SUBSTEPS;
 		used += put(buffer + used, 0, substep_count, 500);
 		used += put(buffer + used, 1, substep_count, 501);
-		network_substeps_handle_inputs(0, buffer, buffer + used, 2);
+		network_substeps_handle_inputs(0, buffer, buffer + used, 2, FALSE, NONE);
 		CHECK(heard_count == 2, "%d of 2 records read", heard_count);
 		CHECK(network_substeps_globals.heard[1].key == 501 && network_substeps_globals.heard[1].count == substep_count &&
 			network_substeps_globals.heard[1].controls[substep_count - 2].facing.yaw == (real)(1 + substep_count - 2) * 0.25f,
@@ -80,7 +80,7 @@ int main(int argc, char **argv)
 		substep_count = 2;
 		used += put(buffer + used, 0, 2, 500);
 		used += put(buffer + used, 1, 2, 501);
-		network_substeps_handle_inputs(0, buffer, buffer + used - 1, 2);
+		network_substeps_handle_inputs(0, buffer, buffer + used - 1, 2, FALSE, NONE);
 		CHECK(heard_count == 1, "%d records read of a message a byte short of 2", heard_count);
 		return 0;
 	}

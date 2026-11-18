@@ -291,6 +291,14 @@ enum
 	debug.network_states_unpacked): each in bits (network_objects_pack_state),
 	read as the whole one would be (network_objects_unpack_states) */
 	_distributed_message_object_states_packed = 149,
+	/* an OpenH1 client's controls packed (network_substeps.c, unreliable, to
+	an OpenH1 host), at the moments the forms before go, in their place
+	unless debug.network_controls_unpacked: its live controls (of
+	_distributed_message_player_live_controls) and its sub-steps (of
+	_distributed_message_player_substeps), every number the host reads as it
+	read the whole ones. (150 to 154 are kept for other kinds) */
+	_distributed_message_player_live_controls_packed = 155,
+	_distributed_message_player_substeps_packed = 156,
 
 	NUMBER_OF_DISTRIBUTED_MESSAGES
 };

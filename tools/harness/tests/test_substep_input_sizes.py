@@ -17,7 +17,7 @@ NEGATIVE_CONTROLS = {
     "fixed-size": (("return (word)(SUBSTEP_INPUT_HEADER_SIZE + (substep_count - 1) * sizeof(struct distributed_substep_input_control));",
                     "(void)substep_count; return (word)sizeof(struct distributed_substep_input);"), "sizes"),
     # a record read past the message's end
-    "unbounded": (("\t\tif (end - data < (long)size)\n\t\t\treturn;\n", ""), "short"),
+    "unbounded": (("\t\t\tif (end - data < (long)size)\n\t\t\t\treturn;\n", ""), "short"),
     # the next record read where the last began
     "not-advanced": (("\t\tdata += size;\n", ""), "read"),
 }
@@ -26,6 +26,9 @@ NEGATIVE_CONTROLS = {
 def generated(fault=None):
     source = read(SOURCE)
     code = re.search(r"#define SUBSTEP_INPUT_HEADER_SIZE \(.*?\n.*?\n", source)[0]
+    # (the packed records' reader, of their own test: test_controls_packing.py)
+    code += "static word substep_input_unpack(byte const *data, byte const *end, long time, " \
+            "struct distributed_substep_input *input) { (void)data; (void)end; (void)time; (void)input; return 0; }\n"
     code += function(source, "substep_input_size") + "\n"
     code += function(source, "substep_pin") + "\n"
     code += function(source, "network_substeps_handle_inputs") + "\n"

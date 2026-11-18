@@ -9843,6 +9843,8 @@ static boolean distributed_world_side_kind(
 	case _distributed_message_relayed_substeps:
 	case _distributed_message_player_live_controls:
 	case _distributed_message_forwarded_live_controls:
+	case _distributed_message_player_live_controls_packed:
+	case _distributed_message_player_substeps_packed:
 	case _distributed_message_opence_players:
 	case _distributed_message_host_team:
 	case _distributed_message_host_teleport:
@@ -9933,7 +9935,9 @@ static boolean distributed_world_gate(
 				header->type == _distributed_message_player_prediction_held ||
 				header->type == _distributed_message_vehicle_prediction ||
 				header->type == _distributed_message_player_substeps ||
-				header->type == _distributed_message_player_live_controls) &&
+				header->type == _distributed_message_player_live_controls ||
+				header->type == _distributed_message_player_substeps_packed ||
+				header->type == _distributed_message_player_live_controls_packed) &&
 			distributed_machine_clock_fast(machine_index))
 		{
 			return FALSE;
@@ -10293,6 +10297,8 @@ void network_distributed_handle_message(
 	case _distributed_message_fire_origins:
 	case _distributed_message_player_substeps:
 	case _distributed_message_player_live_controls:
+	case _distributed_message_player_substeps_packed:
+	case _distributed_message_player_live_controls_packed:
 	case _distributed_message_marker_up:
 	case _distributed_message_substep_state_requests:
 		if (machine_index == NONE || game_connection() != _game_connection_network_server)
@@ -10318,6 +10324,8 @@ void network_distributed_handle_message(
 	case _distributed_message_relayed_substeps:
 	case _distributed_message_player_live_controls:
 	case _distributed_message_forwarded_live_controls:
+	case _distributed_message_player_live_controls_packed:
+	case _distributed_message_player_substeps_packed:
 		network_substeps_handle_message(machine_index, message, size);
 		break;
 	case _distributed_message_opence_players:

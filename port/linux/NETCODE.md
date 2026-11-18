@@ -1107,6 +1107,26 @@ controls as each sub-step runs (`network_substeps.c`'s live controls):
 
 None of it is sent at 30, in a Legacy game or to an OpenCE machine.
 
+**Packed to the host.** An OpenH1 client sends its live controls and its
+sub-steps packed (`_distributed_message_player_live_controls_packed`, 155,
+and `_distributed_message_player_substeps_packed`, 156, in place of 132 and
+120), at the same moments, and the host reads every number exactly as the
+whole entries gave it (`live_control_up_pack`, `substep_input_pack`): the
+player, the held controls and the sub-step in two bytes; the tick left out
+where it is the message's (a live control's always is) or in a byte where
+near it; each stick and the trigger in a 2-bit code where it is +0, 1 or -1
+exactly, else its 4 bytes; the aim whole. A sub-step's sticks and trigger
+are left out where every bit is the one before's, and its facing where it
+did not turn (the host reads a facing only of a sub-step that turned). The
+record still carries every later sub-step, so a lost live control is made
+good by it as before. `debug.network_controls_unpacked`
+(`HALO_NETWORK_CONTROLS_UNPACKED`) sends the forms before; the host takes
+both (`tools/harness/tests/test_controls_packing.py`). Slayer at 120 (13 bots,
+two clients, loopback, the same build either way): a client's live control
+39 bytes a message with the batch's 3, now 26, and its sub-steps 84, now
+42; the playing client sent 9.6 KB/s, now 6.7, with as many copies found
+wrong (86 and 96 over the game) and fewer inputs missed.
+
 The prediction's ack and the host's history of where the players were stay a
 tick's: the host takes positions once a tick, and a sub-step's pose is
 within a tick's movement of a tick's, far inside the hit check's 2 world
