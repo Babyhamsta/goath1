@@ -472,6 +472,8 @@ struct distributed_player_held
 	unsigned long checksum;
 };
 
+typedef char distributed_player_held_size_assert[sizeof(struct distributed_player_held) == 16 ? 1 : -1];
+
 enum
 {
 	INPUT_HELD_REPEATS = 3,
