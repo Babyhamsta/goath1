@@ -100,6 +100,10 @@ last tick ran (the input's client's), NONE for none: the relayed input, or
 none, drove it */
 long network_substeps_forwarded_key(short player_index);
 
+/* (a client) whether the latest live control heard of a player was keyed by
+the host's update (the host's own player's), for the tests' reports */
+boolean network_substeps_host_live_heard(short player_index);
+
 /* the messages (network_distributed.c's handling, before its own) */
 boolean network_substeps_handles_message(word const *message, word size);
 void network_substeps_handle_message(long machine_index, word const *message, word size);

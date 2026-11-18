@@ -113,6 +113,7 @@ machine (their datum identifiers need not be).
 #include "server_director.h"
 #include "demo.h"
 #include "bots_command.h"
+#include "bots.h"
 
 #include <limits.h>
 #include <stdio.h>
@@ -1299,6 +1300,24 @@ static struct
 	long remote_history_corrections;
 	long remote_history_kept;
 } distributed_statistics;
+/* ... and (a client) those by the kind of player (a bot, the host's own, a
+client's its forwarded input drives, a client's the relayed input does),
+with the copies found wrong by them */
+enum
+{
+	_remote_kind_bot,
+	_remote_kind_host,
+	_remote_kind_forwarded,
+	_remote_kind_relayed,
+	NUMBER_OF_REMOTE_KINDS
+};
+static struct
+{
+	long corrections;
+	long history_corrections;
+	long history_kept;
+	long wrong;
+} distributed_remote_kinds[NUMBER_OF_REMOTE_KINDS];
 /* ... and (the host) how far apart a client's player moved in a tick on the
 client and on the host, where the host took the client's last prediction
 the tick before, that was of the client's tick before, and the host's tick
@@ -1407,6 +1426,21 @@ void network_distributed_remote_statistics(
 	*corrections = distributed_statistics.remote_corrections;
 	*history_corrections = distributed_statistics.remote_history_corrections;
 	*history_kept = distributed_statistics.remote_history_kept;
+}
+
+void network_distributed_remote_kind_statistics(
+	short kind,
+	long *corrections,
+	long *history_corrections,
+	long *history_kept,
+	long *wrong)
+{
+	if (kind < 0 || kind >= NUMBER_OF_REMOTE_KINDS)
+		kind = 0;
+	*corrections = distributed_remote_kinds[kind].corrections;
+	*history_corrections = distributed_remote_kinds[kind].history_corrections;
+	*history_kept = distributed_remote_kinds[kind].history_kept;
+	*wrong = distributed_remote_kinds[kind].wrong;
 }
 
 void network_distributed_substep_request_statistics(
@@ -3525,6 +3559,327 @@ static word distributed_unit_difference_read(
 	return (word)(cursor - buffer);
 }
 
+/* ---------- the tick states' entries joined
+To an OpenH1 client, unless debug.network_forms_before
+(_distributed_message_unit_state_differences_joined): the entries of a
+_distributed_message_unit_state_differences message one after another in
+bits, no byte left part empty between them, each head written against the
+entry's before it in the message. A packed difference: 1, its player (1:
+the one after the entry before's, else 0 and its 8 bits), the host's ticks
+since its base (1: the packed entry before's, else 0 and its 5 bits), its
+deck bit, its parts (1: the packed entry before's, else 0 and its 8 bits and
+the next 8 where its more bit says), the rest of its bits as they were, and
+its deck part (where its deck bit says: 1 and its bytes for a deck, 0 for
+none). A whole state: 0, its bytes' count in 8 bits and its bytes. The
+client makes the message of the entries back, every byte as it was, and
+takes it as it would have come (distributed_unit_differences_unjoin) */
+struct distributed_unit_joining
+{
+	short player_index;
+	byte age;
+	boolean parts_valid;
+	word parts;
+};
+
+typedef char unit_joined_whole_assert[DISTRIBUTED_UNIT_STATE_MAXIMUM_SIZE <= 255 ? 1 : -1];
+
+static void distributed_unit_joining_begin(
+	struct distributed_unit_joining *joining)
+{
+	joining->player_index = NONE;
+	joining->age = 0;
+	joining->parts_valid = FALSE;
+	joining->parts = 0;
+}
+
+/* a packed difference's parts past its parts' flags, taken and passed over
+as distributed_unit_packed_read takes them: FALSE where they run past */
+static boolean distributed_unit_packed_skip(
+	struct network_bits *bits,
+	word parts)
+{
+	long values[4];
+	short axis;
+
+	if (TEST_FLAG(parts, _unit_packed_flags_bit))
+		network_bits_take(bits, 8);
+	if (TEST_FLAG(parts, _unit_packed_killer_bit))
+		network_bits_take(bits, 8);
+	if (TEST_FLAG(parts, _unit_packed_unit_bit))
+		network_bits_take(bits, 32);
+	if (TEST_FLAG(parts, _unit_packed_riding_bit))
+	{
+		network_bits_take(bits, 32);
+		network_bits_take(bits, 16);
+	}
+	if (TEST_FLAG(parts, _unit_packed_position_bit))
+		network_bits_take_group(bits, values, 3);
+	if (TEST_FLAG(parts, _unit_packed_velocity_bit))
+		network_bits_take_group(bits, values, 3);
+	if (TEST_FLAG(parts, _unit_packed_forward_bit))
+	{
+		/* (network_bits_take_unit_vector's, its parts separate) */
+		short largest = (short)network_bits_take(bits, 2);
+
+		if (largest != NETWORK_BITS_UNIT_WHOLE)
+		{
+			network_bits_take(bits, 1);
+			network_bits_take(bits, NETWORK_BITS_UNIT_REST_BITS);
+		}
+		for (axis = 0; axis < (largest == NETWORK_BITS_UNIT_WHOLE ? 3 : 2); axis++)
+			network_bits_take_group(bits, values, 1);
+	}
+	if (TEST_FLAG(parts, _unit_packed_up_bit))
+	{
+		for (axis = 0; axis < 3; axis++)
+			network_bits_take(bits, 16);
+	}
+	if (TEST_FLAG(parts, _unit_packed_predicted_bit))
+		network_bits_take_group(bits, values, 1);
+	if (TEST_FLAG(parts, _unit_packed_vitality_bit))
+		network_bits_take_group(bits, values, 2);
+	if (TEST_FLAG(parts, _unit_packed_damage_bit))
+		network_bits_take_group(bits, values, 4);
+	if (TEST_FLAG(parts, _unit_packed_powerups_bit))
+	{
+		for (axis = 0; axis < NUMBER_OF_PLAYER_POWERUPS; axis++)
+			network_bits_take(bits, 16);
+	}
+	if (TEST_FLAG(parts, _unit_packed_camouflage_bit))
+		network_bits_take(bits, 16);
+	return !bits->failed;
+}
+
+/* count bits from one to the other */
+static void distributed_bits_copy(
+	struct network_bits *to,
+	struct network_bits *from,
+	long count)
+{
+	while (count > 0 && !from->failed && !to->failed)
+	{
+		short chunk = (short)MIN(count, 32);
+
+		network_bits_put(to, network_bits_take(from, chunk), chunk);
+		count -= chunk;
+	}
+}
+
+/* (the host) a tick state's entry (distributed_unit_difference_write's
+bytes) after the one before, joined: FALSE where it does not fit the bits
+(or is none of the entries the writer makes) */
+static boolean distributed_unit_entry_join(
+	struct distributed_unit_joining *joining,
+	byte const *entry,
+	word size,
+	struct network_bits *bits)
+{
+	struct network_bits body;
+	byte age;
+	boolean deck;
+	byte player_index;
+	word parts;
+	long start;
+	long length;
+	byte const *cursor;
+	byte const *end = entry + size;
+	short index;
+
+	if (size < 2)
+		return FALSE;
+	if (!TEST_FLAG(entry[0], UNIT_PACKED_FORM_BIT))
+	{
+		if (entry[0] != _unit_difference_form_whole || size - 1 > 255)
+			return FALSE;
+		network_bits_put(bits, 0, 1);
+		network_bits_put(bits, (unsigned long)(size - 1), 8);
+		for (index = 1; index < (short)size; index++)
+			network_bits_put(bits, entry[index], 8);
+		joining->player_index = entry[1];
+		return !bits->failed;
+	}
+	age = (byte)(entry[0] & UNIT_PACKED_AGE_MASK);
+	deck = TEST_FLAG(entry[0], UNIT_PACKED_DECK_BIT);
+	player_index = entry[1];
+	if (size < 3 || (entry[0] & ~(FLAG(UNIT_PACKED_FORM_BIT) | FLAG(UNIT_PACKED_DECK_BIT) | UNIT_PACKED_AGE_MASK)) ||
+		age == 0)
+	{
+		return FALSE;
+	}
+	network_bits_begin_read(&body, entry + 2, size - 2);
+	parts = (word)network_bits_take(&body, 8);
+	if (TEST_FLAG(parts, _unit_packed_more_bit))
+		parts |= (word)(network_bits_take(&body, 8) << 8);
+	start = body.position;
+	if (!distributed_unit_packed_skip(&body, parts))
+		return FALSE;
+	length = body.position - start;
+	cursor = entry + 2 + network_bits_bytes(&body);
+	/* (its deck part, as the bytes after its bits have it, and nothing past) */
+	if (deck)
+	{
+		if (cursor >= end || *cursor > 1 || end - cursor != 1 + (*cursor ? DISTRIBUTED_DECK_SIZE : 0))
+			return FALSE;
+	}
+	else if (cursor != end)
+		return FALSE;
+	network_bits_put(bits, 1, 1);
+	if (player_index == joining->player_index + 1)
+		network_bits_put(bits, 1, 1);
+	else
+	{
+		network_bits_put(bits, 0, 1);
+		network_bits_put(bits, player_index, 8);
+	}
+	if (age == joining->age)
+		network_bits_put(bits, 1, 1);
+	else
+	{
+		network_bits_put(bits, 0, 1);
+		network_bits_put(bits, age, 5);
+	}
+	network_bits_put(bits, deck ? 1 : 0, 1);
+	if (joining->parts_valid && parts == joining->parts)
+		network_bits_put(bits, 1, 1);
+	else
+	{
+		network_bits_put(bits, 0, 1);
+		network_bits_put(bits, parts & 0xFF, 8);
+		if (TEST_FLAG(parts, _unit_packed_more_bit))
+			network_bits_put(bits, parts >> 8, 8);
+	}
+	network_bits_begin_read(&body, entry + 2, size - 2);
+	body.position = start;
+	distributed_bits_copy(bits, &body, length);
+	if (deck)
+	{
+		network_bits_put(bits, *cursor, 1);
+		for (index = 1; index < (short)(end - cursor); index++)
+			network_bits_put(bits, cursor[index], 8);
+	}
+	joining->player_index = player_index;
+	joining->age = age;
+	joining->parts = parts;
+	joining->parts_valid = TRUE;
+	return !bits->failed && !body.failed;
+}
+
+/* (a client) the entry after the one before, from its joined bits, as its
+bytes were (no more than room): their count, 0 for none that make one */
+static word distributed_unit_entry_unjoin(
+	struct distributed_unit_joining *joining,
+	struct network_bits *bits,
+	byte *entry,
+	word room)
+{
+	struct network_bits body;
+	long player_index;
+	byte age;
+	boolean deck;
+	word parts;
+	long start;
+	byte *cursor;
+	short index;
+
+	if (!network_bits_take(bits, 1))
+	{
+		word length = (word)network_bits_take(bits, 8);
+
+		if (bits->failed || length < 1 || 1 + length > room)
+			return 0;
+		entry[0] = _unit_difference_form_whole;
+		for (index = 1; index <= (short)length; index++)
+			entry[index] = (byte)network_bits_take(bits, 8);
+		joining->player_index = entry[1];
+		return bits->failed ? 0 : (word)(1 + length);
+	}
+	player_index = network_bits_take(bits, 1) ? joining->player_index + 1 : (long)network_bits_take(bits, 8);
+	age = network_bits_take(bits, 1) ? joining->age : (byte)network_bits_take(bits, 5);
+	deck = network_bits_take(bits, 1) != 0;
+	if (network_bits_take(bits, 1))
+	{
+		if (!joining->parts_valid)
+			return 0;
+		parts = joining->parts;
+	}
+	else
+	{
+		parts = (word)network_bits_take(bits, 8);
+		if (TEST_FLAG(parts, _unit_packed_more_bit))
+			parts |= (word)(network_bits_take(bits, 8) << 8);
+	}
+	if (bits->failed || player_index < 0 || player_index > 255 || age == 0 || room < 3)
+		return 0;
+	entry[0] = (byte)(FLAG(UNIT_PACKED_FORM_BIT) | (deck ? FLAG(UNIT_PACKED_DECK_BIT) : 0) | age);
+	entry[1] = (byte)player_index;
+	network_bits_begin_write(&body, entry + 2, room - 2);
+	network_bits_put(&body, parts & 0xFF, 8);
+	if (TEST_FLAG(parts, _unit_packed_more_bit))
+		network_bits_put(&body, parts >> 8, 8);
+	/* (its bits' end found as they are read, then copied) */
+	start = bits->position;
+	if (!distributed_unit_packed_skip(bits, parts))
+		return 0;
+	{
+		long length = bits->position - start;
+
+		bits->position = start;
+		distributed_bits_copy(&body, bits, length);
+	}
+	if (body.failed || bits->failed)
+		return 0;
+	cursor = entry + 2 + network_bits_bytes(&body);
+	if (deck)
+	{
+		byte present = (byte)network_bits_take(bits, 1);
+		short count = (short)(1 + (present ? DISTRIBUTED_DECK_SIZE : 0));
+
+		if (cursor + count > entry + room)
+			return 0;
+		*cursor++ = present;
+		for (index = 1; index < count; index++)
+			*cursor++ = (byte)network_bits_take(bits, 8);
+	}
+	joining->player_index = (short)player_index;
+	joining->age = age;
+	joining->parts = parts;
+	joining->parts_valid = TRUE;
+	return bits->failed ? 0 : (word)(cursor - entry);
+}
+
+/* (a client) a joined message made the message of its entries back, into
+unjoined (maximum bytes): its size, 0 for none that make one */
+static word distributed_unit_differences_unjoin(
+	void const *message,
+	word size,
+	void *unjoined,
+	word maximum)
+{
+	struct distributed_message_header header;
+	struct distributed_unit_joining joining;
+	struct network_bits bits;
+	word used = sizeof(header);
+	short index;
+
+	if (size < sizeof(header) || maximum < sizeof(header))
+		return 0;
+	csmemcpy(&header, message, sizeof(header));
+	network_bits_begin_read(&bits, (byte const *)message + sizeof(header), size - sizeof(header));
+	distributed_unit_joining_begin(&joining);
+	for (index = 0; index < header.count; index++)
+	{
+		word entry_size = distributed_unit_entry_unjoin(&joining, &bits, (byte *)unjoined + used,
+			(word)(maximum - used));
+
+		if (!entry_size)
+			return 0;
+		used = (word)(used + entry_size);
+	}
+	header.type = _distributed_message_unit_state_differences;
+	csmemcpy(unjoined, &header, sizeof(header));
+	return used;
+}
+
 /* moves the unit toward the state (at position) if it is further than
 tolerance from it: within blend_distance part of the way, further all of it,
 no faster than maximum_speed across and up and maximum_fall_speed down (0
@@ -4399,6 +4754,25 @@ static boolean distributed_client_holds(
 	return network_standard_agreed_rate() != 0 && distributed_checkpoint_synchronized;
 }
 
+/* (a client of an OpenH1 game) its prediction without the parts the host
+does not read */
+static void distributed_prediction_trim(
+	struct distributed_unit_state *state)
+{
+	state->flags &= (byte)~(FLAG(_distributed_unit_shield_depleted_bit) | FLAG(_distributed_unit_shield_charging_bit) |
+		FLAG(_distributed_unit_shield_over_charging_bit));
+	state->unit_flags &= (byte)FLAG(_distributed_unit_suspended_bit);
+	state->active_camouflage = 0;
+	state->body_vitality = 0;
+	state->shield_vitality = 0;
+	state->current_body_damage = 0;
+	state->recent_body_damage = 0;
+	state->current_shield_damage = 0;
+	state->recent_shield_damage = 0;
+	csmemset(state->powerup_durations, 0, sizeof(state->powerup_durations));
+	csmemset(&state->velocity, 0, sizeof(state->velocity));
+}
+
 /* (a client) its own players' units, to the host: one the same as the last
 it sent whole held (distributed_input_held) */
 static void distributed_client_send_predictions(
@@ -4433,6 +4807,14 @@ static void distributed_client_send_predictions(
 		/* (an OpenH1 game's: its velocity at full precision too) */
 		state.fine = network_standard_agreed_rate() != 0;
 		state.fine_velocity = object_get(unit_index)->object.translational_velocity;
+		/* (and none of what the host has its own word on, which it reads not
+		(distributed_handle_predictions, distributed_take_prediction): the
+		vitality, damage, powerups and camouflage, and the velocity of 16
+		bits a part in place of the whole one; the parts left at their
+		defaults are left out, and a prediction changed only in them goes
+		held. The suspension and the whole velocity's flag it reads) */
+		if (state.fine && !config_boolean("debug.network_forms_before"))
+			distributed_prediction_trim(&state);
 		{
 			word size = distributed_unit_state_write(&state, TRUE, entry);
 			unsigned long checksum = distributed_prediction_checksum(entry, size);
@@ -5445,6 +5827,12 @@ static void distributed_place_remote_unit(
 	short substep_index)
 {
 	real_point3d before = object_get(unit_index)->object.position;
+	short kind = bots_machine_is_bot(player->network_player_data.machine_index) ? _remote_kind_bot :
+		network_substeps_forwarded_key(state->player_index) != NONE ? _remote_kind_forwarded :
+		network_substeps_host_live_heard(state->player_index) ? _remote_kind_host : _remote_kind_relayed;
+	long corrections = distributed_statistics.remote_corrections;
+	long history_corrections = distributed_statistics.remote_history_corrections;
+	long history_kept = distributed_statistics.remote_history_kept;
 
 	/* (a rider on a vehicle's deck: where on this machine's copy of the deck,
 	theirs, distributed_apply_remote_unit) */
@@ -5483,7 +5871,13 @@ static void distributed_place_remote_unit(
 	{
 		distributed_substep_wants[state->player_index].wrong = TRUE;
 		distributed_substep_request_counts.corrected++;
+		distributed_remote_kinds[kind].wrong++;
 	}
+	/* (the tests' reports, by kind) */
+	distributed_remote_kinds[kind].corrections += distributed_statistics.remote_corrections - corrections;
+	distributed_remote_kinds[kind].history_corrections +=
+		distributed_statistics.remote_history_corrections - history_corrections;
+	distributed_remote_kinds[kind].history_kept += distributed_statistics.remote_history_kept - history_kept;
 	/* moved further than a step at once (the host's teleporter sent it): on
 	the teleporter it lands on, as a teleporter leaves the player it sends,
 	so that this machine's does not send it back each time the host's word
@@ -7560,8 +7954,81 @@ states as a Legacy host sends them (_distributed_message_unit_states,
 network_legacy.c's distributed_unit_state_write). */
 
 /* whether the client being sent (distributed_tick_states_begin) takes the
-Legacy encoding */
+Legacy encoding, or the entries joined */
 static boolean distributed_tick_states_legacy;
+static boolean distributed_tick_states_joined;
+
+/* (the host) the joined message being written to a client
+(_distributed_message_unit_state_differences_joined) */
+static struct
+{
+	short sender;
+	short count;
+	struct network_bits bits;
+	struct distributed_unit_joining joining;
+	struct
+	{
+		struct distributed_message_header header;
+		byte data[DATAGRAM_MAXIMUM_SIZE];
+	} message;
+} distributed_unit_joiner;
+
+static void distributed_unit_joiner_flush(
+	void)
+{
+	word size = (word)(sizeof(distributed_unit_joiner.message.header) +
+		network_bits_bytes(&distributed_unit_joiner.bits));
+
+	if (!distributed_unit_joiner.count)
+		return;
+	if (distributed_fill_header(&distributed_unit_joiner.message, _distributed_message_unit_state_differences_joined,
+		distributed_unit_joiner.count, size))
+	{
+		distributed_batch_add(distributed_unit_joiner.sender, &distributed_unit_joiner.message, size, 0);
+	}
+	distributed_unit_joiner.count = 0;
+}
+
+/* an entry joined to the message, which goes into the batch first where the
+entry does not fit it (its bits written back to where they were) */
+static void distributed_unit_joiner_add(
+	byte const *entry,
+	word size)
+{
+	short attempt;
+
+	if (distributed_unit_joiner.count >= 255)
+		distributed_unit_joiner_flush();
+	for (attempt = 0; attempt < 2; attempt++)
+	{
+		struct distributed_unit_joining joining;
+		long position;
+
+		if (!distributed_unit_joiner.count)
+		{
+			word room = MIN(distributed_batch_room(distributed_unit_joiner.sender, (word)(size + 1)),
+				(word)sizeof(distributed_unit_joiner.message.data));
+
+			network_bits_begin_write(&distributed_unit_joiner.bits, distributed_unit_joiner.message.data, room);
+			distributed_unit_joining_begin(&distributed_unit_joiner.joining);
+		}
+		joining = distributed_unit_joiner.joining;
+		position = distributed_unit_joiner.bits.position;
+		if (distributed_unit_entry_join(&distributed_unit_joiner.joining, entry, size, &distributed_unit_joiner.bits))
+		{
+			distributed_unit_joiner.count++;
+			return;
+		}
+		distributed_unit_joiner.joining = joining;
+		distributed_unit_joiner.bits.position = position;
+		distributed_unit_joiner.bits.failed = FALSE;
+		if (position & 7)
+			distributed_unit_joiner.message.data[position >> 3] &= (byte)((1 << (position & 7)) - 1);
+		if (!distributed_unit_joiner.count)
+			return;
+		distributed_unit_joiner_flush();
+	}
+}
 
 /* (the host) the tick's states to a client begun, in distributed_packer */
 static void distributed_tick_states_begin(
@@ -7569,6 +8036,12 @@ static void distributed_tick_states_begin(
 {
 	distributed_tick_states_legacy = network_legacy_machine(machine_index);
 	distributed_tick_states_unpacked = config_boolean("debug.network_states_unpacked") != 0;
+	/* (an OpenH1 client's entries joined, as it reads them: not the forms
+	before, nor the unpacked ones, whose entries are not the packed ones) */
+	distributed_tick_states_joined = !distributed_tick_states_legacy && !distributed_tick_states_unpacked &&
+		!config_boolean("debug.network_forms_before");
+	distributed_unit_joiner.sender = (short)machine_index;
+	distributed_unit_joiner.count = 0;
 	distributed_packer_begin(&distributed_packer, (short)machine_index, distributed_tick_states_legacy ?
 		_distributed_message_unit_states : _distributed_message_unit_state_differences, NULL, 0);
 }
@@ -7610,7 +8083,10 @@ static void distributed_tick_state_add(
 	against: distributed_substep_state_write) */
 	distributed_substep_base_from_state(state, predicted, now,
 		&distributed_sent_substep_bases[machine_index][player_index]);
-	distributed_packer_add(&distributed_packer, entry, size);
+	if (distributed_tick_states_joined)
+		distributed_unit_joiner_add(entry, size);
+	else
+		distributed_packer_add(&distributed_packer, entry, size);
 }
 
 /* (the host) to each client what distributed_host_plan_players decided, the
@@ -7692,6 +8168,7 @@ static void distributed_host_send_players(
 			}
 		}
 		distributed_packer_flush(&distributed_packer);
+		distributed_unit_joiner_flush();
 	}
 }
 
@@ -10165,6 +10642,22 @@ void network_distributed_handle_message(
 				distributed_handling_batch = FALSE;
 			}
 		}
+		return;
+	}
+	/* (an OpenH1 host's tick states' entries joined: taken as the message of
+	them they make) */
+	if (header.type == _distributed_message_unit_state_differences_joined)
+	{
+		static union
+		{
+			long alignment;
+			byte bytes[sizeof(struct distributed_message_header) + 255 * (1 + DISTRIBUTED_UNIT_STATE_MAXIMUM_SIZE)];
+		} unjoined;
+		word unjoined_size = distributed_unit_differences_unjoin(message, size, unjoined.bytes,
+			(word)sizeof(unjoined.bytes));
+
+		if (unjoined_size)
+			network_distributed_handle_message(machine_index, (word const *)unjoined.bytes, unjoined_size);
 		return;
 	}
 	/* (an OpenH1 host's objects' states in bits: taken as the whole message

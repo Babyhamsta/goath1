@@ -2,7 +2,7 @@
 OpenH1 protocol version 23): each state read back is exactly the whole state's bytes, through a chain of ticks whose
 acks lag (running, turning, hurt, killed, respawned); whole where the client asked for it, nothing was sent at or before
 its ack, a part does not fit or the ack is older than the client keeps; a difference from a state the client has not
-passed over, the entries after it read as sent; cut short, no entry. Packed (network_bits.h), as the host sends them,
+passed over, the entries after it read as sent; cut short, no entry. Each entry joined (158) and read back as its bytes. Packed (network_bits.h), as the host sends them,
 and (-unpacked) in the forms before, as debug.network_states_unpacked sends them: at the map's bounds, the fastest
 speeds, every part changed and none; a state off the grid whole."""
 import re
@@ -21,7 +21,7 @@ HEADER = "port/linux/game/network_distributed.h"
 # (the unit state's bytes, the Legacy encoding OpenH1's messages carry whole)
 LEGACY = "port/linux/game/network_legacy.c"
 LEGACY_HEADER = "port/linux/game/network_legacy.h"
-CASES = [case + mode for case in ("chain", "not-predicted", "whole", "unknown", "short", "deck", "extremes")
+CASES = ["joined", "prediction-trim"] + [case + mode for case in ("chain", "not-predicted", "whole", "unknown", "short", "deck", "extremes")
          for mode in ("", "-unpacked")]
 
 # a fault in the encoding and the case that must catch it
@@ -76,7 +76,25 @@ NEGATIVE_CONTROLS = {
     "packed-off-grid": (("\t\t\t\treturn 0;\n\t\t\t}\n\t\t}\n\t\tSET_FLAG(parts, _unit_packed_position_bit, TRUE);",
                          "\t\t\t\t;\n\t\t\t}\n\t\t}\n\t\tSET_FLAG(parts, _unit_packed_position_bit, TRUE);"), "extremes"),
     # (packed) the deck bit not set
-    "packed-deck-bit": (("(deck ? FLAG(UNIT_PACKED_DECK_BIT) : 0)", "0"), "deck"),
+    "packed-deck-bit": (("buffer[0] = (byte)(FLAG(UNIT_PACKED_FORM_BIT) | (deck ? FLAG(UNIT_PACKED_DECK_BIT) : 0)",
+                         "buffer[0] = (byte)(FLAG(UNIT_PACKED_FORM_BIT) | 0"), "deck"),
+    # (a prediction trimmed) the suspension the host reads left out too
+    "trim-suspension": (("state->unit_flags &= (byte)FLAG(_distributed_unit_suspended_bit);", "state->unit_flags = 0;"),
+                        "prediction-trim"),
+    # (a prediction trimmed) the damage kept
+    "trim-damage-kept": (("\tstate->current_body_damage = 0;\n", ""), "prediction-trim"),
+    # (joined) the player after the entry before's read as the one before's
+    "joined-player-next": (("? joining->player_index + 1 : (long)network_bits_take(bits, 8);",
+                            "? joining->player_index : (long)network_bits_take(bits, 8);"), "joined"),
+    # (joined) another entry's parts taken for the entry's
+    "joined-parts-unchecked": (("if (joining->parts_valid && parts == joining->parts)", "if (joining->parts_valid)"),
+                               "chain"),
+    # (joined) a facing's parts passed over as though its largest part always came
+    "joined-facing-skip": (("(largest == NETWORK_BITS_UNIT_WHOLE ? 3 : 2)", "2"), "extremes"),
+    # (joined) a deck part's going away read as one present
+    "joined-deck-gone": (("\t\t*cursor++ = present;", "\t\t*cursor++ = 1;"), "deck"),
+    # (joined) the age of the entry before kept for one of another age
+    "joined-age-kept": (("if (age == joining->age)", "if (1)"), "chain"),
 }
 
 FUNCTIONS = ("distributed_put", "distributed_take", "distributed_real_valid", "legacy_put", "legacy_take",
@@ -85,7 +103,9 @@ FUNCTIONS = ("distributed_put", "distributed_take", "distributed_real_valid", "l
              "distributed_unit_state_read", "distributed_vector_difference", "distributed_grid_steps",
              "distributed_unit_state_snap", "distributed_unit_state_as_written", "distributed_unit_base_of",
              "distributed_unit_deck_take", "distributed_unit_packed_time", "distributed_unit_packed_write",
-             "distributed_unit_packed_read", "distributed_unit_difference_write", "distributed_unit_difference_read")
+             "distributed_unit_packed_read", "distributed_unit_difference_write", "distributed_unit_difference_read",
+             "distributed_unit_packed_skip", "distributed_bits_copy", "distributed_unit_entry_join",
+             "distributed_unit_entry_unjoin", "distributed_prediction_trim")
 
 
 def generated(fault=None):
@@ -110,6 +130,7 @@ def generated(fault=None):
     config += enum_with(legacy_header, "DISTRIBUTED_UNIT_STATE_MINIMUM_SIZE") + "\n"
     config += structure(read("port/linux/game/vehicle_riding.h"), "vehicle_riding_deck") + "\n"
     config += structure(legacy_header, "distributed_unit_state") + "\n"
+    config += structure(source, "distributed_unit_joining") + "\n"
     return (("config.inc", config), ("under_test.inc", code))
 
 

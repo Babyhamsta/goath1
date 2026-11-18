@@ -1623,6 +1623,19 @@ the setting on and off), per client:
 - Corrections past the tolerance a client reported: 84 and 8 before, 87 and
   17 after.
 
+**Joined.** A host sends an OpenH1 client the same entries joined
+(`_distributed_message_unit_state_differences_joined`, 158, in place of
+141): one after another in bits, no byte left part empty between them, a
+packed entry's player, age and parts each a bit where they are the entry
+before's (the next player, the same age, the same parts), else written as
+before; the client makes the message of 141 back, byte for byte
+(`distributed_unit_differences_unjoin`), and takes it as before. An
+OpenH1 client's prediction leaves out what its host has its own word on
+and reads not (the vitality, damage, powerups, camouflage and shield
+flags; the 16-bit velocity beside the whole one goes as zeros).
+`debug.network_forms_before` (`HALO_NETWORK_FORMS_BEFORE`) sends both as
+before (`tools/harness/tests/test_unit_difference.py`).
+
 ### Actors to far clients
 
 Only the host runs the AI. It sends each client its actors' units as it

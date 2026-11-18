@@ -17,6 +17,9 @@ enum { MAXIMUM_TRACKED_PLAYERS = 4, HALO_PORT_MAXIMUM_NETWORK_MACHINES = 4 };
 #define csmemset memset
 #define csmemcpy memcpy
 #define csmemcmp memcmp
+#ifndef MIN
+#define MIN(a, b) ((a) < (b) ? (a) : (b))
+#endif
 #define UNIT_WORLD_BOUND 32768.0f
 struct distributed_vector { short i; short j; short k; };
 #include "config.inc"
@@ -146,6 +149,27 @@ static word tick(struct distributed_unit_state const *host_state, long time, boo
 	sent[oldest] = time;
 	*difference = buffer[0] != 0;
 	last_form = buffer[0];
+	/* (joined, as the host sends an OpenH1 client the entries: read back as
+	the same bytes, each head against the entry before's on both machines) */
+	if (!distributed_tick_states_unpacked)
+	{
+		static struct distributed_unit_joining host_joining = { NONE, 0, FALSE, 0 };
+		static struct distributed_unit_joining client_joining = { NONE, 0, FALSE, 0 };
+		byte joined[4 + 2 * DISTRIBUTED_UNIT_STATE_MAXIMUM_SIZE];
+		byte back[1 + DISTRIBUTED_UNIT_STATE_MAXIMUM_SIZE];
+		struct network_bits bits;
+		struct network_bits reading;
+		word back_size;
+
+		network_bits_begin_write(&bits, joined, sizeof(joined));
+		CHECK(distributed_unit_entry_join(&host_joining, buffer, size, &bits), "tick %ld: the entry joined", time);
+		network_bits_begin_read(&reading, joined, network_bits_bytes(&bits));
+		back_size = distributed_unit_entry_unjoin(&client_joining, &reading, back, sizeof(back));
+		CHECK(back_size == size && !memcmp(back, buffer, size) && reading.position == bits.position,
+			"tick %ld: the joined entry read back as its %u bytes (%u, %ld bits of %ld)", time, size, back_size,
+			reading.position, bits.position);
+		CHECK(bits.position <= 8 * size + 2, "tick %ld: joined, %ld bits for %u bytes", time, bits.position, size);
+	}
 	if (lose)
 	{
 		*known = FALSE;
@@ -183,6 +207,73 @@ int main(int argc, char **argv)
 		which[length - 9] = 0;
 	}
 	reset();
+	if (!strcmp(which, "prediction-trim"))
+	{
+		/* (an OpenH1 client's prediction to its host, without the parts the
+		host reads not: shorter, and every part it reads as it was) */
+		byte whole[DISTRIBUTED_UNIT_STATE_MAXIMUM_SIZE + 12];
+		byte trimmed_bytes[DISTRIBUTED_UNIT_STATE_MAXIMUM_SIZE + 12];
+		struct distributed_unit_state trimmed;
+		struct distributed_unit_state read;
+		word whole_size, trimmed_size;
+
+		state = on_foot(1, 12.5f, -3.25f, 0.5f, 0);
+		SET_FLAG(state.flags, _distributed_unit_predicted_bit, FALSE);
+		SET_FLAG(state.flags, _distributed_unit_shield_charging_bit, TRUE);
+		state.current_body_damage = 300;
+		state.recent_shield_damage = 900;
+		state.powerup_durations[0] = 77;
+		state.active_camouflage = 12;
+		SET_FLAG(state.unit_flags, _distributed_unit_camouflaged_bit, TRUE);
+		SET_FLAG(state.unit_flags, _distributed_unit_suspended_bit, TRUE);
+		state.fine = TRUE;
+		state.fine_velocity.i = 0.293f;
+		state.fine_velocity.k = -0.011f;
+		whole_size = distributed_unit_state_write(&state, TRUE, whole);
+		trimmed = state;
+		distributed_prediction_trim(&trimmed);
+		trimmed_size = distributed_unit_state_write(&trimmed, TRUE, trimmed_bytes);
+		CHECK(trimmed_size + 8 + 2 * NUMBER_OF_PLAYER_POWERUPS <= whole_size, "trimmed %u bytes, whole %u",
+			trimmed_size, whole_size);
+		CHECK(distributed_unit_state_read(trimmed_bytes, trimmed_bytes + trimmed_size, &read) == trimmed_size,
+			"the trimmed prediction read");
+		CHECK(read.player_index == state.player_index && read.unit_index == state.unit_index &&
+			TEST_FLAG(read.flags, _distributed_unit_alive_bit) && TEST_FLAG(read.flags, _distributed_unit_placed_bit) &&
+			!memcmp(&read.position, &state.position, sizeof(read.position)) &&
+			!memcmp(&read.forward, &state.forward, sizeof(read.forward)) &&
+			!memcmp(&read.up, &state.up, sizeof(read.up)) && read.fine &&
+			!memcmp(&read.fine_velocity, &state.fine_velocity, sizeof(read.fine_velocity)) &&
+			TEST_FLAG(read.unit_flags, _distributed_unit_suspended_bit),
+			"the parts the host reads kept");
+		CHECK(!read.current_body_damage && !read.recent_shield_damage && !read.powerup_durations[0] &&
+			!read.active_camouflage && !read.body_vitality, "the parts the host reads not left out");
+		return 0;
+	}
+	if (!strcmp(which, "joined"))
+	{
+		/* (three players a tick, one after another and one apart, as a
+		message's entries joined: each read back as its bytes, against the
+		one before's) */
+		struct distributed_unit_state players[3];
+		short index;
+
+		players[0] = on_foot(0, 10.0f, 20.0f, 1.0f, 500);
+		players[1] = on_foot(1, -10.0f, 25.0f, 1.0f, 500);
+		players[2] = on_foot(3, 40.0f, -5.0f, 2.0f, 500);
+		for (time = 500; time < 520; time++)
+		{
+			distributed_unit_acked_times[1] = time - 1 - (time % 2);
+			for (index = 0; index < 3; index++)
+			{
+				players[index].position.x += 0.05f * (index + 1);
+				players[index].forward.j = (short)(players[index].forward.j + 40 * index);
+				players[index].predicted_time = (short)(players[index].predicted_time + 1);
+				tick(&players[index], time, TRUE, FALSE, &difference, &known);
+				CHECK(time < 503 || (difference && known), "tick %ld, player %d: a difference, known", time, index);
+			}
+		}
+		return 0;
+	}
 	if (!strcmp(which, "chain"))
 	{
 		/* (a player running and turning, hurt, killed, respawned, the
