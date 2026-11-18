@@ -354,6 +354,11 @@ twentieth, REMOTE_CORRECTION_TOLERANCE: 8 world units each way) */
 enum
 {
 	SUBSTEP_BASE_TICKS = 8,
+	/* a player's state of a sub-step the same as the last sent the client
+	(distributed_substep_state_unchanged) is not sent again until this long
+	after it went: one lost heals by then (and by the tick's own states,
+	which go every tick or every second tick to a client the sub-steps' go to) */
+	SUBSTEP_STATE_REFRESH_TICKS = 6,
 };
 #define SUBSTEP_POSITION_SCALE 4096.0f
 /* a sub-step's state's first byte: the full state follows (a unit state's
@@ -802,6 +807,24 @@ struct distributed_substep_base
 };
 static struct distributed_substep_base
 	distributed_sent_substep_bases[HALO_PORT_MAXIMUM_NETWORK_MACHINES][MAXIMUM_TRACKED_PLAYERS];
+/* the host: the state of a sub-step last sent each client of each player
+(what its entry tells: distributed_substep_state_unchanged), and the tick
+it went (NONE: none) */
+struct distributed_substep_sent
+{
+	long time;
+	long unit_index;
+	real_point3d position;
+	struct distributed_vector velocity;
+	struct distributed_vector forward;
+	struct distributed_vector up;
+	real_vector3d fine_velocity;
+	short predicted_time;
+	boolean predicted;
+	boolean fine;
+};
+static struct distributed_substep_sent
+	distributed_substep_sents[HALO_PORT_MAXIMUM_NETWORK_MACHINES][MAXIMUM_TRACKED_PLAYERS];
 static struct distributed_substep_base distributed_taken_substep_bases[MAXIMUM_TRACKED_PLAYERS][SUBSTEP_BASE_TICKS];
 static void distributed_substep_base_from_state(struct distributed_unit_state const *state, boolean predicted,
 	long time, struct distributed_substep_base *base);
@@ -2002,7 +2025,10 @@ static boolean distributed_machine_loaded(
 	csmemset(&distributed_client_builds[machine_index], 0, sizeof(distributed_client_builds[machine_index]));
 	distributed_client_build_known[machine_index] = FALSE;
 	for (player_index = 0; player_index < MAXIMUM_TRACKED_PLAYERS; player_index++)
+	{
 		distributed_seen[machine_index][player_index] = FALSE;
+		distributed_substep_sents[machine_index][player_index].time = NONE;
+	}
 	csmemset(distributed_relayed_sent[machine_index], 0, sizeof(distributed_relayed_sent[machine_index]));
 	return TRUE;
 }
@@ -5982,6 +6008,42 @@ static boolean distributed_substep_state_due(
 		(player_machine == NONE || distributed_prediction_at_tick_start(player_index));
 }
 
+/* (the host) whether a player's state of a sub-step tells a client no more
+than the last it was sent of the player (sent), within
+SUBSTEP_STATE_REFRESH_TICKS of it: the same unit, place, speed, facing and
+up, and (predicted) the same tick of their client's; else (FALSE) it goes,
+and is noted as the last sent */
+static boolean distributed_substep_state_unchanged(
+	struct distributed_substep_sent *sent,
+	struct distributed_unit_state const *state,
+	long now)
+{
+	boolean predicted = TEST_FLAG(state->flags, _distributed_unit_predicted_bit);
+
+	if (sent->time != NONE && now - sent->time >= 0 && now - sent->time < SUBSTEP_STATE_REFRESH_TICKS &&
+		sent->unit_index == state->unit_index && sent->predicted == predicted &&
+		(!predicted || sent->predicted_time == state->predicted_time) &&
+		!csmemcmp(&sent->position, &state->position, sizeof(sent->position)) &&
+		!csmemcmp(&sent->velocity, &state->velocity, sizeof(sent->velocity)) &&
+		!csmemcmp(&sent->forward, &state->forward, sizeof(sent->forward)) &&
+		!csmemcmp(&sent->up, &state->up, sizeof(sent->up)) && sent->fine == state->fine &&
+		(!state->fine || !csmemcmp(&sent->fine_velocity, &state->fine_velocity, sizeof(sent->fine_velocity))))
+	{
+		return TRUE;
+	}
+	sent->time = now;
+	sent->unit_index = state->unit_index;
+	sent->position = state->position;
+	sent->velocity = state->velocity;
+	sent->forward = state->forward;
+	sent->up = state->up;
+	sent->fine_velocity = state->fine_velocity;
+	sent->predicted_time = state->predicted_time;
+	sent->predicted = predicted;
+	sent->fine = state->fine;
+	return FALSE;
+}
+
 void network_distributed_host_substep_ended(
 	short substep_index,
 	short substep_count)
@@ -6029,6 +6091,13 @@ void network_distributed_host_substep_ended(
 				}
 				if (!distributed_substep_state_due(machine_index, player_index, &states[player_index]))
 					continue;
+				/* (none the same as the last it was sent: the client keeps it,
+				and the tick's states go as before) */
+				if (distributed_substep_state_unchanged(&distributed_substep_sents[machine_index][player_index],
+					&states[player_index], game_time_get()))
+				{
+					continue;
+				}
 				distributed_packer_add(&distributed_packer, entry,
 					distributed_substep_state_write(machine_index, &states[player_index], entry));
 				sent[machine_index] = TRUE;
@@ -7316,6 +7385,7 @@ static void distributed_reset_checkpoint_state(boolean reset_received_times)
 			for (player_index = 0; player_index < MAXIMUM_TRACKED_PLAYERS; player_index++)
 			{
 				distributed_sent_substep_bases[machine_index][player_index].time = NONE;
+				distributed_substep_sents[machine_index][player_index].time = NONE;
 				for (type = 0; type < UNIT_SENT_TICKS; type++)
 					distributed_unit_sent_times[machine_index][player_index][type] = NONE;
 			}
