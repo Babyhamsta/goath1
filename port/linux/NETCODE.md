@@ -3558,6 +3558,65 @@ second at 120, 30 and 2 at 30. The transit of the loopback is under 0.01 ms
 each way; the measurement cannot see the time between a frame presented and
 its light on a screen, nor a real network's.
 
+### A host that draws
+
+Where the time went on a machine that draws (the same test, 120 a second,
+the one drawing copy uncapped or held to 60 frames a second by
+display.max_fps): a drawing host capped at 60 read a client's input 9.7 ms
+(10.4 at the 95th percentile) after it came, at its next frame, and sent it
+on only then; uncapped, 0.5. A drawing client read what came 0.5 ms (4.1
+capped) after it came, but it applies it at that read and its frame shows it
+next, as before; read sooner, it would be shown no sooner. A client's own
+input went from its read to its step to the socket in under half a
+millisecond, whatever its frames.
+
+So a host of an OpenH1 game that draws now reads its datagrams on a thread
+of its own while each frame waits for the display (`network_receive.c`:
+from the frame's commit to the host's end of the frame cap's sleep,
+`xgpu_stream_encode.c`'s `xgpu_backend_frame_end`, and only in main.c's
+present, not a load's). The thread reads as a dedicated server's wait does
+(`network_distributed_server_receive`), with `receive_lock` held: the game's
+thread lets it read only within the wait and takes the lock to end the
+wait, so the game's state passes between the two through the lock, as from
+one frame to the next; the thread runs in the game's floating-point
+environment. What it reads is handled between two frames, before the next
+frame's steps, as a dedicated server's or a headless host's reads are, so
+the ticks and a hosted demo are the same. What it reads goes on with the
+step's datagram where the wait is likely to end within the forwarding
+interval (by the last wait's length; past it, any moment), else at once
+(`distributed_forward_waits_for_step`). A client, a headless host, a
+dedicated server, a Legacy game and `debug.network_timing_before` read as
+before. `tools/harness/tests/test_network_receive.py` runs the real thread
+and lock against a fake socket (each datagram once, in order, none read
+while the game's thread works, none between games, a map change's queued
+for the next game), and with ThreadSanitizer.
+
+Medians in ms (95th percentile in brackets), a drawing host at 120, before
+and after; one game each (the bots' places differ from game to game):
+
+| Path | uncapped before | uncapped after | cap 60 before | cap 60 after |
+| --- | --- | --- | --- | --- |
+| A client's live control, arrival to read on the host | 0.5 (1.1) | 0.3 (0.8) | 9.7 (10.4) | 0.0 (0.0) |
+| A client's input came before the host's tick that runs it | 4.0 (6.4) | 4.7 (5.7) | 10.0 (10.9) | 4.4 (5.3) |
+| A client's input, input to the host's tick | 11.8 (14.6) | 13.7 (14.3) | 19.1 (19.6) | 12.6 (13.5) |
+| A client's live control, input to the other client's step | 13.8 (17.5) | 17.2 (17.5) | 17.5 (26.0) | 15.5 (15.7) |
+| The host's player, input to a client's step | 2.7 (4.5) | 4.0 (5.4) | 7.5 (7.8) | 3.8 (5.2) |
+
+Uncapped the change does nothing to speak of: another game of the build
+before gave 13.6 (14.3) and 13.0 (13.8) for a client's input and live
+control to the host's step, as after. The host's datagrams to its clients were 154 and 156 a second capped (24.6
+and 25.6 KB), 180 and 162 uncapped. Sent at once in every wait, they were
+198 a second: a read in a wait that ran past the last one's length went just
+before the step's datagram.
+
+Left as it is: a drawing client's steps run at its frames, so at 120 held to
+60 frames a second two sub-steps run together at each frame's start, the
+first up to a frame after it fell due. Running each when due would mean
+running a sub-step in the frame's wait (the frame cap's sleep is the game's
+own, `platform_video_swap`; vsync's wait is the host's), with its input
+read then, and the frame's drawing taking the steps it finds: a change of
+the main loop's order, not made here.
+
 ## Numbers on parallel branches
 
 GOAT H1's own numbers (`HALO_PORT_STANDARD_NETWORK_VERSION`, its

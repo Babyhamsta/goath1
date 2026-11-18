@@ -729,6 +729,8 @@ int network_distributed_server_receive(long milliseconds);
 /* port: port/linux/game/network_clock.c */
 boolean network_clock_server_pace_first(void);
 boolean network_clock_unseen_wait_first(void);
+/* port: port/linux/game/network_receive.c */
+void network_receive_frame_presenting(boolean presenting);
 boolean network_clock_server_paced(void);
 /* port: port/linux/src/port_config.c */
 double config_real(const char *name);
@@ -4489,7 +4491,11 @@ void main_loop(
 
 			if (render_frame && !debug_no_drawing && !frames_undrawn)
 			{
+				/* port: a host of a network game reads its datagrams while the
+				frame waits for the display (port/linux/game/network_receive.c) */
+				network_receive_frame_presenting(TRUE);
 				profile_scope(main_present_section, main_present_frame();)
+				network_receive_frame_presenting(FALSE);
 				LATENCY_LOG(latency_log_frame_presented()); /* port: debug.latency_log */
 				/* port: debug.network_latency_trace (a frame seen) */
 				if (!frames_unseen)
