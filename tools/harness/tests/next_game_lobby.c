@@ -205,6 +205,8 @@ static void update_client_start(void) {}
 static void error(int level, char const *format, ...) {}
 static void halo_load_trace(char const *phase, char const *detail) {}
 static void input_flush(void) {}
+/* (co-op's count of failure reverts, reset as a map loads: main.c's) */
+static void main_coop_failure_reverts_reset(void) {}
 static boolean game_load(struct game_options *options) { return TRUE; }
 /* (game.c's, for every map, the main menu's too: the new map's clock, and
 nothing of the last game's netcode carried into it, network_distributed.c's
