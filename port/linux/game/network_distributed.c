@@ -566,6 +566,7 @@ static long distributed_last_sent_time = NONE;
 
 /* the tick's steps, timed in the profiling build */
 PROFILE_SECTION(distributed_tick_apply_predictions_section, "network_distributed_tick.apply_predictions")
+PROFILE_SECTION(distributed_tick_demo_netcode_section, "network_distributed_tick.demo_netcode")
 PROFILE_SECTION(distributed_tick_apply_vehicle_predictions_section, "network_distributed_tick.apply_vehicle_predictions")
 PROFILE_SECTION(distributed_tick_objects_host_tick_section, "network_distributed_tick.objects_host_tick")
 PROFILE_SECTION(distributed_tick_plan_players_section, "network_distributed_tick.plan_players")
@@ -6986,12 +6987,12 @@ void network_distributed_tick(
 		distributed_note_rider_passes();
 		/* (for the demo being recorded, what the predictions changed:
 		demo.c) */
-		demo_netcode_begin();
+		profile_scope(distributed_tick_demo_netcode_section, demo_netcode_begin();)
 		profile_scope(distributed_tick_apply_predictions_section, distributed_apply_predictions(FALSE, FALSE);)
 		profile_scope(distributed_tick_apply_vehicle_predictions_section,
 			network_objects_apply_vehicle_predictions(FALSE);)
 		profile_scope(distributed_tick_apply_predictions_section, distributed_apply_predictions(FALSE, TRUE);)
-		demo_netcode_end();
+		profile_scope(distributed_tick_demo_netcode_section, demo_netcode_end();)
 		profile_scope(distributed_tick_objects_host_tick_section, network_objects_host_tick();)
 		profile_scope(distributed_tick_plan_players_section, distributed_host_plan_players();)
 		profile_scope(distributed_tick_damage_host_tick_section, network_damage_host_tick();)

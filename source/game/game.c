@@ -274,6 +274,7 @@ PROFILE_SECTION(game_tick_units_section, "game_tick.units")
 PROFILE_SECTION(game_tick_ai_section, "game_tick.ai")
 PROFILE_SECTION(game_tick_actors_drive_section, "game_tick.actors_drive")
 PROFILE_SECTION(game_tick_players_before_section, "game_tick.players_before")
+PROFILE_SECTION(game_tick_demo_foreign_section, "game_tick.demo_foreign")
 PROFILE_SECTION(game_tick_effects_section, "game_tick.effects")
 PROFILE_SECTION(game_tick_antennas_section, "game_tick.antennas")
 PROFILE_SECTION(game_tick_first_person_section, "game_tick.first_person")
@@ -388,9 +389,9 @@ static void game_tick_macro_step(
 	given (port/linux/game/network_substeps.c) */
 	/* port: (what it puts in from the other machines, for the demo:
 	port/linux/game/demo.c) */
-	demo_foreign_begin();
+	profile_scope(game_tick_demo_foreign_section, demo_foreign_begin();)
 	network_substeps_actions_given();
-	demo_foreign_end();
+	profile_scope(game_tick_demo_foreign_section, demo_foreign_end();)
 
 	seconds_per_tick = game_globals->players_are_double_speed
 		? 1.0f / (2 * TICKS_PER_SECOND)
