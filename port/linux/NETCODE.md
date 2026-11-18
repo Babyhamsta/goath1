@@ -1441,6 +1441,47 @@ the host had them within 0.16 to 0.17 world units (p95) before and 0.16 to
 seen from one client to another in 50 to 52 ms and 49 to 57, and a hit dealt
 in 26 ms and 25 to 26: the games' spread, not the builds'.
 
+**Only where asked.** A client's copy of a player near it runs the same
+physics on the same forwarded controls as the host's, so it is where the
+host's is unless a control came late or not at all; a sub-step's state then
+tells it nothing. Slayer at 120 (13 bots, two clients, loopback, 90 s):
+136 cost each client 11.1 KB/s, a third of what the host sent it, and of
+89,844 bots' states taken 6 moved the copy past the tolerance; of 13,354
+clients' players', 1. The client, not the host, knows when its copy is
+wrong, so from the next protocol version the host sends a player's states
+at its sub-steps to a client only while that client asks for them
+(`network_distributed.c`, `distributed_substep_states_wanted`):
+
+- The client asks where a state (the tick's, or a sub-step's) moved its
+  copy of the player further than `REMOTE_CORRECTION_TOLERANCE`
+  (`distributed_place_remote_unit`), or the forwarded input its tick ran of
+  the player is not the one after the last it ran (missed, or late:
+  `distributed_client_send_substep_requests`). The ask,
+  `_distributed_message_substep_state_requests` (147, unreliable, with the
+  tick's messages to the host), is 2 bytes an entry: the player and the
+  host's ticks to send them for, 15 (half a second).
+- The host sends them for that window from the ask (at most 30 ticks; a
+  longer window already open kept), to that client alone, of that player
+  alone, as before (`distributed_substep_state_due`, unchanged sends left
+  out). While the copy keeps going wrong the client asks again, at most once
+  in 5 ticks a player, so the window runs on; it ends 15 ticks after the
+  last ask. A lost ask is made again at the next correction past the
+  tolerance.
+- Without them the copy is still corrected at each tick's state (every tick
+  or every second tick to a player near): at most most of a tick later than
+  a sub-step's state would have. A client's hit is still made, and named,
+  at its own sub-step, against its copy as it was then; the host checks it
+  (`network_damage.c`) over its own history of the target, within
+  `REPORT_HISTORY_TOLERANCE` (2 world units) and 3 ticks of its speed, far
+  past both the tolerance a copy is held to and what a sub-step's state
+  could have moved it by (under a tick of its speed). Nothing else reads the positions noted at the sub-steps
+  (`distributed_remote_substep_positions`): they are compared with a
+  sub-step's state when one comes, and moved with a correction.
+- `debug.network_substep_states_always` (`HALO_NETWORK_SUBSTEP_STATES_ALWAYS`)
+  on the host sends them every sub-step as before. `debug.network_test`
+  logs a client's asks, the copies found wrong each way, and the host's
+  asks taken (`substep asks`).
+
 ### Tick states as differences
 
 From protocol version 23 an OpenH1 game's host sends its OpenH1 clients each

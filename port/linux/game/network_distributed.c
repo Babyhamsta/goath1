@@ -163,6 +163,8 @@ void main_build_identity(long *number, char *flavor, size_t flavor_size, char *r
 	char *version, size_t version_size);
 int port_mods_list(char *text, unsigned long size);
 void console_warning(const char *format, ...);
+/* port_config.c's */
+int config_boolean(char const *name);
 
 /* the host: a client's game run faster than its clock (a speed hack, which
 speeds up the machine's own clock: nothing on it can tell), found by its
@@ -361,6 +363,33 @@ enum
 	SUBSTEP_STATE_REFRESH_TICKS = 6,
 };
 #define SUBSTEP_POSITION_SCALE 4096.0f
+/* a client's copy of another player is moved by the same physics and the
+same forwarded controls as the host's, and corrected against each tick's
+state (distributed_correct_remote_unit), so the states of the sub-steps
+between tell it nothing while its copy is right. They go to a client only
+for a player it asked for (_distributed_message_substep_state_requests,
+distributed_client_send_substep_requests): where a tick's state, or a
+sub-step's, moved its copy further than REMOTE_CORRECTION_TOLERANCE, or a
+forwarded input of the player was missed (its tick not the one after the
+last run). The host sends them for SUBSTEP_REQUEST_TICKS of its ticks from
+the ask (at most SUBSTEP_REQUEST_MAXIMUM_TICKS), and the client asks again
+while the copy keeps going wrong, at most once in SUBSTEP_REQUEST_RENEW_TICKS
+a player; a lost ask is made again at the next correction past the
+tolerance. debug.network_substep_states_always sends them every sub-step
+as before */
+enum
+{
+	SUBSTEP_REQUEST_TICKS = 15,
+	SUBSTEP_REQUEST_RENEW_TICKS = 5,
+	SUBSTEP_REQUEST_MAXIMUM_TICKS = 30,
+};
+struct distributed_substep_request
+{
+	byte player_index;
+	byte ticks;
+};
+
+typedef char distributed_substep_request_size_assert[sizeof(struct distributed_substep_request) == 2 ? 1 : -1];
 /* a sub-step's state's first byte: the full state follows (a unit state's
 bytes, distributed_unit_state_write), or its difference: the player, the
 host's ticks since the tick's state (its message's), and (predicted) the
@@ -863,6 +892,29 @@ struct distributed_substep_sent
 static struct distributed_substep_sent
 	distributed_substep_sents[HALO_PORT_MAXIMUM_NETWORK_MACHINES][MAXIMUM_TRACKED_PLAYERS];
 static struct distributed_substep_base distributed_taken_substep_bases[MAXIMUM_TRACKED_PLAYERS][SUBSTEP_BASE_TICKS];
+/* the host: the tick (its own) until which each client asked for the
+states of each player at its sub-steps (NONE: none asked) */
+static long distributed_substep_requested_until[HALO_PORT_MAXIMUM_NETWORK_MACHINES][MAXIMUM_TRACKED_PLAYERS];
+/* a client: of each other player, the tick of their client's whose
+forwarded input its last tick ran (network_substeps_forwarded_key, NONE:
+none), whether its copy went wrong since the last ask, and when it last
+asked (NONE: never) */
+static struct
+{
+	long last_key;
+	long asked_time;
+	boolean wrong;
+} distributed_substep_wants[MAXIMUM_TRACKED_PLAYERS];
+/* the tests' figures (network_distributed_substep_request_statistics):
+a client's asks sent, and copies found wrong by a correction or by a
+missed input; the host's asks taken */
+static struct
+{
+	long asked;
+	long corrected;
+	long missed;
+	long taken;
+} distributed_substep_request_counts;
 static void distributed_substep_base_from_state(struct distributed_unit_state const *state, boolean predicted,
 	long time, struct distributed_substep_base *base);
 static word distributed_substep_state_read(byte const *buffer, byte const *end, long time,
@@ -1275,6 +1327,18 @@ void network_distributed_remote_statistics(
 	*corrections = distributed_statistics.remote_corrections;
 	*history_corrections = distributed_statistics.remote_history_corrections;
 	*history_kept = distributed_statistics.remote_history_kept;
+}
+
+void network_distributed_substep_request_statistics(
+	long *asked,
+	long *corrected,
+	long *missed,
+	long *taken)
+{
+	*asked = distributed_substep_request_counts.asked;
+	*corrected = distributed_substep_request_counts.corrected;
+	*missed = distributed_substep_request_counts.missed;
+	*taken = distributed_substep_request_counts.taken;
 }
 
 void distributed_count_correction(
@@ -2083,6 +2147,7 @@ static boolean distributed_machine_loaded(
 	{
 		distributed_seen[machine_index][player_index] = FALSE;
 		distributed_substep_sents[machine_index][player_index].time = NONE;
+		distributed_substep_requested_until[machine_index][player_index] = NONE;
 	}
 	csmemset(distributed_relayed_sent[machine_index], 0, sizeof(distributed_relayed_sent[machine_index]));
 	return TRUE;
@@ -4913,6 +4978,15 @@ static void distributed_place_remote_unit(
 		distributed_apply_state(unit_index, state, &position, NULL, REMOTE_CORRECTION_TOLERANCE,
 			REMOTE_BLEND_DISTANCE, 0.0f, 0.0f);
 	}
+	/* (its copy wrong: the host's states of its sub-steps asked for,
+	distributed_client_send_substep_requests) */
+	if (!state->deck_present && state->player_index < MAXIMUM_TRACKED_PLAYERS &&
+		distance_squared3d(&before, &object_get(unit_index)->object.position) >
+			REMOTE_CORRECTION_TOLERANCE * REMOTE_CORRECTION_TOLERANCE)
+	{
+		distributed_substep_wants[state->player_index].wrong = TRUE;
+		distributed_substep_request_counts.corrected++;
+	}
 	/* moved further than a step at once (the host's teleporter sent it): on
 	the teleporter it lands on, as a teleporter leaves the player it sends,
 	so that this machine's does not send it back each time the host's word
@@ -5218,6 +5292,55 @@ static void distributed_handle_unit_state_differences(
 	{
 		distributed_unit_bases_missing = FALSE;
 	}
+}
+
+/* (a client of an OpenH1 game of several sub-steps a tick, as each tick
+ends) each other player whose forwarded input its tick ran not the one
+after the last it ran (missed, or late: its copy ran on without it) noted
+as gone wrong; then the host asked for the states at its sub-steps of each
+player gone wrong since the last ask, for SUBSTEP_REQUEST_TICKS, at most
+once in SUBSTEP_REQUEST_RENEW_TICKS a player (the host's window outlasts
+that: it runs on while the copy keeps going wrong, and ends
+SUBSTEP_REQUEST_TICKS after the last ask) */
+static void distributed_client_send_substep_requests(
+	void)
+{
+	struct
+	{
+		struct distributed_message_header header;
+		struct distributed_substep_request entries[MAXIMUM_TRACKED_PLAYERS];
+	} message;
+	long now = game_time_get();
+	short count = 0;
+	short player_index;
+
+	for (player_index = 0; player_index < MAXIMUM_TRACKED_PLAYERS; player_index++)
+	{
+		long key = network_substeps_forwarded_key(player_index);
+		long last_key = distributed_substep_wants[player_index].last_key;
+		long asked_time = distributed_substep_wants[player_index].asked_time;
+
+		distributed_substep_wants[player_index].last_key = key;
+		if (last_key != NONE && key != last_key + 1)
+		{
+			distributed_substep_wants[player_index].wrong = TRUE;
+			distributed_substep_request_counts.missed++;
+		}
+		if (!distributed_substep_wants[player_index].wrong)
+			continue;
+		if (asked_time != NONE && now - asked_time >= 0 && now - asked_time < SUBSTEP_REQUEST_RENEW_TICKS)
+			continue;
+		distributed_substep_wants[player_index].wrong = FALSE;
+		distributed_substep_wants[player_index].asked_time = now;
+		message.entries[count].player_index = (byte)player_index;
+		message.entries[count].ticks = SUBSTEP_REQUEST_TICKS;
+		count++;
+	}
+	if (!count || !network_substeps_active())
+		return;
+	distributed_substep_request_counts.asked += count;
+	distributed_send(&message, _distributed_message_substep_state_requests, count,
+		(word)(sizeof(message.header) + count * sizeof(struct distributed_substep_request)), _distributed_to_host);
 }
 
 /* ---------- input */
@@ -6325,6 +6448,47 @@ static boolean distributed_substep_state_unchanged(
 	return FALSE;
 }
 
+/* (the host) whether a client asked for a player's states at the host's
+sub-steps within its window (or debug.network_substep_states_always: always) */
+static boolean distributed_substep_states_wanted(
+	boolean always,
+	long machine_index,
+	short player_index)
+{
+	long until = distributed_substep_requested_until[machine_index][player_index];
+
+	return always || (until != NONE && game_time_get() - until < 0);
+}
+
+/* (the host) a client's asks for the states of players at its sub-steps
+(_distributed_message_substep_state_requests): each sent it from now for
+the ticks asked (at least one, at most SUBSTEP_REQUEST_MAXIMUM_TICKS), a
+window already longer kept */
+static void distributed_handle_substep_requests(
+	long machine_index,
+	struct distributed_substep_request const *requests,
+	short count)
+{
+	short index;
+
+	if (machine_index < 0 || machine_index >= HALO_PORT_MAXIMUM_NETWORK_MACHINES)
+		return;
+	for (index = 0; index < count; index++)
+	{
+		struct distributed_substep_request const *request = &requests[index];
+		long *until;
+		long ticks;
+
+		if (request->player_index >= MAXIMUM_TRACKED_PLAYERS || !request->ticks)
+			continue;
+		ticks = MIN((long)request->ticks, (long)SUBSTEP_REQUEST_MAXIMUM_TICKS);
+		until = &distributed_substep_requested_until[machine_index][request->player_index];
+		if (*until == NONE || game_time_get() + ticks - *until > 0)
+			*until = game_time_get() + ticks;
+		distributed_substep_request_counts.taken++;
+	}
+}
+
 void network_distributed_host_substep_ended(
 	short substep_index,
 	short substep_count)
@@ -6341,6 +6505,7 @@ void network_distributed_host_substep_ended(
 	{
 		static struct distributed_unit_state states[MAXIMUM_TRACKED_PLAYERS];
 		boolean made[MAXIMUM_TRACKED_PLAYERS];
+		boolean always = config_boolean("debug.network_substep_states_always") != 0;
 		byte prefix[2];
 
 		csmemset(made, 0, sizeof(made));
@@ -6361,8 +6526,11 @@ void network_distributed_host_substep_ended(
 				byte entry[1 + DISTRIBUTED_UNIT_STATE_MAXIMUM_SIZE];
 				byte period = distributed_forward_periods[machine_index][player_index];
 
-				if (!period || period > 2 || !distributed_player(player_index))
+				if (!period || period > 2 || !distributed_player(player_index) ||
+					!distributed_substep_states_wanted(always, machine_index, player_index))
+				{
 					continue;
+				}
 				/* (as of the end of the tick it is in: the client's tick it
 				runs of a client's player, as the tick's own state names) */
 				if (!made[player_index])
@@ -7653,6 +7821,9 @@ static void distributed_reset_checkpoint_state(boolean reset_received_times)
 		}
 		distributed_substep_states_taken[player_index].time = NONE;
 		distributed_substep_states_taken[player_index].substep_index = NONE;
+		distributed_substep_wants[player_index].last_key = NONE;
+		distributed_substep_wants[player_index].asked_time = NONE;
+		distributed_substep_wants[player_index].wrong = FALSE;
 		for (type = 0; type < SUBSTEP_BASE_TICKS; type++)
 			distributed_taken_substep_bases[player_index][type].time = NONE;
 		for (type = 0; type < UNIT_BASE_TICKS; type++)
@@ -7673,6 +7844,7 @@ static void distributed_reset_checkpoint_state(boolean reset_received_times)
 			{
 				distributed_sent_substep_bases[machine_index][player_index].time = NONE;
 				distributed_substep_sents[machine_index][player_index].time = NONE;
+				distributed_substep_requested_until[machine_index][player_index] = NONE;
 				for (type = 0; type < UNIT_SENT_TICKS; type++)
 					distributed_unit_sent_times[machine_index][player_index][type] = NONE;
 			}
@@ -7868,6 +8040,9 @@ void network_distributed_tick(
 			profile_scope(distributed_tick_send_inputs_section, distributed_client_send_inputs();)
 		/* (an OpenH1 game's sub-steps of the same tick, in the same datagram) */
 		network_substeps_client_send();
+		/* (and its asks for the host's states at its sub-steps of the
+		players its copies of went wrong) */
+		distributed_client_send_substep_requests();
 		profile_scope(distributed_tick_send_predictions_section, distributed_client_send_predictions();)
 		profile_scope(distributed_tick_objects_client_tick_section, network_objects_client_tick();)
 		profile_scope(distributed_tick_damage_client_tick_section, network_damage_client_tick();)
@@ -9278,6 +9453,7 @@ void network_distributed_handle_message(
 	case _distributed_message_unit_states: entry_size = DISTRIBUTED_UNIT_STATE_MINIMUM_SIZE; break;
 	case _distributed_message_unit_state_differences: entry_size = 1 + DISTRIBUTED_UNIT_STATE_MINIMUM_SIZE; break;
 	case _distributed_message_substep_states: entry_size = 1 + DISTRIBUTED_UNIT_STATE_MINIMUM_SIZE; break;
+	case _distributed_message_substep_state_requests: entry_size = sizeof(struct distributed_substep_request); break;
 	case _distributed_message_player_statistics: entry_size = sizeof(struct distributed_player_statistics); break;
 	case _distributed_message_pings: entry_size = sizeof(struct distributed_player_ping); break;
 	case _distributed_message_mcc_grenades: entry_size = mcc_network_inventory_entry_size(); break;
@@ -9381,6 +9557,7 @@ void network_distributed_handle_message(
 	case _distributed_message_player_substeps:
 	case _distributed_message_player_live_controls:
 	case _distributed_message_marker_up:
+	case _distributed_message_substep_state_requests:
 		if (machine_index == NONE || game_connection() != _game_connection_network_server)
 			return;
 		/* (heard from: the latency meter's connection problem) */
@@ -9437,6 +9614,10 @@ void network_distributed_handle_message(
 		break;
 	case _distributed_message_substep_states:
 		distributed_handle_substep_states(header.game_time, (byte const *)entries, (byte const *)message + size,
+			header.count);
+		break;
+	case _distributed_message_substep_state_requests:
+		distributed_handle_substep_requests(machine_index, (struct distributed_substep_request const *)entries,
 			header.count);
 		break;
 	case _distributed_message_actor_states:

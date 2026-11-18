@@ -56,6 +56,7 @@ struct distributed_structure_bsp {byte data;};
 struct distributed_pickup {byte data;};
 struct distributed_player_input {byte data;};
 struct distributed_player_held {byte data;};
+struct distributed_substep_request {byte data;};
 struct distributed_client_identity {byte data;};
 struct distributed_client_build {byte data;};
 static int connection=1, unreliable, in_game=1, mcc=1, resets, clock_notes;

@@ -234,7 +234,9 @@ enum
 	/* an OpenH1 game's states of the players near a client, or aimed at, as
 	each of the host's sub-steps but a tick's last ends (network_distributed.c,
 	unreliable, to each OpenH1 client): the sub-step and the count, then
-	the states as the tick's */
+	the states as the tick's; only of the players the client asked for
+	(_distributed_message_substep_state_requests), unless
+	debug.network_substep_states_always */
 	_distributed_message_substep_states = 136,
 	/* a dedicated server's admins in the game (network_admin.c), reliably,
 	over the host's connection alone: the host's to each OpenH1 client (its
@@ -272,6 +274,13 @@ enum
 	host's tick it has had, and the checksum of what it repeats */
 	_distributed_message_player_inputs_held = 145,
 	_distributed_message_player_prediction_held = 146,
+	/* an OpenH1 client's ask for the host's states of a player at its
+	sub-steps (_distributed_message_substep_states) for a while
+	(network_distributed.c, unreliable, to an OpenH1 host, with the tick's
+	messages): each entry the player and the host's ticks to send them for,
+	asked where its copy of the player went wrong (a correction past
+	REMOTE_CORRECTION_TOLERANCE, or a forwarded input missed) */
+	_distributed_message_substep_state_requests = 147,
 
 	NUMBER_OF_DISTRIBUTED_MESSAGES
 };
