@@ -525,6 +525,9 @@ static long distributed_unit_taken_time,distributed_unit_missing_time;
 static boolean distributed_unit_bases_missing;
 static struct {long time;} distributed_sent_substep_bases[HALO_PORT_MAXIMUM_NETWORK_MACHINES][2];
 static struct {long time;} distributed_substep_sents[HALO_PORT_MAXIMUM_NETWORK_MACHINES][2];
+/* (the sub-step states a client asks for: the host's windows, the client's wants) */
+static long distributed_substep_requested_until[HALO_PORT_MAXIMUM_NETWORK_MACHINES][2];
+static struct {long last_key,asked_time;boolean wrong;} distributed_substep_wants[2];
 /* (the game type's state's changes, and the held inputs and predictions) */
 static long distributed_game_state_sent_size;
 static int distributed_game_state_machines[2],distributed_inputs_held_sent[2],distributed_predictions_held_sent[2];
