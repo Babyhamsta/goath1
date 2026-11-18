@@ -316,7 +316,8 @@ third, and every fourth; one no cluster of the client's players' can see
 (the map's potentially visible set), or dead, every sixth. The set errs on
 the side of seeing: a player comes into view in it before any line of sight
 does, and is sent at once when they do, as a player whose buttons have
-changed in the ticks their input carries is sent every tick. A player a client's player
+changed in the ticks their input carries is sent every tick (HIDDEN_PLAYER_PERIOD_TICKS:
+network_distributed.h, as the host's moving objects go). A player a client's player
 aims near is sent at least every second tick, and every tick through a
 scope (a sniper sees a far player as well as a near one, as Ares does).
 (Cosines of the half angles.) */
@@ -325,10 +326,6 @@ scope (a sniper sees a far player as well as a near one, as Ares does).
 #define FAR_PLAYER_DISTANCE 120.0f
 #define AIMED_AT_COSINE 0.819f /* 35 degrees: on the screen */
 #define SCOPED_AT_COSINE 0.940f /* 20 degrees: in a scope's view, and round it */
-enum
-{
-	HIDDEN_PLAYER_PERIOD_TICKS = 6,
-};
 
 /* shields, health and the damage they show in 16 bits: 0 to 4 */
 #define VITALITY_SCALE 16384.0f
@@ -485,6 +482,15 @@ enum
 	datagrams as they come (network_distributed_server_receive), this */
 	FORWARDED_INPUT_INTERVAL_MILLISECONDS = 8,
 	FORWARDED_INPUT_SERVER_INTERVAL_MILLISECONDS = 2,
+	/* (an OpenH1 client's) a player's relayed input goes on a change only
+	(distributed_relayed_action_due): a change at once and again on the
+	player's next tick of its plan, so one lost datagram heals within the
+	plan's period (6 ticks at most); and the same unchanged once this long
+	after it last went, for a change whose both sends were lost. A second:
+	two losses in a row are rare, the player's unit states (each period)
+	keep correcting where the player is meanwhile, and the inventories'
+	and statistics' refresh heal as slowly */
+	RELAYED_ACTION_REFRESH_TICKS = TICKS_PER_SECOND,
 };
 
 struct distributed_pickup
@@ -872,6 +878,19 @@ static long distributed_forwarded_times[HALO_PORT_MAXIMUM_NETWORK_MACHINES][MAXI
 to each client its plan does not forward the player to (NETCODE.md,
 "Presses to far clients") */
 static struct live_control_far distributed_far_live[HALO_PORT_MAXIMUM_NETWORK_MACHINES][MAXIMUM_TRACKED_PLAYERS];
+/* the host: each player's input as last relayed to each OpenH1 client
+(distributed_relayed_action_due): whether any was, what, when, whether it
+is to go again on the player's next tick of the plan (a change's second
+send), and whether the last plan forwarded the player to the client
+instead (the client takes the relayed again when the forwards stop) */
+static struct distributed_relayed_sent
+{
+	boolean valid;
+	boolean repeat;
+	boolean covered;
+	long time;
+	struct distributed_relayed_action action;
+} distributed_relayed_sent[HALO_PORT_MAXIMUM_NETWORK_MACHINES][MAXIMUM_TRACKED_PLAYERS];
 /* the host: each player's statistics as last sent (only a change is sent,
 and once a second a few players' whatever they are, round them all) */
 static unsigned long distributed_sent_statistics[MAXIMUM_TRACKED_PLAYERS];
@@ -1953,6 +1972,7 @@ static boolean distributed_machine_loaded(
 	distributed_client_build_known[machine_index] = FALSE;
 	for (player_index = 0; player_index < MAXIMUM_TRACKED_PLAYERS; player_index++)
 		distributed_seen[machine_index][player_index] = FALSE;
+	csmemset(distributed_relayed_sent[machine_index], 0, sizeof(distributed_relayed_sent[machine_index]));
 	return TRUE;
 }
 
@@ -5209,6 +5229,46 @@ static short distributed_object_cluster(
 	return object->object.location.cluster_index;
 }
 
+/* whether a viewer whose cluster's row of the map's potentially visible set
+is pvs (NULL: none, outside the map's clusters) could see the cluster: one
+outside the map's clusters is in sight, to be safe */
+static boolean distributed_pvs_sees(
+	unsigned long const *pvs,
+	short cluster_index,
+	short cluster_count)
+{
+	return !pvs || cluster_index < 0 || cluster_index >= cluster_count || BIT_VECTOR_TEST_FLAG(pvs, cluster_index);
+}
+
+boolean distributed_machine_sees_cluster(
+	long machine_index,
+	short cluster_index)
+{
+	struct structure_bsp *structure_bsp = global_structure_bsp_get();
+	short cluster_count = structure_bsp ? (short)structure_bsp->clusters.count : 0;
+	boolean viewers = FALSE;
+	short index;
+
+	if (machine_index < 0 || machine_index >= HALO_PORT_MAXIMUM_NETWORK_MACHINES)
+		return TRUE;
+	/* (the viewers the player plan last found: distributed_host_plan_players) */
+	for (index = 0; index < MAXIMUM_LOCAL_PLAYERS; index++)
+	{
+		struct distributed_viewer const *viewer = &distributed_viewers[machine_index][index];
+
+		if (!viewer->valid)
+			continue;
+		viewers = TRUE;
+		if (distributed_pvs_sees(viewer->cluster_index >= 0 && viewer->cluster_index < cluster_count ?
+			structure_bsp_get_cluster_pvs(structure_bsp, viewer->cluster_index) : NULL, cluster_index, cluster_count))
+		{
+			return TRUE;
+		}
+	}
+	/* (a client that has had no player alive watches anyone) */
+	return !viewers;
+}
+
 /* the player's input as the host's tick ran it, in fewer bytes; whether
 their buttons or choices changed in the ticks it carries */
 static boolean distributed_relayed_action_from(
@@ -5400,6 +5460,51 @@ static boolean distributed_forward_covers(
 		distributed_forwarded_ticks[machine_index][player_index] >= input_time;
 }
 
+/* (the host) whether a player's input its tick ran is relayed to an OpenH1
+client this tick, not forwarded to it lately: on a change only, at the rate
+the player plan sends the player (planned: its ticks), as it went before
+for a player that changes. At once: a change of its buttons (in the ticks it
+carries, pressed, or since last relayed) or choices, and the tick its
+forwards stop. On the plan's ticks: a change of its facing, sticks or
+trigger since last relayed, or sub-steps that changed anything (their record
+goes with it), and once more after any change (one lost datagram healed
+within the plan's period; and the input after a sub-steps' record, which the
+client replays until it has a later input, goes when it went before).
+Unchanged, RELAYED_ACTION_REFRESH_TICKS after it last went. A relayed input
+is the input of the tick it is sent at, the latest: a refresh is never older
+than a change sent before it */
+static boolean distributed_relayed_action_due(
+	long machine_index,
+	short player_index,
+	boolean pressed,
+	boolean substeps,
+	boolean planned,
+	long now)
+{
+	struct distributed_relayed_sent *sent = &distributed_relayed_sent[machine_index][player_index];
+	struct distributed_relayed_action const *action = &distributed_host_actions[player_index];
+	boolean at_once = pressed || !sent->valid || sent->covered ||
+		action->desired_weapon_index != sent->action.desired_weapon_index ||
+		action->desired_grenade_index != sent->action.desired_grenade_index ||
+		action->desired_zoom_level != sent->action.desired_zoom_level ||
+		action->control_flags[0] != sent->action.control_flags[0];
+	boolean moved = action->yaw != sent->action.yaw || action->pitch != sent->action.pitch ||
+		action->throttle_i != sent->action.throttle_i || action->throttle_j != sent->action.throttle_j ||
+		action->primary_trigger != sent->action.primary_trigger || substeps;
+
+	sent->covered = FALSE;
+	if (at_once || (planned && moved))
+		sent->repeat = TRUE;
+	else if (planned && sent->repeat)
+		sent->repeat = FALSE;
+	else if (now - sent->time < RELAYED_ACTION_REFRESH_TICKS)
+		return FALSE;
+	sent->valid = TRUE;
+	sent->time = now;
+	sent->action = *action;
+	return TRUE;
+}
+
 /* when the host sends on what it heard (distributed_forward_flush) */
 enum
 {
@@ -5490,7 +5595,7 @@ static void distributed_forward_flush(
 				_distributed_message_forwarded_live_controls, NULL, 0);
 			for (player_index = 0; player_index < MAXIMUM_TRACKED_PLAYERS; player_index++)
 			{
-				byte entry[LIVE_CONTROL_FORWARD_SIZE];
+				byte entry[LIVE_CONTROL_FORWARD_MAXIMUM_SIZE];
 				byte period = distributed_forward_periods[machine_index][player_index];
 				word size;
 
@@ -6190,9 +6295,7 @@ static void distributed_host_plan_players(
 					distances_squared[index] = dx * dx + dy * dy + dz * dz;
 					if (nearest < 0.0f || distances_squared[index] < nearest)
 						nearest = distances_squared[index];
-					/* (outside the map's clusters: in sight, to be safe) */
-					sees[index] = !viewer_pvs[index] || to < 0 || to >= cluster_count ||
-						BIT_VECTOR_TEST_FLAG(viewer_pvs[index], to);
+					sees[index] = distributed_pvs_sees(viewer_pvs[index], to, cluster_count);
 					visible |= sees[index];
 				}
 				period = !visible ? HIDDEN_PLAYER_PERIOD_TICKS :
@@ -6233,8 +6336,19 @@ static void distributed_host_plan_players(
 			forwarded lately) */
 			if (!own && placed[player_index])
 				distributed_forward_periods[machine_index][player_index] = (byte)aimed_period;
-			if (!own && has_action[player_index] && (send || action_changed[player_index]) &&
-				!distributed_forward_covers(machine_index, player_index))
+			if (own || !has_action[player_index])
+				continue;
+			if (distributed_forward_covers(machine_index, player_index))
+			{
+				/* (an OpenH1 client takes the relayed again when the forwards stop) */
+				distributed_relayed_sent[machine_index][player_index].covered = TRUE;
+				continue;
+			}
+			/* (to an OpenH1 client on a change only; to an OpenCE client on
+			each of its ticks of the plan, as it always went) */
+			if (network_legacy_machine(machine_index) ? send || action_changed[player_index] :
+				distributed_relayed_action_due(machine_index, player_index, action_changed[player_index],
+					network_substeps_host_relays(player_index), send, now))
 			{
 				SET_FLAG(*sends, _distributed_send_action_bit, TRUE);
 			}
@@ -6845,6 +6959,7 @@ static void distributed_reset_checkpoint_state(boolean reset_received_times)
 	csmemset(distributed_forwards, 0, sizeof(distributed_forwards));
 	csmemset(distributed_forward_periods, 0, sizeof(distributed_forward_periods));
 	csmemset(distributed_far_live, 0, sizeof(distributed_far_live));
+	csmemset(distributed_relayed_sent, 0, sizeof(distributed_relayed_sent));
 	csmemset(distributed_forwarded_ticks, 0xFF, sizeof(distributed_forwarded_ticks));
 	csmemset(distributed_forwarded_times, 0xFF, sizeof(distributed_forwarded_times));
 	csmemset(distributed_host_states, 0, sizeof(distributed_host_states));

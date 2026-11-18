@@ -42,15 +42,16 @@ NEGATIVE_CONTROLS = {
 def generated(fault=None):
     source = read(SOURCE)
     code = "\n".join(function(source, name) for name in
-                     ("distributed_aimed_period", "distributed_host_plan_players", "distributed_substep_state_due"))
+                     ("distributed_pvs_sees", "distributed_aimed_period", "distributed_host_plan_players",
+                      "distributed_substep_state_due"))
     if fault:
         code = mutated(code, *fault)
     config = "#define MAX(a, b) ((a) > (b) ? (a) : (b))\n"
     for name in ("NEAR_PLAYER_DISTANCE", "MIDDLE_PLAYER_DISTANCE", "FAR_PLAYER_DISTANCE", "AIMED_AT_COSINE",
                  "SCOPED_AT_COSINE"):
         config += f"#define {name} " + re.search(rf"^#define {name}\s+(\S+)", source, re.M)[1] + "\n"
-    for member in ("HIDDEN_PLAYER_PERIOD_TICKS", "_distributed_send_state_bit"):
-        config += enum_with(source, member) + "\n"
+    config += enum_with(read("port/linux/game/network_distributed.h"), "HIDDEN_PLAYER_PERIOD_TICKS") + "\n"
+    config += enum_with(source, "_distributed_send_state_bit") + "\n"
     config += enum_with(read("port/linux/game/network_legacy.h"), "_distributed_unit_alive_bit") + "\n"
     config += re.search(r"static (struct distributed_viewer\s*\{.*?\n\} distributed_viewers\[.*?\];)", source,
                         re.S)[1] + "\n"

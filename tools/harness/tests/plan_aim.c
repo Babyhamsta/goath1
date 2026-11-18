@@ -70,6 +70,14 @@ static boolean distributed_forward_covers(long machine_index, short player_index
     (void)machine_index; (void)player_index; return FALSE;
 }
 static boolean distributed_prediction_at_tick_start(short player_index) { return at_tick_start[player_index]; }
+/* (no input in this world: relayed on a change only, which its own test checks) */
+static struct { boolean covered; } distributed_relayed_sent[HALO_PORT_MAXIMUM_NETWORK_MACHINES][MAXIMUM_TRACKED_PLAYERS];
+static boolean network_legacy_machine(long machine_index) { (void)machine_index; return FALSE; }
+static boolean network_substeps_host_relays(short player_index) { (void)player_index; return FALSE; }
+static boolean distributed_relayed_action_due(long machine_index, short player_index, boolean pressed,
+    boolean substeps, boolean planned, long now) {
+    (void)machine_index; (void)player_index; (void)pressed; (void)substeps; (void)planned; (void)now; return FALSE;
+}
 #include "under_test.inc"
 
 static void aim(real_vector3d direction, char zoom) {

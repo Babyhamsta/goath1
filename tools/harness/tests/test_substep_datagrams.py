@@ -46,10 +46,10 @@ def generated(fault=None):
     if fault:
         code = mutated(code, *fault)
     config = enum_with(header, "_distributed_message_batch") + "\n"
-    config += "enum { DATAGRAM_MAXIMUM_SIZE = %d, MAXIMUM_SIM_SUBSTEPS = %d, LIVE_CONTROL_FORWARD_SIZE = %d };\n" % (
+    config += "enum { DATAGRAM_MAXIMUM_SIZE = %d, MAXIMUM_SIM_SUBSTEPS = %d, LIVE_CONTROL_FORWARD_MAXIMUM_SIZE = %d };\n" % (
         constant(read("source/networking/network_connection.h"), "DATAGRAM_MAXIMUM_SIZE"),
         constant(read("port/linux/game/sim_rate.h"), "MAXIMUM_SIM_SUBSTEPS"),
-        constant(substeps_header, "LIVE_CONTROL_FORWARD_SIZE"))
+        constant(substeps_header, "LIVE_CONTROL_FORWARD_MAXIMUM_SIZE"))
     config += "enum { FORWARDED_INPUT_INTERVAL_MILLISECONDS = %d, FORWARDED_INPUT_SERVER_INTERVAL_MILLISECONDS = %d };\n" % (
         constant(source, "FORWARDED_INPUT_INTERVAL_MILLISECONDS"),
         constant(source, "FORWARDED_INPUT_SERVER_INTERVAL_MILLISECONDS"))

@@ -507,6 +507,16 @@ long distributed_player_machine(short player_index);
 /* (the host, in its tick) whether the client's players can see the player
 (or the player is its own, or it has none alive to see with) */
 boolean distributed_machine_sees_player(long machine_index, short player_index);
+/* (the host) whether any of a client's players, where they are or were when
+last alive, could see the map's cluster, by the player plan's test
+(distributed_pvs_sees; a client with none watches anyone, and a cluster
+outside the map's is in sight); and how often the plan sends a player none
+of them can see (or dead), in ticks */
+boolean distributed_machine_sees_cluster(long machine_index, short cluster_index);
+enum
+{
+	HIDDEN_PLAYER_PERIOD_TICKS = 6,
+};
 /* what a message says, checked: a number finite; a point's parts finite
 and within bound of the origin; an object's index whole (its identifier
 never 0, which any object at the index matches) */
