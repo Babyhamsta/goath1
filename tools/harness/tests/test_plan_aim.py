@@ -12,7 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from harness import CHECK_FAILED, build, enum_with, function, mutated, read, run
 
 SOURCE = "port/linux/game/network_distributed.c"
-CASES = ["aimed", "legacy-sends", "unaimed", "scoped", "substep-due"]
+CASES = ["aimed", "legacy-sends", "unaimed", "scoped", "substep-due", "reacts"]
 
 # a fault in the plan and the case that must catch it
 NEGATIVE_CONTROLS = {
@@ -36,14 +36,19 @@ NEGATIVE_CONTROLS = {
     # an OpenCE player's (the host runs no sub-steps of theirs as they come)
     "substep-opence": (("(player_machine == NONE || distributed_prediction_at_tick_start(player_index))", "TRUE"),
                        "substep-due"),
+    # an unseen player near a client's taken for one it cannot react to (by the plan)
+    "unseen-near-deferred": (("reacts = visible || nearest < MIDDLE_PLAYER_DISTANCE * MIDDLE_PLAYER_DISTANCE;",
+                              "reacts = visible;"), "reacts"),
+    # every player taken for one the client can react to
+    "always-reacts": (("reacts = visible || nearest", "reacts = TRUE || visible || nearest"), "reacts"),
 }
 
 
 def generated(fault=None):
     source = read(SOURCE)
     code = "\n".join(function(source, name) for name in
-                     ("distributed_pvs_sees", "distributed_aimed_period", "distributed_host_plan_players",
-                      "distributed_substep_state_due"))
+                     ("distributed_pvs_sees", "distributed_machine_sees_cluster", "distributed_reacts_at",
+                      "distributed_aimed_period", "distributed_host_plan_players", "distributed_substep_state_due"))
     if fault:
         code = mutated(code, *fault)
     config = "#define MAX(a, b) ((a) > (b) ? (a) : (b))\n"

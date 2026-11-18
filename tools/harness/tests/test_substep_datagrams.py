@@ -14,7 +14,7 @@ from harness import CHECK_FAILED, build, constant, enum_with, function, mutated,
 SOURCE = "port/linux/game/network_distributed.c"
 HEADER = "port/linux/game/network_distributed.h"
 SUBSTEPS_HEADER = "port/linux/game/network_substeps.h"
-CASES = ["substep", "substep-after-read", "tick-end", "split", "held"]
+CASES = ["substep", "substep-after-read", "tick-end", "split", "held", "react", "defer", "into-view"]
 
 NEGATIVE_CONTROLS = {
     # a tick's last sub-step's controls in a datagram of their own, before the tick's
@@ -29,9 +29,16 @@ NEGATIVE_CONTROLS = {
     # a batch sent whenever it has anything: a datagram split with room left
     "split-early": (("if (used + BATCH_MESSAGE_OVERHEAD + minimum > DATAGRAM_MAXIMUM_SIZE)", "if (batch->size)"),
                     "split"),
+    # every far player's press held for the tick's datagram, those in sight too
+    "defer-in-sight": (("distributed_forward_reacts(machine_index, player_index)))", "FALSE))"), "react"),
+    # a far, unseen player's press at once, as before
+    "never-defer": (("if (*owed && (occasion == _forward_at_tick_end ||", "if (*owed && (TRUE ||"), "defer"),
+    # one owed waits for the tick's end though it came into sight
+    "no-coming-into-view": (("if (!distributed_reacts_at(machine_index, &origin, distributed_object_cluster(unit_index)))",
+                             "if (TRUE)"), "into-view"),
 }
 
-FUNCTIONS = ("distributed_batch_flush", "distributed_batch_room", "distributed_batch_append", "distributed_batch_add",
+FUNCTIONS = ("distributed_far_owed_any", "distributed_forward_reacts", "distributed_batch_flush", "distributed_batch_room", "distributed_batch_append", "distributed_batch_add",
              "distributed_batches_flush", "distributed_fill_header", "distributed_entry_size",
              "distributed_send_to_machine", "distributed_packer_begin", "distributed_packer_flush",
              "distributed_packer_add", "distributed_forward_flush", "network_distributed_frame_received",

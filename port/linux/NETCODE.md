@@ -1360,6 +1360,18 @@ it, where the near ones have it as it comes (two network trips and a frame);
 the host's bytes a second to each client were unchanged within the spread
 the players' places give (9.8 to 12.1 KB/s in either build).
 
+A press goes at once only to a client that can react to the player: one
+whose players can see them (the plan's potentially visible set) or are
+within `MIDDLE_PLAYER_DISTANCE` of them, as the plan last had it
+(`distributed_forward_immediate`), or, since, where the player now is
+(`distributed_reacts_at`, the same two tests, made at each sub-step for a
+player with a press owed: one who comes into sight has it in that
+sub-step's datagram). To one further and unseen the latest press is owed
+(`distributed_far_owed`) and rides the tick's last datagram, with the
+tick's own messages, so a sub-step that has nothing else for that client
+sends it no datagram. Everything the near and the seen are sent goes when
+it went before (`tools/harness/tests/test_substep_datagrams.py`).
+
 ### States at the sub-steps
 
 A client drives the players near its own by their forwarded input and live

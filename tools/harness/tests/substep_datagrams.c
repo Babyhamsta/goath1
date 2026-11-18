@@ -4,7 +4,10 @@ sub-step ends leaves in one datagram, the forwarded controls with the
 sub-step's states whatever the interval since the frame's own forward, and
 a tick's last sub-step's with the tick's messages; a datagram is split only
 where the next message (or its next entry) does not fit, and the messages
-and entries keep their order. */
+and entries keep their order. A player the client can react to (near its
+players or in their sight, distributed_forward_immediate) has its presses
+sent in the sub-step's datagram; one it cannot, in the tick's last, unless
+it comes where the client can react to it first (distributed_reacts_at). */
 #include "harness.h"
 typedef unsigned short word;
 typedef word message_header;
@@ -52,6 +55,8 @@ static struct { long sent; } distributed_statistics;
 static struct distributed_batch distributed_batches[MAXIMUM_SENDERS];
 static struct distributed_packer distributed_packer;
 static boolean distributed_forward_held;
+static boolean distributed_forward_immediate[HALO_PORT_MAXIMUM_NETWORK_MACHINES][MAXIMUM_TRACKED_PLAYERS];
+static boolean distributed_far_owed[HALO_PORT_MAXIMUM_NETWORK_MACHINES][MAXIMUM_TRACKED_PLAYERS];
 
 /* the world: machines 1 and 2, OpenH1 clients; players near both (period 1)
 of states at the sub-steps, and players whose live controls are pending */
@@ -60,6 +65,12 @@ static unsigned long long now_microseconds = 1000000;
 static boolean near[MAXIMUM_TRACKED_PLAYERS];
 static boolean live_pending[MAXIMUM_TRACKED_PLAYERS];
 static struct player_datum players[MAXIMUM_TRACKED_PLAYERS];
+/* players further (alive, their states not sent at the sub-steps), their
+presses as the host's sub-steps ran them (pending: made this sub-step), and
+where each client can react to them now (the plan's tests, as they move) */
+static boolean far[MAXIMUM_TRACKED_PLAYERS];
+static boolean far_pressed[MAXIMUM_TRACKED_PLAYERS];
+static boolean reacts_now[HALO_PORT_MAXIMUM_NETWORK_MACHINES][MAXIMUM_TRACKED_PLAYERS];
 
 static long game_time_get(void) { return now_time; }
 static short game_connection(void) { return _game_connection_network_server; }
@@ -107,25 +118,45 @@ static word network_substeps_live_forward_write(short player_index, byte *buffer
 }
 static boolean network_substeps_live_far_due(short player_index, struct live_control_far *last)
 {
-	(void)player_index; (void)last; return FALSE;
+	(void)last; return far_pressed[player_index];
 }
+/* (the latest press, 0x40 + its player first) */
 static word network_substeps_live_far_write(short player_index, byte *buffer)
 {
-	(void)player_index; (void)buffer; return 0;
+	if (!far[player_index])
+		return 0;
+	memset(buffer, 0, LIVE_CONTROL_FORWARD_MAXIMUM_SIZE);
+	buffer[0] = (byte)(0x40 + player_index);
+	return LIVE_CONTROL_FORWARD_MAXIMUM_SIZE;
 }
-static void network_substeps_live_forwarded(void) { memset(live_pending, 0, sizeof(live_pending)); }
+static void network_substeps_live_forwarded(void)
+{
+	memset(live_pending, 0, sizeof(live_pending));
+	memset(far_pressed, 0, sizeof(far_pressed));
+}
 static boolean network_substeps_live_pending(void)
 {
 	short index;
 
 	for (index = 0; index < MAXIMUM_TRACKED_PLAYERS; index++)
-		if (live_pending[index])
+		if (live_pending[index] || far_pressed[index])
 			return TRUE;
 	return FALSE;
 }
 static struct player_datum *distributed_player(short player_index)
 {
-	return near[player_index] ? &players[player_index] : NULL;
+	return near[player_index] || far[player_index] ? &players[player_index] : NULL;
+}
+static long distributed_living_unit(struct player_datum const *player) { return (long)(player - players); }
+static void object_get_origin(long unit_index, real_point3d *origin)
+{
+	origin->x = (real)unit_index; origin->y = 0.0f; origin->z = 0.0f;
+}
+static short distributed_object_cluster(long unit_index) { return (short)unit_index; }
+static boolean distributed_reacts_at(long machine_index, real_point3d const *origin, short cluster_index)
+{
+	CHECK((short)origin->x == cluster_index, "the player's own place");
+	return reacts_now[machine_index][cluster_index];
 }
 static void distributed_state_from_player(short player_index, long time, struct distributed_unit_state *state)
 {
@@ -215,6 +246,11 @@ static void reset(void)
 	memset(near, 0, sizeof(near));
 	memset(live_pending, 0, sizeof(live_pending));
 	memset(distributed_forward_periods, 0, sizeof(distributed_forward_periods));
+	memset(far, 0, sizeof(far));
+	memset(far_pressed, 0, sizeof(far_pressed));
+	memset(reacts_now, 0, sizeof(reacts_now));
+	memset(distributed_forward_immediate, 0, sizeof(distributed_forward_immediate));
+	memset(distributed_far_owed, 0, sizeof(distributed_far_owed));
 }
 
 /* players near machines 1 and 2: their states at the sub-steps */
@@ -223,6 +259,19 @@ static void set_near(short player_index)
 	near[player_index] = TRUE;
 	distributed_forward_periods[1][player_index] = 1;
 	distributed_forward_periods[2][player_index] = 1;
+	distributed_forward_immediate[1][player_index] = TRUE;
+	distributed_forward_immediate[2][player_index] = TRUE;
+}
+
+/* a player further from machines 1 and 2, of the plan's period, whom they
+can react to (in sight, or near: the plan's word) or not */
+static void set_far(short player_index, byte period, boolean reacts)
+{
+	far[player_index] = TRUE;
+	distributed_forward_periods[1][player_index] = period;
+	distributed_forward_periods[2][player_index] = period;
+	distributed_forward_immediate[1][player_index] = reacts;
+	distributed_forward_immediate[2][player_index] = reacts;
 }
 
 /* the tick's own message to a machine: entries numbered from first */
@@ -404,6 +453,113 @@ static void held_case(void)
 	CHECK(datagram_count[1] == 1 && datagram_count[2] == 1, "sent by the next frame");
 }
 
+/* whether a datagram has a player's press (forwarded live controls) */
+static boolean has_press(long machine_index, short datagram_index, short player_index)
+{
+	struct parsed messages[8];
+	short count = parse(machine_index, datagram_index, messages, 8);
+	short index;
+
+	for (index = 0; index < count; index++)
+	{
+		short entry;
+
+		if (messages[index].type != _distributed_message_forwarded_live_controls)
+			continue;
+		for (entry = 0; entry < messages[index].count; entry++)
+		{
+			if (messages[index].entries[entry * LIVE_CONTROL_FORWARD_MAXIMUM_SIZE] == 0x40 + player_index)
+				return TRUE;
+		}
+	}
+	return FALSE;
+}
+
+/* players the clients can react to: a near one's states and controls, a
+far one's press in sight and an unseen but near one's, all in the
+sub-step's own datagram, as they went before */
+static void react_case(void)
+{
+	long machine_index;
+
+	reset();
+	set_near(3);
+	live_pending[3] = TRUE;
+	set_far(4, 4, TRUE);
+	far_pressed[4] = TRUE;
+	set_far(5, 6, TRUE);
+	far_pressed[5] = TRUE;
+	now_microseconds += 1000000;
+	network_distributed_host_substep_ended(0, 4);
+	for (machine_index = 1; machine_index <= 2; machine_index++)
+	{
+		struct parsed messages[8];
+		short count;
+
+		CHECK(datagram_count[machine_index] == 1, "one datagram of the sub-step to machine %ld, not %d",
+			machine_index, datagram_count[machine_index]);
+		count = parse(machine_index, 0, messages, 8);
+		CHECK(count == 2 && messages[0].type == _distributed_message_substep_states,
+			"the near player's state in it (%d messages)", count);
+		CHECK(messages[1].type == _distributed_message_forwarded_live_controls && messages[1].count == 3,
+			"the near player's controls and both presses in it");
+		CHECK(has_press(machine_index, 0, 4), "the far player in sight's press at once");
+		CHECK(has_press(machine_index, 0, 5), "the player unseen but near's press at once");
+	}
+}
+
+/* a player the clients cannot react to (far and unseen): its press made no
+datagram of a sub-step, and went in the tick's last, once */
+static void defer_case(void)
+{
+	long machine_index;
+
+	reset();
+	set_far(5, 6, FALSE);
+	far_pressed[5] = TRUE;
+	now_microseconds += 1000000;
+	network_distributed_host_substep_ended(0, 4);
+	CHECK(datagram_count[1] == 0 && datagram_count[2] == 0, "no datagram of a sub-step for it");
+	now_microseconds += 8000;
+	network_distributed_frame_received();
+	network_distributed_host_substep_ended(1, 4);
+	network_distributed_host_substep_ended(2, 4);
+	CHECK(datagram_count[1] == 0 && datagram_count[2] == 0, "none later in the tick either");
+	network_distributed_host_substep_ended(3, 4);
+	now_time++;
+	tick_message(1, 4, 0);
+	tick_message(2, 4, 0);
+	distributed_batches_flush();
+	for (machine_index = 1; machine_index <= 2; machine_index++)
+	{
+		CHECK(datagram_count[machine_index] == 1, "the tick's datagram alone, not %d", datagram_count[machine_index]);
+		CHECK(has_press(machine_index, 0, 5), "the press in the tick's datagram");
+	}
+	/* (owed no more) */
+	network_distributed_host_substep_ended(0, 4);
+	CHECK(datagram_count[1] == 1, "sent once");
+}
+
+/* a far, unseen player's press owed, then the player comes into sight (or
+near) at a later sub-step: it goes in that sub-step's datagram */
+static void into_view_case(void)
+{
+	reset();
+	set_far(5, 6, FALSE);
+	far_pressed[5] = TRUE;
+	now_microseconds += 1000000;
+	network_distributed_host_substep_ended(0, 4);
+	CHECK(datagram_count[1] == 0 && datagram_count[2] == 0, "owed");
+	reacts_now[1][5] = TRUE;
+	network_distributed_host_substep_ended(1, 4);
+	CHECK(datagram_count[1] == 1 && has_press(1, 0, 5), "into view: the press at once, in sub-step 1's datagram");
+	CHECK(datagram_count[2] == 0, "the other client, which cannot react to it, still owed");
+	CHECK(distributed_forward_immediate[1][5], "and at once from then on");
+	far_pressed[5] = TRUE;
+	network_distributed_host_substep_ended(2, 4);
+	CHECK(datagram_count[1] == 2 && has_press(1, 1, 5), "its next press at once too");
+}
+
 int main(int argc, char **argv)
 {
 	char const *name = argc > 1 ? argv[1] : "";
@@ -418,6 +574,12 @@ int main(int argc, char **argv)
 		split_case();
 	else if (!strcmp(name, "held"))
 		held_case();
+	else if (!strcmp(name, "react"))
+		react_case();
+	else if (!strcmp(name, "defer"))
+		defer_case();
+	else if (!strcmp(name, "into-view"))
+		into_view_case();
 	else
 	{
 		fprintf(stderr, "no case %s\n", name);

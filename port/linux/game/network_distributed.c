@@ -1005,6 +1005,13 @@ static long distributed_forwarded_times[HALO_PORT_MAXIMUM_NETWORK_MACHINES][MAXI
 to each client its plan does not forward the player to (NETCODE.md,
 "Presses to far clients") */
 static struct live_control_far distributed_far_live[HALO_PORT_MAXIMUM_NETWORK_MACHINES][MAXIMUM_TRACKED_PLAYERS];
+/* the host: whether each client can react to each player (in sight of its
+players, or near them: distributed_reacts_at), as the last plan found or
+since (distributed_forward_reacts): their presses go at once. One it cannot
+react to, its latest press owed (far_owed), rides the tick's last
+datagram, with the tick's own messages */
+static boolean distributed_forward_immediate[HALO_PORT_MAXIMUM_NETWORK_MACHINES][MAXIMUM_TRACKED_PLAYERS];
+static boolean distributed_far_owed[HALO_PORT_MAXIMUM_NETWORK_MACHINES][MAXIMUM_TRACKED_PLAYERS];
 /* the host: each player's input as last relayed to each OpenH1 client
 (distributed_relayed_action_due): whether any was, what, when, whether it
 is to go again on the player's next tick of the plan (a change's second
@@ -5730,6 +5737,61 @@ boolean distributed_machine_sees_cluster(
 	return !viewers;
 }
 
+/* whether a client can react to a player where they are: in sight of its
+players (the plan's potentially visible set), or within
+MIDDLE_PLAYER_DISTANCE of one of them, as the plan last had them, or with
+none of them yet (it watches anyone). What the plan forwards a client at
+once is of these (distributed_forward_immediate) */
+static boolean distributed_reacts_at(
+	long machine_index,
+	real_point3d const *origin,
+	short cluster_index)
+{
+	short index;
+
+	if (distributed_machine_sees_cluster(machine_index, cluster_index))
+		return TRUE;
+	for (index = 0; index < MAXIMUM_LOCAL_PLAYERS; index++)
+	{
+		struct distributed_viewer const *viewer = &distributed_viewers[machine_index][index];
+		real dx, dy, dz;
+
+		if (!viewer->valid)
+			continue;
+		dx = origin->x - viewer->position.x;
+		dy = origin->y - viewer->position.y;
+		dz = origin->z - viewer->position.z;
+		if (dx * dx + dy * dy + dz * dz < MIDDLE_PLAYER_DISTANCE * MIDDLE_PLAYER_DISTANCE)
+			return TRUE;
+	}
+	return FALSE;
+}
+
+/* (the host) whether what a player's sub-steps ran goes to a client at
+once: as the last plan found (distributed_forward_immediate), or, since it,
+come where the client can react to them (distributed_reacts_at, now: at
+once, from this sub-step on) */
+static boolean distributed_forward_reacts(
+	long machine_index,
+	short player_index)
+{
+	struct player_datum *player;
+	long unit_index;
+	real_point3d origin;
+
+	if (distributed_forward_immediate[machine_index][player_index])
+		return TRUE;
+	player = distributed_player(player_index);
+	unit_index = player ? distributed_living_unit(player) : NONE;
+	if (unit_index == NONE)
+		return FALSE;
+	object_get_origin(unit_index, &origin);
+	if (!distributed_reacts_at(machine_index, &origin, distributed_object_cluster(unit_index)))
+		return FALSE;
+	distributed_forward_immediate[machine_index][player_index] = TRUE;
+	return TRUE;
+}
+
 /* the player's input as the host's tick ran it, in fewer bytes; whether
 their buttons or choices changed in the ticks it carries */
 static boolean distributed_relayed_action_from(
@@ -5966,6 +6028,24 @@ static boolean distributed_relayed_action_due(
 	return TRUE;
 }
 
+/* (the host) whether any client is owed a press (distributed_far_owed) */
+static boolean distributed_far_owed_any(
+	void)
+{
+	long machine_index;
+	short player_index;
+
+	for (machine_index = 0; machine_index < HALO_PORT_MAXIMUM_NETWORK_MACHINES; machine_index++)
+	{
+		for (player_index = 0; player_index < MAXIMUM_TRACKED_PLAYERS; player_index++)
+		{
+			if (distributed_far_owed[machine_index][player_index])
+				return TRUE;
+		}
+	}
+	return FALSE;
+}
+
 /* when the host sends on what it heard (distributed_forward_flush) */
 enum
 {
@@ -5993,7 +6073,7 @@ static void distributed_forward_flush(
 	short machine_number;
 	short player_index;
 	boolean inputs = FALSE;
-	boolean live = network_substeps_live_pending();
+	boolean live = network_substeps_live_pending() || distributed_far_owed_any();
 	static unsigned long long last_sent;
 	/* (not system_milliseconds, which the determinism log notes in a tick:
 	the host's own players' controls are sent on from a sub-step) */
@@ -6061,15 +6141,30 @@ static void distributed_forward_flush(
 				word size;
 
 				if (!period || distributed_machine_has_player(machine_index, player_index))
+				{
+					distributed_far_owed[machine_index][player_index] = FALSE;
 					continue;
+				}
 				/* (a player near of no controls sent of their own, a bot: their
 				presses as the host's sub-steps ran them, as a far one's) */
 				if (period <= 2 && network_substeps_live_own(player_index))
 					size = network_substeps_live_forward_write(player_index, entry);
-				else if (network_substeps_live_far_due(player_index, &distributed_far_live[machine_index][player_index]))
-					size = network_substeps_live_far_write(player_index, entry);
 				else
+				{
+					boolean *owed = &distributed_far_owed[machine_index][player_index];
+
 					size = 0;
+					if (network_substeps_live_far_due(player_index, &distributed_far_live[machine_index][player_index]))
+						*owed = TRUE;
+					/* (at once where the client can react to the player; else
+					the latest with the tick's own messages, at its end) */
+					if (*owed && (occasion == _forward_at_tick_end ||
+						distributed_forward_reacts(machine_index, player_index)))
+					{
+						size = network_substeps_live_far_write(player_index, entry);
+						*owed = FALSE;
+					}
+				}
 				if (size)
 				{
 					distributed_packer_add(&distributed_packer, entry, size);
@@ -6816,8 +6911,12 @@ static void distributed_host_plan_players(
 			boolean seen = TRUE;
 			short period = 1;
 			short aimed_period = NONE;
+			/* (whether the client can react to the player: distributed_reacts_at's
+			tests, by the same viewers) */
+			boolean reacts = TRUE;
 
 			distributed_forward_periods[machine_index][player_index] = 0;
+			distributed_forward_immediate[machine_index][player_index] = FALSE;
 			if (!present[player_index] || (quit[player_index] && !own && !changed[player_index]))
 				continue;
 			if (!own && !placed[player_index])
@@ -6847,6 +6946,7 @@ static void distributed_host_plan_players(
 					sees[index] = distributed_pvs_sees(viewer_pvs[index], to, cluster_count);
 					visible |= sees[index];
 				}
+				reacts = visible || nearest < MIDDLE_PLAYER_DISTANCE * MIDDLE_PLAYER_DISTANCE;
 				period = !visible ? HIDDEN_PLAYER_PERIOD_TICKS :
 					nearest < NEAR_PLAYER_DISTANCE * NEAR_PLAYER_DISTANCE ? 1 :
 					nearest < MIDDLE_PLAYER_DISTANCE * MIDDLE_PLAYER_DISTANCE ? 2 :
@@ -6884,7 +6984,10 @@ static void distributed_host_plan_players(
 			sub-steps ran them; what the tick ran of it relayed only when not
 			forwarded lately) */
 			if (!own && placed[player_index])
+			{
 				distributed_forward_periods[machine_index][player_index] = (byte)aimed_period;
+				distributed_forward_immediate[machine_index][player_index] = reacts;
+			}
 			if (own || !has_action[player_index])
 				continue;
 			if (distributed_forward_covers(machine_index, player_index))
@@ -7737,6 +7840,8 @@ static void distributed_reset_checkpoint_state(boolean reset_received_times)
 	csmemset(distributed_forwards, 0, sizeof(distributed_forwards));
 	csmemset(distributed_forward_periods, 0, sizeof(distributed_forward_periods));
 	csmemset(distributed_far_live, 0, sizeof(distributed_far_live));
+	csmemset(distributed_forward_immediate, 0, sizeof(distributed_forward_immediate));
+	csmemset(distributed_far_owed, 0, sizeof(distributed_far_owed));
 	csmemset(distributed_relayed_sent, 0, sizeof(distributed_relayed_sent));
 	csmemset(distributed_forwarded_ticks, 0xFF, sizeof(distributed_forwarded_ticks));
 	csmemset(distributed_forwarded_times, 0xFF, sizeof(distributed_forwarded_times));
