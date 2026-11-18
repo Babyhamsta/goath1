@@ -453,6 +453,41 @@ typedef char distributed_player_input_size_assert[
 typedef char distributed_player_input_action_offset_assert[
 	offsetof(struct distributed_player_input, action) == 12 ? 1 : -1];
 
+/* an OpenH1 client's input, or prediction, of a tick the same as the last it
+sent whole (_distributed_message_player_inputs_held, _prediction_held): the
+player, the tick and host_time and pad as an input's (a prediction's unused),
+and the checksum of the input or prediction it repeats (distributed_input_checksum,
+distributed_prediction_checksum). The host takes it as that whole one again,
+of this tick, where it has it (its checksum the same); the round trip and
+the clock by it either way. A change goes whole INPUT_HELD_REPEATS ticks
+running, and the whole again INPUT_HELD_REFRESH_TICKS after the last
+(distributed_input_held) */
+struct distributed_player_held
+{
+	byte player_index;
+	byte pad;
+	word unused;
+	long tick;
+	long host_time;
+	unsigned long checksum;
+};
+
+enum
+{
+	INPUT_HELD_REPEATS = 3,
+	INPUT_HELD_REFRESH_TICKS = 6,
+};
+
+/* (a client) what it last sent whole of an input or a prediction of one of
+its players: the checksum, how many ticks running, and when it last went */
+struct distributed_held_sent
+{
+	boolean valid;
+	short repeats;
+	unsigned long checksum;
+	long whole_time;
+};
+
 /* a player's input as the host ran it, as this machine has it: the host's
 update (the same for every player of a tick) goes once a message, and on
 the wire the ticks' buttons before the latest only where they differ from
@@ -954,6 +989,24 @@ static struct distributed_game_state_machine distributed_game_state_machines[HAL
 and its changes are not taken until a whole state comes) */
 static byte distributed_game_state_had[MAXIMUM_GAME_STATE_SIZE];
 static long distributed_game_state_had_size;
+/* a client: its players' inputs and predictions last sent whole
+(distributed_input_held); the host: each client player's last had whole,
+which one held repeats (its checksum the same) */
+static struct distributed_held_sent distributed_inputs_held_sent[MAXIMUM_LOCAL_PLAYERS];
+static struct distributed_held_sent distributed_predictions_held_sent[MAXIMUM_LOCAL_PLAYERS];
+static struct
+{
+	boolean valid;
+	unsigned long checksum;
+	struct distributed_player_input input;
+} distributed_held_inputs[MAXIMUM_TRACKED_PLAYERS];
+static struct
+{
+	boolean valid;
+	unsigned long checksum;
+	word size;
+	byte bytes[DISTRIBUTED_PREDICTION_MAXIMUM_SIZE];
+} distributed_held_predictions[MAXIMUM_TRACKED_PLAYERS];
 
 /* the latest tick of each kind of message had in a datagram from each sender
 (a machine, or the host), NONE for none: the kinds whose every message is the
@@ -3735,12 +3788,67 @@ static void distributed_correct_own_unit(
 	distributed_apply_state(unit_index, state, &position, NULL, LOCAL_CORRECTION_TOLERANCE, 0.0f, 0.0f, 0.0f);
 }
 
-/* (a client) its own players' units, to the host */
+static unsigned long distributed_checksum(void const *data, long size);
+static unsigned long distributed_input_checksum(struct distributed_player_input const *input);
+
+/* (a client) whether what it sends of a player this tick (its checksum) can
+go held: the same as it last sent whole (sent), which went whole
+INPUT_HELD_REPEATS ticks running, and less than INPUT_HELD_REFRESH_TICKS
+ago; else (FALSE) it goes whole, noted */
+static boolean distributed_input_held(
+	struct distributed_held_sent *sent,
+	unsigned long checksum,
+	long now)
+{
+	if (!sent->valid || sent->checksum != checksum)
+	{
+		sent->valid = TRUE;
+		sent->checksum = checksum;
+		sent->repeats = 1;
+		sent->whole_time = now;
+		return FALSE;
+	}
+	if (sent->repeats < INPUT_HELD_REPEATS || now - sent->whole_time >= INPUT_HELD_REFRESH_TICKS ||
+		now - sent->whole_time < 0)
+	{
+		if (sent->repeats < INPUT_HELD_REPEATS)
+			sent->repeats++;
+		sent->whole_time = now;
+		return FALSE;
+	}
+	return TRUE;
+}
+
+/* a client's prediction's bytes' checksum (its 32 bits) */
+static unsigned long distributed_prediction_checksum(
+	byte const *entry,
+	word size)
+{
+	return distributed_checksum(entry, size) & 0xFFFFFFFFUL;
+}
+
+/* (a client of an OpenH1 game, of an ordered world) whether its input and
+prediction may go held: the host takes them (distributed_handle_held) */
+static boolean distributed_client_holds(
+	void)
+{
+	return network_standard_agreed_rate() != 0 && distributed_checkpoint_synchronized;
+}
+
+/* (a client) its own players' units, to the host: one the same as the last
+it sent whole held (distributed_input_held) */
 static void distributed_client_send_predictions(
 	void)
 {
 	struct data_iterator iterator;
 	struct player_datum *player;
+	struct
+	{
+		struct distributed_message_header header;
+		struct distributed_player_held entries[MAXIMUM_LOCAL_PLAYERS];
+	} held;
+	short held_count = 0;
+	boolean holds = distributed_client_holds();
 
 	distributed_packer_begin(&distributed_packer, HOST_SENDER, _distributed_message_player_prediction, NULL, 0);
 	data_iterator_new(&iterator, player_data);
@@ -3761,9 +3869,34 @@ static void distributed_client_send_predictions(
 		/* (an OpenH1 game's: its velocity at full precision too) */
 		state.fine = network_standard_agreed_rate() != 0;
 		state.fine_velocity = object_get(unit_index)->object.translational_velocity;
-		distributed_packer_add(&distributed_packer, entry, distributed_unit_state_write(&state, TRUE, entry));
+		{
+			word size = distributed_unit_state_write(&state, TRUE, entry);
+			unsigned long checksum = distributed_prediction_checksum(entry, size);
+			short local = player->local_player_index;
+
+			if (holds && local >= 0 && local < MAXIMUM_LOCAL_PLAYERS && held_count < MAXIMUM_LOCAL_PLAYERS &&
+				distributed_input_held(&distributed_predictions_held_sent[local], checksum, game_time_get()))
+			{
+				struct distributed_player_held *entry_held = &held.entries[held_count++];
+
+				csmemset(entry_held, 0, sizeof(*entry_held));
+				entry_held->player_index = state.player_index;
+				entry_held->tick = game_time_get();
+				entry_held->host_time = NONE;
+				entry_held->checksum = checksum;
+				continue;
+			}
+			if (!holds && local >= 0 && local < MAXIMUM_LOCAL_PLAYERS)
+				distributed_predictions_held_sent[local].valid = FALSE;
+			distributed_packer_add(&distributed_packer, entry, size);
+		}
 	}
 	distributed_packer_flush(&distributed_packer);
+	if (held_count)
+	{
+		distributed_send(&held, _distributed_message_player_prediction_held, held_count,
+			(word)(sizeof(held.header) + held_count * sizeof(struct distributed_player_held)), _distributed_to_host);
+	}
 }
 
 /* (the host) a client's own players: the latest of each, taken at the next
@@ -3784,6 +3917,15 @@ static void distributed_handle_predictions(
 
 		if (!size)
 			break;
+		/* (what a held one repeats: distributed_handle_held) */
+		if (state.player_index < MAXIMUM_TRACKED_PLAYERS && size <= DISTRIBUTED_PREDICTION_MAXIMUM_SIZE &&
+			distributed_machine_has_player(machine_index, state.player_index))
+		{
+			distributed_held_predictions[state.player_index].valid = TRUE;
+			distributed_held_predictions[state.player_index].checksum = distributed_prediction_checksum(data, size);
+			distributed_held_predictions[state.player_index].size = size;
+			csmemcpy(distributed_held_predictions[state.player_index].bytes, data, size);
+		}
 		data += size;
 		/* Scripted poses and suspension belong to the host, never predictions. */
 		if (state.player_index >= MAXIMUM_TRACKED_PLAYERS ||
@@ -5077,7 +5219,9 @@ static void distributed_handle_unit_state_differences(
 /* ---------- input */
 
 /* (a client) its own players' input of the tick just run, with the buttons
-of the ticks before it, to the host */
+of the ticks before it, to the host: one the same as the last it sent whole
+held (distributed_input_held), its tick and its word on the host's ticks
+all the same */
 static void distributed_client_send_inputs(
 	void)
 {
@@ -5086,7 +5230,14 @@ static void distributed_client_send_inputs(
 		struct distributed_message_header header;
 		struct distributed_player_input inputs[MAXIMUM_LOCAL_PLAYERS];
 	} message;
+	struct
+	{
+		struct distributed_message_header header;
+		struct distributed_player_held entries[MAXIMUM_LOCAL_PLAYERS];
+	} held;
 	short count = 0;
+	short held_count = 0;
+	boolean holds = distributed_client_holds();
 	short local_player_index;
 
 	for (local_player_index = 0; local_player_index < MAXIMUM_LOCAL_PLAYERS; local_player_index++)
@@ -5116,12 +5267,36 @@ static void distributed_client_send_inputs(
 				input->pad = (byte)MIN(distributed_host_time - distributed_unit_taken_time, UNIT_STATES_WHOLE - 1);
 			}
 		}
+		if (!holds)
+			distributed_inputs_held_sent[local_player_index].valid = FALSE;
+		else
+		{
+			unsigned long checksum = distributed_input_checksum(input);
+
+			if (distributed_input_held(&distributed_inputs_held_sent[local_player_index], checksum, game_time_get()))
+			{
+				struct distributed_player_held *entry = &held.entries[held_count++];
+
+				csmemset(entry, 0, sizeof(*entry));
+				entry->player_index = input->player_index;
+				entry->pad = input->pad;
+				entry->tick = input->tick;
+				entry->host_time = input->host_time;
+				entry->checksum = checksum;
+				continue;
+			}
+		}
 		count++;
 	}
 	if (count)
 	{
 		distributed_send(&message, _distributed_message_player_inputs, count,
 			(word)(sizeof(message.header) + count * sizeof(struct distributed_player_input)), _distributed_to_host);
+	}
+	if (held_count)
+	{
+		distributed_send(&held, _distributed_message_player_inputs_held, held_count,
+			(word)(sizeof(held.header) + held_count * sizeof(struct distributed_player_held)), _distributed_to_host);
 	}
 }
 
@@ -5159,12 +5334,52 @@ static void distributed_note_input_actions(
 	player_control_action_test_note(action->control_flags, &turn, &action->throttle, action->primary_trigger);
 }
 
+/* (the host) a client's input's word on the host's tick it has had, and its
+own tick: the latest of a message's (host_time, heard_tick) */
+static void distributed_input_echo(
+	long machine_index,
+	struct distributed_player_input const *input,
+	long *host_time,
+	long *heard_tick)
+{
+	if (input->host_time != NONE && (*host_time == NONE || input->host_time > *host_time))
+	{
+		*host_time = input->host_time;
+		/* (an OpenH1 client's word on the states it took: their
+		differences go from the latest of them, distributed_unit_difference_write;
+		none, or one ahead of this machine's clock, whole) */
+		if (network_standard_hosting() && machine_index >= 0 && machine_index < HALO_PORT_MAXIMUM_NETWORK_MACHINES)
+		{
+			distributed_unit_acked_times[machine_index] = input->pad == UNIT_STATES_WHOLE ||
+				input->host_time > game_time_get() ? NONE : input->host_time - input->pad;
+		}
+	}
+	if (*heard_tick == NONE || input->tick > *heard_tick)
+		*heard_tick = input->tick;
+}
+
+/* a client's input's checksum (its 32 bits), as one held repeats it: all of
+it but its tick and its word on the host's (tick, host_time, pad) */
+static unsigned long distributed_input_checksum(
+	struct distributed_player_input const *input)
+{
+	struct distributed_player_input copy;
+
+	csmemcpy(&copy, input, sizeof(copy));
+	copy.tick = 0;
+	copy.host_time = 0;
+	copy.pad = 0;
+	return distributed_checksum(&copy, sizeof(copy)) & 0xFFFFFFFFUL;
+}
+
 /* (the host) a client's players' input, and from it (once a message) how
-long a message takes that client and back */
+long a message takes that client and back; the inputs past taken (of held
+ones the host has not whole: distributed_handle_held) for that alone */
 static void distributed_handle_inputs(
 	long machine_index,
 	struct distributed_player_input const *inputs,
-	short count)
+	short count,
+	short taken)
 {
 	long host_time = NONE;
 	long heard_tick = NONE;
@@ -5184,6 +5399,15 @@ static void distributed_handle_inputs(
 		player = distributed_player(input->player_index);
 		if (!player)
 			continue;
+		if (index >= taken)
+		{
+			distributed_input_echo(machine_index, input, &host_time, &heard_tick);
+			continue;
+		}
+		/* (what a held one repeats: distributed_handle_held) */
+		distributed_held_inputs[input->player_index].valid = TRUE;
+		distributed_held_inputs[input->player_index].checksum = distributed_input_checksum(input);
+		csmemcpy(&distributed_held_inputs[input->player_index].input, input, sizeof(*input));
 		/* (the sticks and the trigger no further than a controller's) */
 		action = input->action;
 		/* Only the defined input bits are accepted; forced-off wins. */
@@ -5218,20 +5442,7 @@ static void distributed_handle_inputs(
 				distributed_divergence.input_heard_time[input->player_index] = input->tick;
 			}
 		}
-		if (input->host_time != NONE && (host_time == NONE || input->host_time > host_time))
-		{
-			host_time = input->host_time;
-			/* (an OpenH1 client's word on the states it took: their
-			differences go from the latest of them, distributed_unit_difference_write;
-			none, or one ahead of this machine's clock, whole) */
-			if (network_standard_hosting() && machine_index >= 0 && machine_index < HALO_PORT_MAXIMUM_NETWORK_MACHINES)
-			{
-				distributed_unit_acked_times[machine_index] = input->pad == UNIT_STATES_WHOLE ||
-					input->host_time > game_time_get() ? NONE : input->host_time - input->pad;
-			}
-		}
-		if (heard_tick == NONE || input->tick > heard_tick)
-			heard_tick = input->tick;
+		distributed_input_echo(machine_index, input, &host_time, &heard_tick);
 	}
 	/* (an OpenH1 client's: how long before the host's tick of its number its
 	input came, network_clock.c) */
@@ -5273,6 +5484,72 @@ static void distributed_handle_inputs(
 			}
 		}
 	}
+}
+
+/* (the host of an OpenH1 game) a client's players' input, or predictions,
+held (distributed_player_held): each the last it had whole of the player
+again, of this tick, where its checksum is the same; an input not had
+whole still the client's word on the host's tick and its own (the round
+trip and the clock are measured by it as by a whole one) */
+static void distributed_handle_held(
+	long machine_index,
+	byte type,
+	long time,
+	struct distributed_player_held const *entries,
+	short count)
+{
+	struct distributed_player_input inputs[MAXIMUM_LOCAL_PLAYERS];
+	struct distributed_player_input echoes[MAXIMUM_LOCAL_PLAYERS];
+	short taken = 0;
+	short echo_count = 0;
+	short index;
+
+	if (!network_standard_hosting())
+		return;
+	for (index = 0; index < count && index < MAXIMUM_LOCAL_PLAYERS; index++)
+	{
+		struct distributed_player_held held;
+		short player_index;
+
+		csmemcpy(&held, &entries[index], sizeof(held));
+		player_index = held.player_index;
+		if (player_index >= MAXIMUM_TRACKED_PLAYERS || !distributed_machine_has_player(machine_index, player_index))
+			continue;
+		if (type == _distributed_message_player_prediction_held)
+		{
+			if (distributed_held_predictions[player_index].valid &&
+				distributed_held_predictions[player_index].checksum == held.checksum)
+			{
+				distributed_handle_predictions(machine_index, time, distributed_held_predictions[player_index].bytes,
+					distributed_held_predictions[player_index].bytes + distributed_held_predictions[player_index].size,
+					1);
+			}
+			continue;
+		}
+		if (distributed_held_inputs[player_index].valid && distributed_held_inputs[player_index].checksum == held.checksum)
+		{
+			csmemcpy(&inputs[taken], &distributed_held_inputs[player_index].input, sizeof(inputs[taken]));
+			inputs[taken].tick = held.tick;
+			inputs[taken].host_time = held.host_time;
+			inputs[taken].pad = held.pad;
+			taken++;
+		}
+		else
+		{
+			csmemset(&echoes[echo_count], 0, sizeof(echoes[echo_count]));
+			echoes[echo_count].player_index = (byte)player_index;
+			echoes[echo_count].tick = held.tick;
+			echoes[echo_count].host_time = held.host_time;
+			echoes[echo_count].pad = held.pad;
+			echo_count++;
+		}
+	}
+	/* (the held ones' word on the ticks with the inputs taken, else alone:
+	once a message, as a whole input's) */
+	if (taken)
+		distributed_handle_inputs(machine_index, inputs, taken, taken);
+	else if (echo_count)
+		distributed_handle_inputs(machine_index, echoes, echo_count, 0);
 }
 
 /* the cluster the object (or what it rides) is in, NONE for none */
@@ -7302,6 +7579,12 @@ static void distributed_reset_checkpoint_state(boolean reset_received_times)
 	/* (the host's next state whole to every client) */
 	distributed_game_state_sent_size = 0;
 	csmemset(distributed_game_state_machines, 0, sizeof(distributed_game_state_machines));
+	/* (a client's inputs and predictions whole again, and none held taken
+	until they come) */
+	csmemset(distributed_inputs_held_sent, 0, sizeof(distributed_inputs_held_sent));
+	csmemset(distributed_predictions_held_sent, 0, sizeof(distributed_predictions_held_sent));
+	csmemset(distributed_held_inputs, 0, sizeof(distributed_held_inputs));
+	csmemset(distributed_held_predictions, 0, sizeof(distributed_held_predictions));
 	distributed_host_update_number = NONE;
 	distributed_sent_structure_bsp_index = NONE;
 	distributed_pickup_count = 0;
@@ -7744,6 +8027,8 @@ static boolean distributed_message_stale(
 	case _distributed_message_object_states:
 	case _distributed_message_vehicle_prediction:
 	case _distributed_message_player_inputs:
+	case _distributed_message_player_inputs_held:
+	case _distributed_message_player_prediction_held:
 	case _distributed_message_relayed_actions:
 	case _distributed_message_damage_events:
 	case _distributed_message_actor_states:
@@ -7771,7 +8056,11 @@ static boolean distributed_message_stale(
 		return FALSE;
 	if (sender < 0 || sender >= MAXIMUM_SENDERS)
 		return TRUE;
-	latest = &distributed_received_times[sender][header->type];
+	/* (a held input or prediction by the kind it repeats: none older than a
+	whole one had, nor a whole one older than a held one) */
+	latest = &distributed_received_times[sender][header->type == _distributed_message_player_inputs_held ?
+		_distributed_message_player_inputs : header->type == _distributed_message_player_prediction_held ?
+		_distributed_message_player_prediction : header->type];
 	/* (a tick's several messages of a kind have its time alike; a latest no
 	clock could have run gives way, as an input's does) */
 	if (*latest != NONE && header->game_time < *latest &&
@@ -8811,6 +9100,7 @@ static boolean distributed_world_gate(
 	{
 		distributed_note_client_clock(machine_index, header->game_time);
 		if ((header->type == _distributed_message_player_prediction ||
+				header->type == _distributed_message_player_prediction_held ||
 				header->type == _distributed_message_vehicle_prediction ||
 				header->type == _distributed_message_player_substeps ||
 				header->type == _distributed_message_player_live_controls) &&
@@ -9016,6 +9306,8 @@ void network_distributed_handle_message(
 	case _distributed_message_chat_down: entry_size = network_chat_line_entry_size(); break;
 	case _distributed_message_chat_config: entry_size = network_chat_config_entry_size(); break;
 	case _distributed_message_player_inputs: entry_size = sizeof(struct distributed_player_input); break;
+	case _distributed_message_player_inputs_held:
+	case _distributed_message_player_prediction_held: entry_size = sizeof(struct distributed_player_held); break;
 	case _distributed_message_relayed_actions: entry_size = DISTRIBUTED_RELAYED_ACTION_MINIMUM_SIZE; break;
 	case _distributed_message_forwarded_inputs: entry_size = DISTRIBUTED_FORWARDED_INPUT_MINIMUM_SIZE; break;
 	case _distributed_message_game_state:
@@ -9076,6 +9368,8 @@ void network_distributed_handle_message(
 	case _distributed_message_hit_reports:
 	case _distributed_message_vehicle_prediction:
 	case _distributed_message_player_inputs:
+	case _distributed_message_player_inputs_held:
+	case _distributed_message_player_prediction_held:
 	case _distributed_message_coop_skip_vote:
 	case _distributed_message_votekick:
 	case _distributed_message_chat_up:
@@ -9383,7 +9677,13 @@ void network_distributed_handle_message(
 		network_objects_handle_vehicle_prediction(machine_index, entries, header.count);
 		break;
 	case _distributed_message_player_inputs:
-		distributed_handle_inputs(machine_index, (struct distributed_player_input const *)entries, header.count);
+		distributed_handle_inputs(machine_index, (struct distributed_player_input const *)entries, header.count,
+			header.count);
+		break;
+	case _distributed_message_player_inputs_held:
+	case _distributed_message_player_prediction_held:
+		distributed_handle_held(machine_index, header.type, header.game_time,
+			(struct distributed_player_held const *)entries, header.count);
 		break;
 	case _distributed_message_relayed_actions:
 		distributed_handle_actions((byte const *)entries, (byte const *)message + size, header.count);
