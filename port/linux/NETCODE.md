@@ -2632,15 +2632,21 @@ validation gates; native results do not establish browser compatibility.
      one whose timer starts once it bounces or rests, a weapon's own
      detonation; no line of sight); the target within a few world units of
      where the host had it at the tick the report was made at (a player's
-     unit or vehicle: the host keeps a second of where they were) or of
+     unit or vehicle: the host keeps where they were for as long as a
+     report may be old, and looks from that tick to now) or of
      where it is (more for a fast one; also for one that is no longer a
      player's, a body or a vehicle left);
      and no more reports than the weapon that deals them fires (its rate of
      fire and projectiles a shot, with a margin; an explosion's hits count
      as one, when its damage has a reach, and no object is hit twice by
      one, the explosions of each player's reports told apart on their
-     own). A report made more than three seconds ago (a burst of them held
-     back while the network was out) is refused. A report is paid for
+     own). The tick a report says it was made at is the client's word, so
+     it is believed only as far back as the host measures that client's
+     round trip and a second (three seconds at most): a report claiming an
+     older one (a burst of them held back while the network was out, or a
+     client choosing where its target was) is refused. A player slot taken
+     by another player starts afresh (the recent weapons, throws and trail
+     of the one before are not theirs). A report is paid for
      before the host looks through its history, so a flood of them costs
      the sender its hits. The damage is dealt as a client's own hit can
      be: only the flags such a hit has, area damage as the game deals that

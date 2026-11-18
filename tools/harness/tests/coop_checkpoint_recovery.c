@@ -149,7 +149,7 @@ static struct {
     struct {long time;} stuck[MAXIMUM_STUCK_PROJECTILES];
     real hit_seconds;
 } damage_players[MAXIMUM_TRACKED_PLAYERS];
-static struct {long time;} damage_history[TARGET_HISTORY_TICKS];
+static struct {long time;struct {long object_index;} objects[MAXIMUM_TRACKED_PLAYERS][2];} damage_history[TARGET_HISTORY_TICKS];
 static struct {long time;short count;} damage_explosions[MAXIMUM_TRACKED_PLAYERS];
 static struct {long time;} damage_trails[MAXIMUM_TRACKED_PLAYERS][PLAYER_TRAIL_POINTS];
 static struct {long time;} damage_fire_origins[MAXIMUM_TRACKED_PLAYERS];
