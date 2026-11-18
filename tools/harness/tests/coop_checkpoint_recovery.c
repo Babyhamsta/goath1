@@ -153,6 +153,7 @@ static struct {long time;struct {long object_index;} objects[MAXIMUM_TRACKED_PLA
 static struct {long time;short count;} damage_explosions[MAXIMUM_TRACKED_PLAYERS];
 static struct {long time;} damage_trails[MAXIMUM_TRACKED_PLAYERS][PLAYER_TRAIL_POINTS];
 static struct {long time;} damage_fire_origins[MAXIMUM_TRACKED_PLAYERS];
+static struct {long time;real ticks;} damage_round_trips[MAXIMUM_TRACKED_PLAYERS][ROUND_TRIP_WINDOW_TICKS];
 static struct {long source_index;} damage_rate_cache[DAMAGE_RATE_CACHE_SIZE];
 static int checkpoint_prediction_resets;
 static void distributed_reset_checkpoint_state(boolean reset_received_times) {

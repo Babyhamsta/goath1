@@ -160,6 +160,16 @@ enum
 	report the host takes can be about, so that the oldest is checked against
 	where the target was then, not where it has been since */
 	TARGET_HISTORY_TICKS = REPORT_MAXIMUM_AGE_TICKS + TARGET_HISTORY_SLACK_TICKS + 1,
+	/* how long the worst round trip the host measured for a player's
+	machine bounds that player's reports (distributed_report_earliest), not
+	the smoothed one, which falls back within a second of a lag spike: as
+	long as a report may be old. A report delayed by a spike (sent again on
+	the stream after a loss among them) is taken at most
+	REPORT_MAXIMUM_AGE_TICKS after it was made, and the inputs sent with it,
+	whose echoed ticks measure that delay, came no earlier than it was made:
+	so their measurement is still within the window whenever the report
+	comes. Ticks are the game's, so it is three seconds at every rate */
+	ROUND_TRIP_WINDOW_TICKS = REPORT_MAXIMUM_AGE_TICKS,
 	/* the players whose machines a unit's damage goes to, told (the unit's,
 	its riders', its owner's): with more, it goes to every machine */
 	MAXIMUM_EVENT_PLAYERS = 8,
@@ -498,6 +508,14 @@ static struct damage_history_tick
 		boolean driving;
 	} objects[MAXIMUM_TRACKED_PLAYERS][2];
 } damage_history[TARGET_HISTORY_TICKS];
+/* ... each player's machine's round trip as the host measured it at each of
+the last ticks (distributed_note_round_trips; the tick's time, NONE for
+none), by the tick's time */
+static struct damage_round_trip
+{
+	long time;
+	real ticks;
+} damage_round_trips[MAXIMUM_TRACKED_PLAYERS][ROUND_TRIP_WINDOW_TICKS];
 
 /* the history's tick of the time (its slot: a tick's time, NONE if it holds
 another tick) */
@@ -2309,17 +2327,50 @@ static boolean distributed_player_drove_into(
 	return FALSE;
 }
 
-/* the earliest of the host's ticks a machine's report may say it was made
-at: as long ago as the host measures that machine's round trip, and
-REPORT_DELAY_SLACK_TICKS more, but no more than REPORT_MAXIMUM_AGE_TICKS
-(which the history holds). The report's time is the client's word, so it is
-believed only within what the host knows of the machine's delay: a report
-that says it is older (to be checked against where its target was at a
-moment of its choosing) is refused */
-static long distributed_report_earliest(
-	long machine_index)
+/* the worst round trip the host has measured for a player's machine over
+the last ROUND_TRIP_WINDOW_TICKS, now's among them: each the host's own
+measure (the ticks of its own that the machine's inputs echo,
+network_distributed.c, capped there), none the client's word on a report.
+A client that echoes old ticks all the while is a high-ping player, as it
+would be without the window */
+static real distributed_worst_round_trip(
+	long machine_index,
+	short player_index)
 {
-	real age = distributed_machine_round_trip_ticks(machine_index) + (real)REPORT_DELAY_SLACK_TICKS;
+	long now = game_time_get();
+	real worst = distributed_machine_round_trip_ticks(machine_index);
+	short index;
+
+	if (player_index < 0 || player_index >= MAXIMUM_TRACKED_PLAYERS)
+		return worst;
+	for (index = 0; index < ROUND_TRIP_WINDOW_TICKS; index++)
+	{
+		struct damage_round_trip const *noted = &damage_round_trips[player_index][index];
+
+		if (noted->time != NONE && noted->time <= now && now - noted->time < ROUND_TRIP_WINDOW_TICKS &&
+			noted->ticks > worst)
+		{
+			worst = noted->ticks;
+		}
+	}
+	return worst;
+}
+
+/* the earliest of the host's ticks a machine's player's report may say it
+was made at: as long ago as the worst round trip the host measured for that
+machine lately, and REPORT_DELAY_SLACK_TICKS more, but no more than
+REPORT_MAXIMUM_AGE_TICKS (which the history holds). The report's time is
+the client's word, so it is believed only within what the host knows of the
+machine's delay: a report that says it is older (to be checked against
+where its target was at a moment of its choosing) is refused. (A report
+carries no echo of its own: it comes on the stream, the echoed ticks in
+the inputs' datagrams, so one that comes before them is judged by what
+they told before) */
+static long distributed_report_earliest(
+	long machine_index,
+	short player_index)
+{
+	real age = distributed_worst_round_trip(machine_index, player_index) + (real)REPORT_DELAY_SLACK_TICKS;
 
 	return game_time_get() - (age < (real)REPORT_MAXIMUM_AGE_TICKS ? (long)age : REPORT_MAXIMUM_AGE_TICKS);
 }
@@ -2339,7 +2390,7 @@ static boolean distributed_player_could_fire(
 {
 	real ticks = reach->ticks;
 	long earliest;
-	long latest_made = distributed_report_earliest(machine_index);
+	long latest_made = distributed_report_earliest(machine_index, player_index);
 	short index;
 
 	if (host_time < latest_made)
@@ -2363,7 +2414,8 @@ static boolean distributed_player_could_fire(
 }
 
 /* the host's word on a player slot's player, forgotten: what they carried,
-threw, fired from and paid for, and where they were */
+threw, fired from and paid for, where they were, and their machine's round
+trips */
 static void distributed_reset_player_slot(
 	short player_index)
 {
@@ -2384,6 +2436,8 @@ static void distributed_reset_player_slot(
 	for (index = 0; index < PLAYER_TRAIL_POINTS; index++)
 		damage_trails[player_index][index].time = NONE;
 	damage_fire_origins[player_index].time = NONE;
+	for (index = 0; index < ROUND_TRIP_WINDOW_TICKS; index++)
+		damage_round_trips[player_index][index].time = NONE;
 	for (index = 0; index < TARGET_HISTORY_TICKS; index++)
 	{
 		damage_history[index].objects[player_index][0].object_index = NONE;
@@ -2406,6 +2460,28 @@ static void distributed_note_player_slot(
 	if (damage_players[player_index].identifier != 0)
 		distributed_reset_player_slot(player_index);
 	damage_players[player_index].identifier = identifier;
+}
+
+/* (the host, in its tick) each client player's machine's round trip as the
+host measures it now, noted at the tick's time (distributed_worst_round_trip);
+a player on no client machine none */
+static void distributed_note_round_trips(
+	void)
+{
+	long now = game_time_get();
+	long slot = now % ROUND_TRIP_WINDOW_TICKS;
+	short player_index;
+
+	if (slot < 0)
+		slot += ROUND_TRIP_WINDOW_TICKS;
+	for (player_index = 0; player_index < MAXIMUM_TRACKED_PLAYERS; player_index++)
+	{
+		struct damage_round_trip *noted = &damage_round_trips[player_index][slot];
+		long machine_index = distributed_player(player_index) ? distributed_player_machine(player_index) : NONE;
+
+		noted->time = machine_index == NONE ? NONE : now;
+		noted->ticks = machine_index == NONE ? 0.0f : distributed_machine_round_trip_ticks(machine_index);
+	}
 }
 
 /* the weapons each player carries, and whether they drive, noted */
@@ -2673,7 +2749,7 @@ static boolean distributed_report_line_of_sight(
 		FLAG(_collision_test_ignore_invisible_surfaces_bit) | FLAG(_collision_test_ignore_breakable_surfaces_bit) |
 		FLAG(_collision_test_ignore_two_sided_surfaces_bit);
 	real ticks = reach->ticks > 0.0f ? MIN(reach->ticks, (real)PLAYER_TRAIL_TICKS) : (real)REPORT_LINE_OF_SIGHT_TICKS;
-	long latest_made = distributed_report_earliest(machine_index);
+	long latest_made = distributed_report_earliest(machine_index, player_index);
 	long newest = game_time_get() / PLAYER_TRAIL_INTERVAL_TICKS;
 	long earliest;
 	long bucket;
@@ -2862,7 +2938,7 @@ static boolean distributed_report_valid(
 	took to come (sent again, reliably), where the shooter saw the target. The
 	history holds every tick that leaves to look back over */
 	if (report->host_time == NONE || report->host_time > now ||
-		report->host_time < distributed_report_earliest(machine_index))
+		report->host_time < distributed_report_earliest(machine_index, player_index))
 	{
 		REFUSE(_report_refused_age);
 	}
@@ -3364,6 +3440,7 @@ void network_damage_host_tick(
 	distributed_log_reports();
 	for (player_index = 0; player_index < MAXIMUM_TRACKED_PLAYERS; player_index++)
 		distributed_note_player_slot(player_index);
+	distributed_note_round_trips();
 	distributed_note_weapons();
 	distributed_note_targets();
 	distributed_note_stuck_projectiles();

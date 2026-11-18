@@ -2659,10 +2659,17 @@ validation gates; native results do not establish browser compatibility.
      as one, when its damage has a reach, and no object is hit twice by
      one, the explosions of each player's reports told apart on their
      own). The tick a report says it was made at is the client's word, so
-     it is believed only as far back as the host measures that client's
-     round trip and a second (three seconds at most): a report claiming an
-     older one (a burst of them held back while the network was out, or a
-     client choosing where its target was) is refused. A player slot taken
+     it is believed only as far back as the worst round trip the host
+     measured for that client over the last three seconds (from the ticks
+     its inputs echo, never the report's own word) and a second, three
+     seconds at most: a report claiming an older one (a burst of them held
+     back while the network was out, or a client choosing where its target
+     was) is refused. The worst, not the smoothed round trip, so that the
+     reports a lag spike delayed, sent again on the stream among them, are
+     still taken after the smoothed one has fallen back; three seconds
+     because that is as old as any report taken may be. A report on the
+     stream that comes before any of its client's delayed inputs has only
+     the earlier measure to go by. A player slot taken
      by another player starts afresh (the recent weapons, throws and trail
      of the one before are not theirs). A report is paid for
      before the host looks through its history, so a flood of them costs

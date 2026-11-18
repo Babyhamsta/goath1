@@ -13,6 +13,12 @@ its machine's delay allows is refused, whatever its target. Ticks are the
 game's (30 a second at every rate): a 60 or 120 Hz shooter's sub-step pose
 is taken alike. Also the per-slot reset (distributed_note_player_slot): a
 joiner in a quitter's slot does not inherit the quitter's recent weapons.
+The round trip that bounds a report is the worst the host measured for
+its machine over the last ROUND_TRIP_WINDOW_TICKS (noted each tick,
+distributed_note_round_trips), so a low-ping client's reports delayed by a
+lag spike are taken after its smoothed round trip has fallen back, the
+bound tightens again once the window has passed, a claim no measurement
+supports is refused, and a reused slot's window starts empty.
 test_hit_report_time.py takes the code (under_test.inc) and the constants
 (config.inc).
 */
@@ -42,6 +48,7 @@ enum
 	HIT_REPORT_BURST_SECONDS = 3,
 	TARGET = 0x10001,
 	TARGET_PLAYER = 1,
+	SHOOTER = 0,
 	ROCKET = 0x20002,
 };
 
@@ -59,6 +66,14 @@ static real distributed_machine_round_trip_ticks(long machine_index)
 {
 	(void)machine_index;
 	return round_trip;
+}
+
+/* each player's machine (the shooter's 0, another client's 1; NONE: none) */
+static long player_machines[MAXIMUM_TRACKED_PLAYERS] = { 0, 1, 0, 0 };
+
+static long distributed_player_machine(short player_index)
+{
+	return player_machines[player_index];
 }
 
 /* the host's history (network_damage.c's damage_history) */
@@ -93,6 +108,11 @@ static struct
 static struct { long time; short count; } damage_explosions[MAXIMUM_TRACKED_PLAYERS];
 static struct { long time; } damage_trails[MAXIMUM_TRACKED_PLAYERS][PLAYER_TRAIL_POINTS];
 static struct { long time; } damage_fire_origins[MAXIMUM_TRACKED_PLAYERS];
+static struct damage_round_trip
+{
+	long time;
+	real ticks;
+} damage_round_trips[MAXIMUM_TRACKED_PLAYERS][ROUND_TRIP_WINDOW_TICKS];
 
 struct player_datum
 {
@@ -161,7 +181,23 @@ static boolean taken(long made, real seen, real speed)
 	report.object_index = TARGET;
 	report.host_time = made;
 	report.target_position = target_at(seen, speed);
-	return report_checked(0, &report, &host_pose);
+	return report_checked(0, SHOOTER, &report, &host_pose);
+}
+
+/* the host's ticks run on, its measure of the shooter's machine's round
+trip (its smoothed one, average and jitter) trip all the while, noted each
+tick; the target's history up to the last */
+static void ticks_with(long count, real trip, real speed)
+{
+	long index;
+
+	round_trip = trip;
+	for (index = 0; index < count; index++)
+	{
+		now++;
+		distributed_note_round_trips();
+	}
+	history(speed);
 }
 
 int main(int argc, char **argv)
@@ -170,6 +206,17 @@ int main(int argc, char **argv)
 	real const speed = 0.25f;
 
 	now = 5000;
+	{
+		short player;
+		short index;
+
+		for (player = 0; player < MAXIMUM_TRACKED_PLAYERS; player++)
+		{
+			players[player].identifier = (word)(player + 1);
+			for (index = 0; index < ROUND_TRIP_WINDOW_TICKS; index++)
+				damage_round_trips[player][index].time = NONE;
+		}
+	}
 
 	/* a shooter on a slow link (the longest round trip the host measures)
 	hits a running target where it saw it, at each age the link gives,
@@ -269,6 +316,56 @@ int main(int argc, char **argv)
 		return 0;
 	}
 
+	/* a low-ping client (4 ticks) whose round trip jumps to 45 for half a
+	second, then falls back (the smoothed measure within a second): its
+	reports delayed by the spike, and those sent again on the stream after
+	it, are taken while the spike's measurement is within the window, as
+	old as that round trip and the slack allow and no older */
+	CASE("spike-taken")
+	{
+		ticks_with(300, 4.0f, speed);
+		CHECK(!taken(now - 45, (real)(now - 45), speed), "a 4-tick client's report 45 ticks old, no spike measured: taken");
+		ticks_with(1, 45.0f, speed);
+		CHECK(taken(now - 45, (real)(now - 45), speed), "a report delayed by the spike as it is measured: refused");
+		ticks_with(14, 45.0f, speed);
+		ticks_with(30, 5.0f, speed);
+		CHECK(taken(now - 70, (real)(now - 70), speed),
+			"a report made in the spike, sent again, 70 ticks old a second after it (round trip back to 5): refused");
+		CHECK(!taken(now - 45 - REPORT_DELAY_SLACK_TICKS - 1, (real)(now - 76), speed),
+			"a report older than the spike's round trip and the slack: taken");
+		return 0;
+	}
+
+	/* once the window has passed with the round trip low again, the bound
+	tightens back to it */
+	CASE("spike-tightens")
+	{
+		ticks_with(300, 4.0f, speed);
+		ticks_with(15, 45.0f, speed);
+		ticks_with(ROUND_TRIP_WINDOW_TICKS - 1, 5.0f, speed);
+		CHECK(taken(now - 70, (real)(now - 70), speed), "the spike forgotten before the window passed");
+		ticks_with(1, 5.0f, speed);
+		CHECK(!taken(now - 70, (real)(now - 70), speed), "a report 70 ticks old a window after the spike: taken");
+		CHECK(taken(now - 5 - REPORT_DELAY_SLACK_TICKS, (real)(now - 35), speed),
+			"a report as old as the low round trip and the slack: refused");
+		return 0;
+	}
+
+	/* a client claiming an old time with no measured delay behind it
+	(steady at 4 ticks; another client's spike is not its own): refused */
+	CASE("unsupported-claim")
+	{
+		ticks_with(300, 4.0f, speed);
+		CHECK(!taken(now - 70, (real)(now - 70), speed), "a 4-tick client claiming 70 ticks: taken");
+		CHECK(!taken(now - 4 - REPORT_DELAY_SLACK_TICKS - 1, (real)(now - 35), speed), "a claim past its round trip: taken");
+		CHECK(taken(now - 4 - REPORT_DELAY_SLACK_TICKS, (real)(now - 34), speed), "a claim within its round trip: refused");
+		/* (the other client's machine's 60 ticks noted in its slot) */
+		damage_round_trips[1][(now + 1) % ROUND_TRIP_WINDOW_TICKS].time = now;
+		damage_round_trips[1][(now + 1) % ROUND_TRIP_WINDOW_TICKS].ticks = 60.0f;
+		CHECK(!taken(now - 70, (real)(now - 70), speed), "another client's spike widened this one's: taken");
+		return 0;
+	}
+
 	/* a joiner in a quitter's slot starts afresh (the quitter's rocket not
 	theirs); the same player keeps theirs; one in an empty slot adopts it */
 	CASE("slot-reused")
@@ -296,6 +393,16 @@ int main(int argc, char **argv)
 			"a joiner in an empty slot not given a fresh slot");
 		/* (another slot untouched) */
 		CHECK(damage_players[1].identifier == 0, "another slot changed");
+		/* (the quitter's lag spike not the joiner's) */
+		memset(damage_players, 0, sizeof(damage_players));
+		players[SHOOTER].identifier = 7;
+		distributed_note_player_slot(SHOOTER);
+		ticks_with(10, 60.0f, 0.0f);
+		ticks_with(1, 4.0f, 0.0f);
+		CHECK(taken(now - 80, (real)now, 0.0f), "the quitter's spike not taken into account");
+		players[SHOOTER].identifier = 8;
+		distributed_note_player_slot(SHOOTER);
+		CHECK(!taken(now - 80, (real)now, 0.0f), "a joiner inherited the quitter's round trips");
 		return 0;
 	}
 
