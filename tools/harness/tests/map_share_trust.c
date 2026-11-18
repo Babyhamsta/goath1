@@ -474,6 +474,35 @@ int main(int argc, char **argv)
 			"another machine in the slot waited for the last's turn");
 		return 0;
 	}
+	/* a transfer is of the map it named: the game on another map ends it at
+	once (the client ends its own and says nothing), so the machine is not
+	taken for downloading the new map, and starts with the others; back on
+	the first map, the old transfer does not come back */
+	CASE("map-change-ends-transfer")
+	{
+		host_setup();
+		host_ask();
+		host_told(MAP_SHARE_PIECE_BYTES);
+		CHECK(map_share_machine_downloading(3) && map_share_machine_needs_map(3), "an offered machine is not downloading");
+		/* (the host's game on a map the machine has; no word from it) */
+		strcpy(fake_game.map.name, "custom_maps\\bloodgulch");
+		fake_now += 100;
+		CHECK(!map_share_machine_needs_map(3), "a machine was held for the last map's transfer after the map changed");
+		CHECK(!map_share_machine_downloading(3), "a machine was taken for downloading the new map");
+		host_update();
+		CHECK(!map_share_globals.machines[3].downloading && !map_share_globals.machines[3].asked,
+			"the last map's transfer was kept");
+		/* (back on the first map within the time a silent machine is kept) */
+		strcpy(fake_game.map.name, "custom_maps\\hugeass");
+		fake_now += 100;
+		host_update();
+		CHECK(!map_share_machine_downloading(3), "the transfer the map change ended came back with its map");
+		/* (a request for the game's map now starts one) */
+		fake_now += MAP_REQUEST_INTERVAL + 1;
+		host_ask();
+		CHECK(map_share_machine_downloading(3), "a request for the game's map did not start a transfer");
+		return 0;
+	}
 	fprintf(stderr, "unknown case: %s\n", case_name);
 	return 2;
 }

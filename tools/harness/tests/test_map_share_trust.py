@@ -11,7 +11,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from harness import CHECK_FAILED, build, constant, enum_with, function, mutated, read, run, structure  # noqa: E402
 
 CASES = ["source-addresses", "hashes-sources", "hashes-frames", "progress-advances", "progress-asked-again",
-         "progress-other-level-between", "offer-of-the-version", "requests-apart", "requests-apart-after-another-level"]
+         "progress-other-level-between", "offer-of-the-version", "requests-apart", "requests-apart-after-another-level",
+         "map-change-ends-transfer"]
 
 # a fault in map_share.c, the function it is in, and the case that must catch it
 NEGATIVE_CONTROLS = {
@@ -47,11 +48,16 @@ NEGATIVE_CONTROLS = {
                              "requests-apart"),
     "waiting-request-overlooked": ((" && !machine->request_waiting)", ")"), "host_update",
                                    "requests-apart-after-another-level"),
+    # the code before: a transfer kept until the machine was silent long enough, whatever the game's map
+    "transfer-outlives-its-map": (("machine->downloading && host_machine_transfer_current(machine) &&",
+                                   "machine->downloading &&"), "host_machine_downloading", "map-change-ends-transfer"),
+    "transfer-kept-past-its-map": (("(machine->asked || machine->downloading) && !host_machine_transfer_current(machine)",
+                                    "0"), "host_update", "map-change-ends-transfer"),
 }
 
 FUNCTIONS = ("get_long", "elapsed", "address_internet", "address_private", "source_address_allowed", "hashes_source",
-             "frame_hashes", "host_machine_valid", "host_machine_downloading", "map_share_machine_downloading",
-             "map_share_machine_needs_map", "level_name_copy", "host_offer", "host_request", "host_asked",
+             "frame_hashes", "host_machine_valid", "host_machine_transfer_current", "host_machine_downloading",
+             "map_share_machine_downloading", "map_share_machine_needs_map", "level_name_copy", "host_offer", "host_request", "host_asked",
              "host_update", "host_progress")
 
 
