@@ -306,6 +306,13 @@ enum
 	against the one before (distributed_unit_entry_join), which the client
 	makes back into the message they came from (157 is kept for another kind) */
 	_distributed_message_unit_state_differences_joined = 158,
+	/* an OpenH1 game's relayed input of the players to its OpenH1 clients
+	(network_distributed.c, unreliable), in place of
+	_distributed_message_relayed_actions unless debug.network_forms_before:
+	each entry without the parts at their usual values and its player where
+	it is the one after the entry before's (distributed_relayed_action_pack),
+	which the client makes back into the message they came from */
+	_distributed_message_relayed_actions_packed = 159,
 
 	NUMBER_OF_DISTRIBUTED_MESSAGES
 };

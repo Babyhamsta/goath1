@@ -95,6 +95,8 @@ static int world_kind(byte type);
 static word network_objects_unpack_states(void const *m,word s,void *u,word mx){(void)m;(void)s;(void)u;(void)mx;return 0;}
 #define DISTRIBUTED_UNIT_STATE_MAXIMUM_SIZE 128
 static word distributed_unit_differences_unjoin(void const *m,word s,void *u,word mx){(void)m;(void)s;(void)u;(void)mx;return 0;}
+#define DISTRIBUTED_RELAYED_ACTION_MAXIMUM_SIZE 20
+static word distributed_relayed_actions_unpack(void const *m,word s,void *u,word mx){(void)m;(void)s;(void)u;(void)mx;return 0;}
 '''
     sizes = sorted(set(re.findall(r"\b(\w+_entry_size|\w+_minimum_size)\(", dispatch)) - {"network_objects_entry_size"})
     prefix += "\n".join(f"#define {name}(...) 1" for name in sizes) + "\n"
@@ -528,6 +530,8 @@ static struct {long unit_index;} distributed_host_speeds[2];
 static int distributed_input_facings[2],distributed_seen[2],distributed_viewers[2];
 static int distributed_sends[2],distributed_host_states[2],distributed_host_actions[2];
 static int distributed_sent_statistics[2],distributed_statistics_cursor,distributed_statistics_due;
+static int distributed_statistics_openh1_cursor;
+static long distributed_statistics_repeat_times[2];
 static long distributed_game_state_checksum,distributed_game_state_time,distributed_host_update_number;
 static long distributed_sent_structure_bsp_index,distributed_pickup_count;
 static struct {boolean valid;} distributed_machines;

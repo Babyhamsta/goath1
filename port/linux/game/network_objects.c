@@ -124,8 +124,15 @@ enum
 {
 	INVENTORY_INTERVAL_TICKS = 3,
 	/* a unit's inventory is sent this often even unchanged (one lost is
-	made good) */
+	made good): to an OpenCE machine, every machine where
+	debug.network_forms_before, and its own unit's client; to another OpenH1
+	client every INVENTORY_OPENH1_REFRESHES of them, which has a change of
+	its weapons or grenades twice, at once and the next round (as rare as two
+	lost datagrams a tenth of a second apart, a change lost twice heals by
+	then; its ammunition goes as it changes, and goes on going a while after,
+	by how near) */
 	INVENTORY_REFRESH_TICKS = TICKS_PER_SECOND,
+	INVENTORY_OPENH1_REFRESHES = 5,
 	/* ... and a unit's that has come to carry nothing, for this long after */
 	EMPTY_INVENTORY_TICKS = 3 * INVENTORY_REFRESH_TICKS,
 	/* the host's objects at rest sent again unchanged, round them all: each
@@ -401,7 +408,9 @@ once) */
 static unsigned long objects_host_seen[HALO_PORT_MAXIMUM_NETWORK_MACHINES][BIT_VECTOR_SIZE_IN_LONGS(MAXIMUM_TRACKED_OBJECTS)];
 /* ... what each unit's inventory was last sent as (in all, and its weapons
 and grenades), when to every client, and when its ammunition alone last
-changed (NONE: not since); when it last carried anything (NONE: never) */
+changed (NONE: not since); when it last carried anything (NONE: never); its
+refreshes since its weapons last changed, and whether that change is to go
+again to the OpenH1 clients (INVENTORY_OPENH1_REFRESHES) */
 static struct
 {
 	unsigned long checksum;
@@ -409,6 +418,8 @@ static struct
 	long time;
 	long ammunition_time;
 	long carried_time;
+	short refreshes;
+	boolean repeat;
 } objects_host_inventories[MAXIMUM_TRACKED_OBJECTS];
 /* ... each client machine, found once a tick: where its players' living
 units are, those units, and the vehicles they drive (with the player's
@@ -2205,14 +2216,21 @@ static unsigned long distributed_checksum(
 /* the kinds of inventories sent this time */
 enum
 {
-	/* its weapons or grenades changed, or not sent for a while: to every
-	client */
+	/* its weapons or grenades changed: to every client (and again the next
+	round to the OpenH1 ones) */
 	_host_inventory_to_all,
+	/* ... not sent for a while: to every OpenCE client (and every client
+	where debug.network_forms_before) and its own, and to the other OpenH1
+	clients every INVENTORY_OPENH1_REFRESHES of these */
+	_host_inventory_refresh,
 	/* its ammunition alone changed: to its own client, and to the others as
 	often as they are sent where it is */
 	_host_inventory_ammunition,
 	/* ... not now, but lately: to the others, in their turn */
 	_host_inventory_ammunition_lately,
+	/* (to a client) to it only where its own unit's: a refresh of another
+	OpenH1 client's not of its turn */
+	_host_inventory_own,
 };
 
 /* what every unit carries, when that has changed or not been sent for a
@@ -2225,6 +2243,10 @@ static void distributed_host_send_inventories(
 {
 	static struct distributed_inventory inventories[MAXIMUM_TRACKED_OBJECTS];
 	static byte kinds[MAXIMUM_TRACKED_OBJECTS];
+	/* (to the OpenH1 clients besides its kind's: its weapons' change again,
+	or a refresh of theirs) */
+	static boolean openh1_sends[MAXIMUM_TRACKED_OBJECTS];
+	boolean before = config_boolean("debug.network_forms_before");
 	static real_point3d origins[MAXIMUM_TRACKED_OBJECTS];
 	struct distributed_inventory_message message;
 	short limit = MIN(MAXIMUM_ENTRIES_PER_MESSAGE, DATAGRAM_ENTRIES(struct distributed_inventory));
@@ -2244,6 +2266,7 @@ static void distributed_host_send_inventories(
 		unsigned long checksum;
 		unsigned long weapons_checksum;
 		byte kind;
+		boolean openh1_send = FALSE;
 
 		for (weapon_slot = 0; weapon_slot < MAXIMUM_WEAPONS_PER_UNIT; weapon_slot++)
 			carries |= unit->unit.weapon_object_indices[weapon_slot] != NONE;
@@ -2263,12 +2286,21 @@ static void distributed_host_send_inventories(
 		/* (its weapons, the one in hand and its grenades: the bytes up to the
 		ammunition) */
 		weapons_checksum = distributed_checksum(inventory, (long)offsetof(struct distributed_inventory, rounds_total));
-		if (objects_host_inventories[absolute_index].weapons_checksum != weapons_checksum ||
-			game_time_get() - objects_host_inventories[absolute_index].time >= INVENTORY_REFRESH_TICKS)
+		if (objects_host_inventories[absolute_index].weapons_checksum != weapons_checksum)
 		{
 			kind = _host_inventory_to_all;
 			objects_host_inventories[absolute_index].time = game_time_get();
 			objects_host_inventories[absolute_index].ammunition_time = NONE;
+			objects_host_inventories[absolute_index].refreshes = 0;
+			objects_host_inventories[absolute_index].repeat = TRUE;
+		}
+		else if (game_time_get() - objects_host_inventories[absolute_index].time >= INVENTORY_REFRESH_TICKS)
+		{
+			kind = _host_inventory_refresh;
+			objects_host_inventories[absolute_index].time = game_time_get();
+			objects_host_inventories[absolute_index].ammunition_time = NONE;
+			objects_host_inventories[absolute_index].refreshes++;
+			openh1_send = objects_host_inventories[absolute_index].refreshes % INVENTORY_OPENH1_REFRESHES == 0;
 		}
 		else if (objects_host_inventories[absolute_index].checksum != checksum)
 		{
@@ -2283,23 +2315,43 @@ static void distributed_host_send_inventories(
 		}
 		else
 		{
-			continue;
+			kind = (byte)NONE;
 		}
+		/* (a change of its weapons again, the round after, whatever else) */
+		if (kind != _host_inventory_to_all && objects_host_inventories[absolute_index].repeat)
+		{
+			objects_host_inventories[absolute_index].repeat = FALSE;
+			openh1_send = TRUE;
+		}
+		if (kind == (byte)NONE && !openh1_send)
+			continue;
 		objects_host_inventories[absolute_index].checksum = checksum;
 		objects_host_inventories[absolute_index].weapons_checksum = weapons_checksum;
 		kinds[inventory_count] = kind;
+		openh1_sends[inventory_count] = openh1_send;
 		object_get_origin(iterator.index, &origins[inventory_count]);
 		inventory_count++;
 	}
 	for (machine_number = 0; machine_number < objects_host_viewers.count; machine_number++)
 	{
 		long machine_index = objects_host_viewers.indices[machine_number];
+		boolean openh1 = !before && !network_legacy_machine(machine_index);
 		short count = 0;
 		long index;
 
 		for (index = 0; index < inventory_count; index++)
 		{
-			if (kinds[index] != _host_inventory_to_all)
+			byte kind = kinds[index];
+
+			/* (an OpenH1 client's: a change again, a refresh of its turn; a
+			refresh of another's not of its turn only to the unit's own client) */
+			if (openh1 && openh1_sends[index])
+				kind = _host_inventory_to_all;
+			else if (kind == _host_inventory_refresh)
+				kind = openh1 ? _host_inventory_own : _host_inventory_to_all;
+			if (kind == (byte)NONE)
+				continue;
+			if (kind != _host_inventory_to_all)
 			{
 				long absolute_index = DATUM_INDEX_TO_ABSOLUTE_INDEX(inventories[index].unit_index);
 				boolean own = FALSE;
@@ -2309,9 +2361,13 @@ static void distributed_host_send_inventories(
 					own |= objects_host_viewers.machines[machine_number].unit_indices[unit_number] == inventories[index].unit_index;
 				if (own)
 				{
-					/* (its own unit's: each change at once) */
-					if (kinds[index] != _host_inventory_ammunition)
+					/* (its own unit's: each change at once, and its refresh) */
+					if (kind != _host_inventory_ammunition && kind != _host_inventory_own)
 						continue;
+				}
+				else if (kind == _host_inventory_own)
+				{
+					continue;
 				}
 				else
 				{

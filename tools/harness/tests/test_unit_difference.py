@@ -4,7 +4,8 @@ acks lag (running, turning, hurt, killed, respawned); whole where the client ask
 its ack, a part does not fit or the ack is older than the client keeps; a difference from a state the client has not
 passed over, the entries after it read as sent; cut short, no entry. Each entry joined (158) and read back as its bytes. Packed (network_bits.h), as the host sends them,
 and (-unpacked) in the forms before, as debug.network_states_unpacked sends them: at the map's bounds, the fastest
-speeds, every part changed and none; a state off the grid whole."""
+speeds, every part changed and none; a state off the grid whole. A client's prediction trimmed; a unit at rest's the
+same bytes each tick (held), a moving one's velocity exact."""
 import re
 import sys
 from pathlib import Path
@@ -21,7 +22,7 @@ HEADER = "port/linux/game/network_distributed.h"
 # (the unit state's bytes, the Legacy encoding OpenH1's messages carry whole)
 LEGACY = "port/linux/game/network_legacy.c"
 LEGACY_HEADER = "port/linux/game/network_legacy.h"
-CASES = ["joined", "prediction-trim"] + [case + mode for case in ("chain", "not-predicted", "whole", "unknown", "short", "deck", "extremes")
+CASES = ["joined", "prediction-trim", "prediction-rest"] + [case + mode for case in ("chain", "not-predicted", "whole", "unknown", "short", "deck", "extremes")
          for mode in ("", "-unpacked")]
 
 # a fault in the encoding and the case that must catch it
@@ -83,6 +84,12 @@ NEGATIVE_CONTROLS = {
                         "prediction-trim"),
     # (a prediction trimmed) the damage kept
     "trim-damage-kept": (("\tstate->current_body_damage = 0;\n", ""), "prediction-trim"),
+    # (a prediction trimmed) a unit at rest's velocity sent as it is (every tick a change: never held)
+    "trim-rest-kept": (("\tif (fabs(state->fine_velocity.i) < PREDICTION_REST_SPEED)\n\t\tstate->fine_velocity.i = 0.0f;\n", ""),
+                       "prediction-rest"),
+    # (a prediction trimmed) a moving unit's slowest part taken for rest
+    "trim-rest-too-far": (("fabs(state->fine_velocity.j) < PREDICTION_REST_SPEED",
+                           "fabs(state->fine_velocity.j) <= PREDICTION_REST_SPEED"), "prediction-rest"),
     # (joined) the player after the entry before's read as the one before's
     "joined-player-next": (("? joining->player_index + 1 : (long)network_bits_take(bits, 8);",
                             "? joining->player_index : (long)network_bits_take(bits, 8);"), "joined"),
@@ -127,6 +134,7 @@ def generated(fault=None):
                    "UNIT_PACKED_FORM_BIT", "_unit_packed_position_bit"):
         config += enum_with(source, member) + "\n"
     config += re.search(r"^#define UNIT_PACKED_VELOCITY_STEPS .*$", source, re.M)[0] + "\n"
+    config += re.search(r"^#define PREDICTION_REST_SPEED .*$", source, re.M)[0] + "\n"
     config += enum_with(legacy_header, "DISTRIBUTED_UNIT_STATE_MINIMUM_SIZE") + "\n"
     config += structure(read("port/linux/game/vehicle_riding.h"), "vehicle_riding_deck") + "\n"
     config += structure(legacy_header, "distributed_unit_state") + "\n"

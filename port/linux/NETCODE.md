@@ -1632,9 +1632,26 @@ before; the client makes the message of 141 back, byte for byte
 (`distributed_unit_differences_unjoin`), and takes it as before. An
 OpenH1 client's prediction leaves out what its host has its own word on
 and reads not (the vitality, damage, powerups, camouflage and shield
-flags; the 16-bit velocity beside the whole one goes as zeros).
+flags; the 16-bit velocity beside the whole one goes as zeros), and a part
+of its velocity slower than `PREDICTION_REST_SPEED` (a step of the grid in a
+minute) as none: a biped standing still keeps a speck its physics never
+brings to nothing (1e-26 one tick, -0.75 of that the next), which made each
+tick's prediction a change, and none went held (146). Held, an idle
+client's prediction went from 1.45 to 0.52 KB/s (to the host, 120 Hz).
 `debug.network_forms_before` (`HALO_NETWORK_FORMS_BEFORE`) sends both as
 before (`tools/harness/tests/test_unit_difference.py`).
+
+**Relayed input packed.** A host sends an OpenH1 client the players' relayed
+input packed (`_distributed_message_relayed_actions_packed`, 159, in place of
+15): each entry without the parts at their usual values (no choice, sticks,
+trigger or latest buttons, which a bot's mostly are), a bit each in its parts
+byte saying which are there, and its player a bit where it is the one after
+the entry before's in the message; every value exact. The client makes the
+message of 15 back, byte for byte (`distributed_relayed_actions_unpack`), and
+takes it as before. A bot's entry is 7 or 8 bytes, not 14: at 120 Hz on
+crowded Blood Gulch the relayed input went from 3.9 to 2.5 KB/s a client.
+`debug.network_forms_before` sends 15
+(`tools/harness/tests/test_relayed_action_packed.py`).
 
 ### Actors to far clients
 
@@ -2647,7 +2664,11 @@ validation gates; native results do not establish browser compatibility.
      it, 0 for the host's own players, for the scoreboard;
    - twice a second and with every kill, the players' statistics that
      changed (once a second a few more, round them all, as the message is
-     unreliable); when it changes (looked at five times a second, sent at
+     unreliable: to an OpenCE machine every player a second; to an OpenH1
+     one each change again on the next look and two players a second,
+     round them all in eight, 1.07 to 0.31 KB/s a client at 120 Hz on
+     crowded Blood Gulch; `debug.network_forms_before` as an OpenCE
+     machine's, `tools/harness/tests/test_statistics_changes.py`); when it changes (looked at five times a second, sent at
      most every other look unless the game ended; reliably, so never
      again unchanged), the game type's state (scores, the flags, the balls
      and their carriers, the king's hill, the players' speeds) and whether
@@ -2691,7 +2712,12 @@ validation gates; native results do not establish browser compatibility.
      spawned with the button held threw one the host's copy had not). A
      change of weapons or grenades goes to every client at once; one of
      ammunition only to the unit's player's machine at once, and to the
-     others as often as they are sent that player. A client takes its own
+     others as often as they are sent that player. Unchanged, each goes
+     again once a second; to an OpenH1 client, which has a change of
+     weapons or grenades again the round after, only its own unit's so,
+     another's every fifth second (1.23 to 0.55 KB/s a client at 120 Hz on
+     crowded Blood Gulch; `debug.network_forms_before` as before,
+     `tools/harness/tests/test_inventory_refresh.py`). A client takes its own
      players' ammunition and grenade counts from the host only once a
      round trip has passed since it last fired, reloaded or threw (what
      the host says before then is from before). How old what a unit
@@ -2988,12 +3014,14 @@ Unity's Netcode for Entities, lightyear, netfox and the Ares source):
   predicted it at to any other client), 35 bytes for a player on foot
   instead of 64; a player's input goes with its tick's update once a
   message, and the buttons of the three ticks before only where they
-  differ from the tick after (14 to 20 bytes instead of 24); what a unit
+  differ from the tick after (14 to 20 bytes instead of 24; to an OpenH1
+  client 7 to 20, packed: "Relayed input packed"); what a unit
   carries is sent when it changes (and once a second); the moving objects
   as often as they are near the client's players, the objects at rest
   round all of them, four a tick; the players' statistics when
   they change (with every kill, twice a second), with sixteen more
-  players' once a second round them all; the game type's state when it
+  players' once a second round them all (to an OpenH1 client each change
+  twice and two more a second); the game type's state when it
   changes, at most two and a half times a second.
 - **The players each client needs, when it needs them.** The host sends a
   client every player's unit and input every tick when they are within 25
