@@ -55,7 +55,7 @@ static struct
 /* (what the host took: each tick's input, and its clock's and round trip's words) */
 static long taken_tick = NONE;
 static real taken_yaw;
-static long inputs_taken;
+
 static long clock_heard;
 static long round_trips;
 static boolean update_server_handle_distributed_input(long player, long tick, struct player_action const *action,
@@ -66,7 +66,7 @@ static boolean update_server_handle_distributed_input(long player, long tick, st
 		return FALSE;
 	taken_tick = tick;
 	taken_yaw = action->desired_facing.yaw;
-	inputs_taken++;
+
 	return TRUE;
 }
 static void network_clock_input_heard(long machine_index, long tick)
