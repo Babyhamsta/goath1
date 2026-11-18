@@ -3919,8 +3919,10 @@ static void distributed_handle_predictions(
 
 		if (!size)
 			break;
-		/* (what a held one repeats: distributed_handle_held) */
+		/* (what a held one repeats: distributed_handle_held; not a held one's
+		own, which is that already) */
 		if (state.player_index < MAXIMUM_TRACKED_PLAYERS && size <= DISTRIBUTED_PREDICTION_MAXIMUM_SIZE &&
+			data != distributed_held_predictions[state.player_index].bytes &&
 			distributed_machine_has_player(machine_index, state.player_index))
 		{
 			distributed_held_predictions[state.player_index].valid = TRUE;
