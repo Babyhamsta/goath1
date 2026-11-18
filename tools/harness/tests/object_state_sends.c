@@ -77,6 +77,9 @@ static boolean distributed_machine_sees_cluster(long machine_index, short cluste
 {
 	return cluster_index < 0 || sees[machine_index][cluster_index];
 }
+/* (every client under its byte budget: test_plan_aim.py's budget case has the stretch) */
+static short budget_stretches[4] = { 1, 1, 1, 1 };
+static short distributed_budget_stretch(long machine_index) { return budget_stretches[machine_index]; }
 static void distributed_send_to_machine(long machine_index, void *message, byte type, short count, word size)
 {
 	struct distributed_object_state_message *states = message;
@@ -238,6 +241,33 @@ int main(int argc, char **argv)
 		sees[1][7] = TRUE;
 		tick();
 		CHECK(sent[1][7], "a moving object come into sight not sent at once");
+		return 0;
+	}
+	if (!strcmp(name, "budget"))
+	{
+		short near_sends = 0, far_sends = 0, seen_sends = 0;
+
+		/* machine 1 over its byte budget (its far and unseen four times as
+		seldom): object 1 (10 units out) and 7 (70 out) moving, out of its
+		sight; machine 0 sees both */
+		budget_stretches[1] = 4;
+		sees[1][1] = FALSE;
+		sees[1][7] = FALSE;
+		set_moving(1, TRUE);
+		set_moving(7, TRUE);
+		tick();
+		for (index = 0; index < 120; index++)
+		{
+			tick();
+			near_sends += sent[1][1] ? 1 : 0;
+			far_sends += sent[1][7] ? 1 : 0;
+			seen_sends += sent[0][7] ? 1 : 0;
+		}
+		CHECK(near_sends == 120 / HIDDEN_PLAYER_PERIOD_TICKS, "a near object out of sight sent %d ticks of 120, as before",
+			near_sends);
+		CHECK(far_sends == 120 / (4 * HIDDEN_PLAYER_PERIOD_TICKS), "a far object out of sight sent %d ticks of 120",
+			far_sends);
+		CHECK(seen_sends == 120 / 3, "a far object in sight of the other client sent %d ticks of 120", seen_sends);
 		return 0;
 	}
 	if (!strcmp(name, "starts-moving"))

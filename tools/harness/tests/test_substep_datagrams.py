@@ -81,6 +81,7 @@ def generated(fault=None):
     structures += re.search(r"#define BATCH_MESSAGE_OVERHEAD \\\n[^\n]*\n", source)[0]
     structures += re.search(r"#define COMPACT_BATCH_MESSAGE_OVERHEAD [^\n]*\n", source)[0]
     structures += re.search(r"#define COMPACT_BATCH_HEADER_SIZE [^\n]*\n", source)[0]
+    structures += re.search(r"#define DATAGRAM_IP_UDP_BYTES [^\n]*\n", source)[0]
     structures += structure(source, "distributed_packer") + "\n"
     return (("config.inc", config), ("structures.inc", structures), ("under_test.inc", code))
 

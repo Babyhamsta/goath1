@@ -537,7 +537,16 @@ boolean distributed_machine_sees_cluster(long machine_index, short cluster_index
 enum
 {
 	HIDDEN_PLAYER_PERIOD_TICKS = 6,
+	/* the most times over its period a client is sent what it cannot react
+	to (far and unseen) while over its byte budget (network.client_budget):
+	such a player or object goes to it every HIDDEN_PLAYER_PERIOD_TICKS
+	times this at most, never left out longer */
+	CLIENT_BUDGET_MAXIMUM_STRETCH = 4,
 };
+/* (the host) how many times over its period (1, 2 or 4) the client is sent
+what it cannot react to, by its byte budget's balance as its last tick
+began (distributed_budget_tick): 1 under budget, or with no budget */
+short distributed_budget_stretch(long machine_index);
 /* what a message says, checked: a number finite; a point's parts finite
 and within bound of the origin; an object's index whole (its identifier
 never 0, which any object at the index matches) */

@@ -165,6 +165,7 @@ int port_mods_list(char *text, unsigned long size);
 void console_warning(const char *format, ...);
 /* port_config.c's */
 int config_boolean(char const *name);
+long config_integer(char const *name);
 
 /* the host: a client's game run faster than its clock (a speed hack, which
 speeds up the machine's own clock: nothing on it can tell), found by its
@@ -649,6 +650,9 @@ its header but for its message header */
 /* ... and in a compact batch (at most), and the compact batch's header */
 #define COMPACT_BATCH_MESSAGE_OVERHEAD ((word)(2 + 2 * sizeof(byte)))
 #define COMPACT_BATCH_HEADER_SIZE ((word)(sizeof(message_header) + 4))
+/* a datagram's IPv4 and UDP headers, which a client's byte budget counts
+(distributed_budget_tick) */
+#define DATAGRAM_IP_UDP_BYTES 28
 
 /* messages of entries of a size of their own, to one machine (or the host),
 each as long as the batch has room for (distributed_packer_add): nothing
@@ -1028,6 +1032,13 @@ react to, its latest press owed (far_owed), rides the tick's last
 datagram, with the tick's own messages */
 static boolean distributed_forward_immediate[HALO_PORT_MAXIMUM_NETWORK_MACHINES][MAXIMUM_TRACKED_PLAYERS];
 static boolean distributed_far_owed[HALO_PORT_MAXIMUM_NETWORK_MACHINES][MAXIMUM_TRACKED_PLAYERS];
+/* the host: each client's byte budget (network.client_budget, KB a second):
+its balance, the bytes it may yet be sent (each tick adds its share of the
+second, up to a quarter second's; each datagram sent it takes its bytes
+and its IP and UDP headers'), and how many times over its period what it
+cannot react to goes to it (distributed_budget_stretch) */
+static long distributed_budget_balances[HALO_PORT_MAXIMUM_NETWORK_MACHINES];
+static short distributed_budget_stretches[HALO_PORT_MAXIMUM_NETWORK_MACHINES];
 /* the host: each player's input as last relayed to each OpenH1 client
 (distributed_relayed_action_due): whether any was, what, when, whether it
 is to go again on the player's next tick of the plan (a change's second
@@ -1745,7 +1756,10 @@ static void distributed_batch_flush(
 	if (sender == HOST_SENDER)
 		network_distributed_client_send(batch->data, batch->size);
 	else
+	{
 		network_distributed_server_send_to_machine(sender, batch->data, batch->size);
+		distributed_budget_balances[sender] -= batch->size + DATAGRAM_IP_UDP_BYTES;
+	}
 	distributed_batch_bytes[sender] += batch->size;
 	distributed_batch_datagrams[sender]++;
 	batch->size = 0;
@@ -6129,6 +6143,47 @@ static boolean distributed_far_owed_any(
 	return FALSE;
 }
 
+/* (the host, as its plan begins for the client) the client's byte budget
+refilled with the tick's share, and what it cannot react to sent it twice
+as seldom where the last tick took it past its balance (up to
+CLIENT_BUDGET_MAXIMUM_STRETCH), twice as often again once half its balance
+is back. Nothing it can react to is ever sent it less often
+(distributed_host_plan_players, network_objects.c's moving objects) */
+static void distributed_budget_tick(
+	long machine_index)
+{
+	long budget = config_integer("network.client_budget") * 1024;
+	long *balance = &distributed_budget_balances[machine_index];
+	short *stretch = &distributed_budget_stretches[machine_index];
+	long capacity;
+
+	if (budget <= 0)
+	{
+		*balance = 0;
+		*stretch = 1;
+		return;
+	}
+	capacity = budget / 4;
+	if (*stretch < 1)
+		*stretch = 1;
+	if (*balance < 0 && *stretch < CLIENT_BUDGET_MAXIMUM_STRETCH)
+		*stretch = (short)(*stretch * 2);
+	else if (*balance > capacity / 2 && *stretch > 1)
+		*stretch = (short)(*stretch / 2);
+	*balance = MIN(*balance + budget / TICKS_PER_SECOND, capacity);
+}
+
+short distributed_budget_stretch(
+	long machine_index)
+{
+	if (machine_index < 0 || machine_index >= HALO_PORT_MAXIMUM_NETWORK_MACHINES ||
+		distributed_budget_stretches[machine_index] < 1)
+	{
+		return 1;
+	}
+	return distributed_budget_stretches[machine_index];
+}
+
 /* when the host sends on what it heard (distributed_forward_flush) */
 enum
 {
@@ -6955,6 +7010,10 @@ static void distributed_host_plan_players(
 		boolean viewer_scoped[MAXIMUM_LOCAL_PLAYERS];
 		short viewer_count = 0;
 		short index;
+		short stretch;
+
+		distributed_budget_tick(machine_index);
+		stretch = distributed_budget_stretch(machine_index);
 
 		/* its players where they are, or were when last alive (each viewer's
 		row of the map's potentially visible set) */
@@ -7056,6 +7115,14 @@ static void distributed_host_plan_players(
 			}
 			if (aimed_period == NONE)
 				aimed_period = period;
+			/* (far and unseen, over the client's budget: less often, as its
+			plan's period times the stretch; none of its players aim at one
+			they cannot see) */
+			if (!own && placed[player_index] && !reacts && stretch > 1)
+			{
+				period = (short)(period * stretch);
+				aimed_period = period;
+			}
 			send |= changed[player_index] || (now + player_index) % period == 0 ||
 				(now + player_index) % aimed_period == 0;
 			if (seen || own)
@@ -7925,6 +7992,8 @@ static void distributed_reset_checkpoint_state(boolean reset_received_times)
 	csmemset(distributed_far_live, 0, sizeof(distributed_far_live));
 	csmemset(distributed_forward_immediate, 0, sizeof(distributed_forward_immediate));
 	csmemset(distributed_far_owed, 0, sizeof(distributed_far_owed));
+	csmemset(distributed_budget_balances, 0, sizeof(distributed_budget_balances));
+	csmemset(distributed_budget_stretches, 0, sizeof(distributed_budget_stretches));
 	csmemset(distributed_relayed_sent, 0, sizeof(distributed_relayed_sent));
 	csmemset(distributed_forwarded_ticks, 0xFF, sizeof(distributed_forwarded_ticks));
 	csmemset(distributed_forwarded_times, 0xFF, sizeof(distributed_forwarded_times));

@@ -1372,6 +1372,20 @@ tick's own messages, so a sub-step that has nothing else for that client
 sends it no datagram. Everything the near and the seen are sent goes when
 it went before (`tools/harness/tests/test_substep_datagrams.py`).
 
+Each client has a byte budget (`network.client_budget`, 256 KB a second by
+default, about ten times what a crowded 16-player game at 120 sends one):
+each tick adds its share of the second (up to a quarter second's), and each
+datagram to the client takes its bytes and its IP and UDP headers'
+(`distributed_budget_tick`). Where the last tick took a client past it, the
+plan sends it the players it cannot react to (far and unseen, as above)
+twice as seldom, up to four times (every 24 ticks for one out of sight),
+and the moving objects far and out of its sight the same
+(`distributed_budget_stretch`, `network_objects.c`); twice as often again
+once half its balance is back. A change of a player's life or seat, one
+coming into sight and a press go as before, and nothing near the client's
+players or in their sight is sent less often
+(`tools/harness/tests/test_plan_aim.py`, `test_object_state_sends.py`).
+
 ### States at the sub-steps
 
 A client drives the players near its own by their forwarded input and live

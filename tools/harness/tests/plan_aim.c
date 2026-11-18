@@ -29,6 +29,11 @@ static byte distributed_sends[HALO_PORT_MAXIMUM_NETWORK_MACHINES][MAXIMUM_TRACKE
 static long distributed_player_machines[MAXIMUM_TRACKED_PLAYERS];
 static byte distributed_forward_periods[HALO_PORT_MAXIMUM_NETWORK_MACHINES][MAXIMUM_TRACKED_PLAYERS];
 static boolean distributed_forward_immediate[HALO_PORT_MAXIMUM_NETWORK_MACHINES][MAXIMUM_TRACKED_PLAYERS];
+static long distributed_budget_balances[HALO_PORT_MAXIMUM_NETWORK_MACHINES];
+static short distributed_budget_stretches[HALO_PORT_MAXIMUM_NETWORK_MACHINES];
+/* (network.client_budget, KB a second) */
+static long client_budget;
+static long config_integer(char const *name) { (void)name; return client_budget; }
 static boolean distributed_seen[HALO_PORT_MAXIMUM_NETWORK_MACHINES][MAXIMUM_TRACKED_PLAYERS];
 static struct { byte flags; long unit_index; long vehicle_index; short seat_index; }
     distributed_sent_units[MAXIMUM_TRACKED_PLAYERS];
@@ -161,6 +166,77 @@ int main(int argc, char **argv) {
                 "step %d: the test of where it is now differs from the plan's", step);
             CHECK(!distributed_forward_immediate[0][0], "its own player");
         }
+        return 0;
+    }
+    if (!strcmp(name, "budget")) {
+        /* (machine 0 over its byte budget: player 1 far, then unseen; then
+        unseen but near. Each tick spends past the balance until tick 2010) */
+        static struct { real x; short cluster; byte period; } const places[] = {
+            { 100.0f, 0, 3 },  /* far, in sight: as its distance says, whatever the budget */
+            { 100.0f, 1, 0 },  /* far, unseen: stretched */
+            { 40.0f, 1, 6 },   /* unseen but near: as before */
+        };
+        short place;
+
+        have_map = TRUE;
+        aim(away, (char)NONE);
+        client_budget = 16;
+        for (place = 0; place < 3; place++) {
+            short stretches[3] = { 0, 0, 0 };
+
+            origins[1].x = places[place].x;
+            unit_clusters[1] = places[place].cluster;
+            memset(distributed_budget_balances, 0, sizeof(distributed_budget_balances));
+            memset(distributed_budget_stretches, 0, sizeof(distributed_budget_stretches));
+            for (tick = 2000; tick < 2100; tick++) {
+                long first_sent = NONE;
+                long sent_tick;
+
+                /* (the last tick's datagrams: twice the tick's share, then none) */
+                if (tick < 2010)
+                    distributed_budget_balances[0] -= 2 * client_budget * 1024 / TICKS_PER_SECOND;
+                now_time = tick;
+                distributed_host_plan_players();
+                CHECK(distributed_budget_stretch(0) >= 1 && distributed_budget_stretch(0) <= CLIENT_BUDGET_MAXIMUM_STRETCH,
+                    "tick %ld: a stretch of %d", tick, distributed_budget_stretch(0));
+                if (tick == 2003)
+                    stretches[0] = distributed_budget_stretch(0);
+                if (tick == 2099)
+                    stretches[1] = distributed_budget_stretch(0);
+                /* (the state's ticks over the next while: the period it goes at) */
+                if (tick == 2005) {
+                    for (sent_tick = 2005; sent_tick < 2005 + 2 * CLIENT_BUDGET_MAXIMUM_STRETCH * HIDDEN_PLAYER_PERIOD_TICKS; sent_tick++) {
+                        now_time = sent_tick;
+                        distributed_budget_balances[0] = -1;
+                        distributed_host_plan_players();
+                        if (TEST_FLAG(distributed_sends[0][1], _distributed_send_state_bit)) {
+                            if (first_sent == NONE)
+                                first_sent = sent_tick;
+                            else {
+                                stretches[2] = (short)(sent_tick - first_sent);
+                                break;
+                            }
+                        }
+                    }
+                    tick = sent_tick;
+                }
+            }
+            CHECK(stretches[0] == CLIENT_BUDGET_MAXIMUM_STRETCH, "place %d: over budget, a stretch of %d", place,
+                stretches[0]);
+            CHECK(stretches[1] == 1, "place %d: back under budget, a stretch of %d", place, stretches[1]);
+            if (places[place].period)
+                CHECK(stretches[2] == places[place].period, "place %d: sent every %d ticks over budget, not %d", place,
+                    stretches[2], places[place].period);
+            else
+                CHECK(stretches[2] == HIDDEN_PLAYER_PERIOD_TICKS * CLIENT_BUDGET_MAXIMUM_STRETCH,
+                    "place %d: the far and unseen sent every %d ticks over budget", place, stretches[2]);
+        }
+        /* (no budget: no stretch) */
+        client_budget = 0;
+        distributed_budget_balances[0] = -100000;
+        distributed_host_plan_players();
+        distributed_host_plan_players();
+        CHECK(distributed_budget_stretch(0) == 1, "no budget, a stretch of %d", distributed_budget_stretch(0));
         return 0;
     }
     if (!strcmp(name, "substep-due")) {

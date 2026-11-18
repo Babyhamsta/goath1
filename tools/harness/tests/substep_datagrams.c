@@ -60,6 +60,7 @@ static struct distributed_packer distributed_packer;
 static boolean distributed_forward_held;
 static boolean distributed_forward_immediate[HALO_PORT_MAXIMUM_NETWORK_MACHINES][MAXIMUM_TRACKED_PLAYERS];
 static boolean distributed_far_owed[HALO_PORT_MAXIMUM_NETWORK_MACHINES][MAXIMUM_TRACKED_PLAYERS];
+static long distributed_budget_balances[HALO_PORT_MAXIMUM_NETWORK_MACHINES];
 
 /* the world: machines 1 and 2, OpenH1 clients; players near both (period 1)
 of states at the sub-steps, and players whose live controls are pending */
@@ -496,7 +497,7 @@ static void held_case(void)
 	live_pending[3] = TRUE;
 	now_microseconds += 1000000;
 	network_distributed_host_substep_ended(3, 4);
-	CHECK(datagram_count[1] == 0, "held for the tick");
+	CHECK(datagram_count[1] == 0 && distributed_forward_held, "held for the tick");
 	now_microseconds += 1000;
 	network_distributed_frame_received();
 	CHECK(datagram_count[1] == 1 && datagram_count[2] == 1, "sent by the next frame");
