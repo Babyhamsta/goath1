@@ -4754,6 +4754,25 @@ static boolean distributed_client_holds(
 	return network_standard_agreed_rate() != 0 && distributed_checkpoint_synchronized;
 }
 
+/* (a client of an OpenH1 game) its prediction without the parts the host
+does not read */
+static void distributed_prediction_trim(
+	struct distributed_unit_state *state)
+{
+	state->flags &= (byte)~(FLAG(_distributed_unit_shield_depleted_bit) | FLAG(_distributed_unit_shield_charging_bit) |
+		FLAG(_distributed_unit_shield_over_charging_bit));
+	state->unit_flags &= (byte)FLAG(_distributed_unit_suspended_bit);
+	state->active_camouflage = 0;
+	state->body_vitality = 0;
+	state->shield_vitality = 0;
+	state->current_body_damage = 0;
+	state->recent_body_damage = 0;
+	state->current_shield_damage = 0;
+	state->recent_shield_damage = 0;
+	csmemset(state->powerup_durations, 0, sizeof(state->powerup_durations));
+	csmemset(&state->velocity, 0, sizeof(state->velocity));
+}
+
 /* (a client) its own players' units, to the host: one the same as the last
 it sent whole held (distributed_input_held) */
 static void distributed_client_send_predictions(
@@ -4788,6 +4807,14 @@ static void distributed_client_send_predictions(
 		/* (an OpenH1 game's: its velocity at full precision too) */
 		state.fine = network_standard_agreed_rate() != 0;
 		state.fine_velocity = object_get(unit_index)->object.translational_velocity;
+		/* (and none of what the host has its own word on, which it reads not
+		(distributed_handle_predictions, distributed_take_prediction): the
+		vitality, damage, powerups and camouflage, and the velocity of 16
+		bits a part in place of the whole one; the parts left at their
+		defaults are left out, and a prediction changed only in them goes
+		held. The suspension and the whole velocity's flag it reads) */
+		if (state.fine && !config_boolean("debug.network_forms_before"))
+			distributed_prediction_trim(&state);
 		{
 			word size = distributed_unit_state_write(&state, TRUE, entry);
 			unsigned long checksum = distributed_prediction_checksum(entry, size);

@@ -1629,8 +1629,12 @@ the setting on and off), per client:
 packed entry's player, age and parts each a bit where they are the entry
 before's (the next player, the same age, the same parts), else written as
 before; the client makes the message of 141 back, byte for byte
-(`distributed_unit_differences_unjoin`), and takes it as before.
-`debug.network_forms_before` (`HALO_NETWORK_FORMS_BEFORE`) sends 141 (`tools/harness/tests/test_unit_difference.py`).
+(`distributed_unit_differences_unjoin`), and takes it as before. An
+OpenH1 client's prediction leaves out what its host has its own word on
+and reads not (the vitality, damage, powerups, camouflage and shield
+flags; the 16-bit velocity beside the whole one goes as zeros).
+`debug.network_forms_before` (`HALO_NETWORK_FORMS_BEFORE`) sends both as
+before (`tools/harness/tests/test_unit_difference.py`).
 
 ### Actors to far clients
 

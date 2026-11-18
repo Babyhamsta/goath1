@@ -21,7 +21,7 @@ HEADER = "port/linux/game/network_distributed.h"
 # (the unit state's bytes, the Legacy encoding OpenH1's messages carry whole)
 LEGACY = "port/linux/game/network_legacy.c"
 LEGACY_HEADER = "port/linux/game/network_legacy.h"
-CASES = ["joined"] + [case + mode for case in ("chain", "not-predicted", "whole", "unknown", "short", "deck", "extremes")
+CASES = ["joined", "prediction-trim"] + [case + mode for case in ("chain", "not-predicted", "whole", "unknown", "short", "deck", "extremes")
          for mode in ("", "-unpacked")]
 
 # a fault in the encoding and the case that must catch it
@@ -78,6 +78,11 @@ NEGATIVE_CONTROLS = {
     # (packed) the deck bit not set
     "packed-deck-bit": (("buffer[0] = (byte)(FLAG(UNIT_PACKED_FORM_BIT) | (deck ? FLAG(UNIT_PACKED_DECK_BIT) : 0)",
                          "buffer[0] = (byte)(FLAG(UNIT_PACKED_FORM_BIT) | 0"), "deck"),
+    # (a prediction trimmed) the suspension the host reads left out too
+    "trim-suspension": (("state->unit_flags &= (byte)FLAG(_distributed_unit_suspended_bit);", "state->unit_flags = 0;"),
+                        "prediction-trim"),
+    # (a prediction trimmed) the damage kept
+    "trim-damage-kept": (("\tstate->current_body_damage = 0;\n", ""), "prediction-trim"),
     # (joined) the player after the entry before's read as the one before's
     "joined-player-next": (("? joining->player_index + 1 : (long)network_bits_take(bits, 8);",
                             "? joining->player_index : (long)network_bits_take(bits, 8);"), "joined"),
@@ -100,7 +105,7 @@ FUNCTIONS = ("distributed_put", "distributed_take", "distributed_real_valid", "l
              "distributed_unit_deck_take", "distributed_unit_packed_time", "distributed_unit_packed_write",
              "distributed_unit_packed_read", "distributed_unit_difference_write", "distributed_unit_difference_read",
              "distributed_unit_packed_skip", "distributed_bits_copy", "distributed_unit_entry_join",
-             "distributed_unit_entry_unjoin")
+             "distributed_unit_entry_unjoin", "distributed_prediction_trim")
 
 
 def generated(fault=None):
