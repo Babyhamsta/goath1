@@ -2306,6 +2306,10 @@ its name alone beside it, has its name given back as the map lists find it.
   it has grew by a piece (or to the whole, and no more than the files
   offered) in the last 80 seconds, counted from the first offer of the
   game's map however often, and for whatever level, the machine asks again.
+  However it says it goes, a download has from that first offer five
+  minutes and the files' bytes at 64 KB/s (or a quarter of the host's
+  `network.map_share_upload`, if less), four hours at most; one that has not
+  finished by then is removed, as a client whose download fails leaves.
   It takes a machine's requests five seconds apart at most: one that comes
   sooner waits its turn (the last of them kept). A connection forgets which
   pieces the other end has of the download's files when the download ends.
