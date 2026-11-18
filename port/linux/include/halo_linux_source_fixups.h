@@ -393,6 +393,8 @@ no display: port/linux/src/d3d8_device.c): main.c draws none, and paces its
 frames to the game's clock (port/linux/game/unseen_frames.c) */
 int halo_frames_unseen(void);
 void unseen_frame_wait(void);
+/* (... receive, not NULL, reading the datagrams that come meanwhile) */
+void unseen_frame_wait_receiving(int (*receive)(long milliseconds));
 /* network.client_timeout_seconds, in milliseconds (port/linux/src/port_config.c) */
 unsigned long network_client_timeout_milliseconds(void);
 /* a co-op level won: the level the host asked for after it (Host Controls),

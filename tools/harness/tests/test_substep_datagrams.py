@@ -14,9 +14,12 @@ from harness import CHECK_FAILED, build, constant, enum_with, function, mutated,
 SOURCE = "port/linux/game/network_distributed.c"
 HEADER = "port/linux/game/network_distributed.h"
 SUBSTEPS_HEADER = "port/linux/game/network_substeps.h"
-CASES = ["substep", "substep-after-read", "tick-end", "split", "held", "react", "defer", "into-view", "compact", "opence"]
+CASES = ["substep", "substep-after-read", "step-due", "tick-end", "split", "held", "react", "defer", "into-view", "compact", "opence"]
 
 NEGATIVE_CONTROLS = {
+    # what came read just before the host's step in a datagram of its own, beside the step's
+    "step-due-alone": (("game_time_seconds_to_next_step() * 1000.0f < (real)FORWARDED_INPUT_INTERVAL_MILLISECONDS &&",
+                        "FALSE &&"), "step-due"),
     # a tick's last sub-step's controls in a datagram of their own, before the tick's
     "tick-end-alone": (("if (occasion == _forward_at_tick_end)\n\t\t\t\tdistributed_forward_held = TRUE;\n"
                         "\t\t\telse\n\t\t\t\tdistributed_batch_flush((short)machine_index);",

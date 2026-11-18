@@ -90,6 +90,18 @@ static boolean network_standard_message_goes_to(long machine_index, byte type)
 static boolean halo_server_mode(void) { return FALSE; }
 static unsigned long long platform_shared_clock_microseconds(void) { return now_microseconds; }
 static void network_clock_frame_read(void) {}
+/* (debug.network_latency_trace, off; a step not due) */
+#define NETWORK_LATENCY_TRACE(call) do { if (network_latency_trace_on) { call; } } while (0)
+static int network_latency_trace_on;
+static unsigned long long network_latency_trace_clock(void) { return 0; }
+static void network_latency_trace_sent(short to, unsigned long long handed) { (void)to; (void)handed; }
+static void network_latency_trace_destination(short to) { (void)to; }
+static void network_latency_trace_queued(char kind, short player, long key, short substep, short to)
+{
+	(void)kind; (void)player; (void)key; (void)substep; (void)to;
+}
+static real next_step_seconds = 1.0f;
+static real game_time_seconds_to_next_step(void) { return next_step_seconds; }
 static boolean network_substeps_active(void) { return TRUE; }
 static void error(int kind, char const *format, ...) { (void)kind; (void)format; }
 static void build_message_header(message_header *header, word size, int a, int b) { (void)a; (void)b; *header = size; }
@@ -365,6 +377,38 @@ static void substep_case(void)
 		CHECK(messages[1].type == _distributed_message_forwarded_live_controls && messages[1].count == 1,
 			"the controls with them");
 	}
+}
+
+/* the host's step due within the interval as the frame reads: what came is
+not sent in a datagram of its own just before the step's, but with it */
+static void step_due_case(void)
+{
+	long machine_index;
+
+	reset();
+	set_near(3);
+	live_pending[6] = TRUE;
+	distributed_forward_periods[1][6] = 1;
+	distributed_forward_periods[2][6] = 1;
+	now_microseconds += 1000000;
+	next_step_seconds = 0.002f;
+	network_distributed_frame_received();
+	CHECK(datagram_count[1] == 0 && datagram_count[2] == 0, "none of their own before the step, %d and %d",
+		datagram_count[1], datagram_count[2]);
+	CHECK(live_pending[6], "still to go");
+	now_microseconds += 2000;
+	network_distributed_host_substep_ended(1, 4);
+	for (machine_index = 1; machine_index <= 2; machine_index++)
+	{
+		struct parsed messages[8];
+		short count;
+
+		CHECK(datagram_count[machine_index] == 1, "the step's one datagram, not %d", datagram_count[machine_index]);
+		count = parse(machine_index, 0, messages, 8);
+		CHECK(count == 2 && messages[1].type == _distributed_message_forwarded_live_controls,
+			"the controls with the states");
+	}
+	next_step_seconds = 1.0f;
 }
 
 /* a sub-step that ends just after the frame's own forward (within its
@@ -738,6 +782,8 @@ int main(int argc, char **argv)
 		substep_case();
 	else if (!strcmp(name, "substep-after-read"))
 		substep_after_read_case();
+	else if (!strcmp(name, "step-due"))
+		step_due_case();
 	else if (!strcmp(name, "tick-end"))
 		tick_end_case();
 	else if (!strcmp(name, "split"))

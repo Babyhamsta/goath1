@@ -81,6 +81,8 @@ static double counted_fabs(double x)
 	return x < 0 ? -x : x;
 }
 #define fabs counted_fabs
+/* (debug.network_latency_trace, off) */
+#define NETWORK_LATENCY_TRACE(call) ((void)0)
 #include "under_test.inc"
 
 static long wholes, helds;
