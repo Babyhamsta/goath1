@@ -136,6 +136,12 @@ static boolean distributed_substep_state_due(long machine_index, short player_in
 {
 	(void)machine_index; (void)player_index; (void)state; return TRUE;
 }
+/* (every state a change: test_substep_state_changes.py has the test) */
+static int distributed_substep_sents[HALO_PORT_MAXIMUM_NETWORK_MACHINES][MAXIMUM_TRACKED_PLAYERS];
+static boolean distributed_substep_state_unchanged(int *sent, struct distributed_unit_state const *state, long now)
+{
+	(void)sent; (void)state; (void)now; return FALSE;
+}
 static word distributed_substep_state_write(long machine_index, struct distributed_unit_state const *state,
 	byte *buffer)
 {

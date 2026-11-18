@@ -55,6 +55,7 @@ struct distributed_player_ping {byte data;};
 struct distributed_structure_bsp {byte data;};
 struct distributed_pickup {byte data;};
 struct distributed_player_input {byte data;};
+struct distributed_player_held {byte data;};
 struct distributed_client_identity {byte data;};
 struct distributed_client_build {byte data;};
 static int connection=1, unreliable, in_game=1, mcc=1, resets, clock_notes;
@@ -522,6 +523,11 @@ static long distributed_tick_state_times[2][UNIT_BASE_TICKS],distributed_unit_ba
 static long distributed_unit_taken_time,distributed_unit_missing_time;
 static boolean distributed_unit_bases_missing;
 static struct {long time;} distributed_sent_substep_bases[HALO_PORT_MAXIMUM_NETWORK_MACHINES][2];
+static struct {long time;} distributed_substep_sents[HALO_PORT_MAXIMUM_NETWORK_MACHINES][2];
+/* (the game type's state's changes, and the held inputs and predictions) */
+static long distributed_game_state_sent_size;
+static int distributed_game_state_machines[2],distributed_inputs_held_sent[2],distributed_predictions_held_sent[2];
+static int distributed_held_inputs[2],distributed_held_predictions[2];
 static long distributed_unit_sent_times[HALO_PORT_MAXIMUM_NETWORK_MACHINES][2][UNIT_SENT_TICKS];
 static long distributed_unit_acked_times[HALO_PORT_MAXIMUM_NETWORK_MACHINES];
 static struct {long size;} distributed_batches[MAXIMUM_SENDERS];

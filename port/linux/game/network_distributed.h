@@ -265,6 +265,13 @@ enum
 	/* a vehicle hijack the host began or called off, and the rule changed
 	during a game (network_hijack.c), reliably, to every OpenH1 client */
 	_distributed_message_vehicle_hijack = 144,
+	/* an OpenH1 client's input, and its prediction, of a tick the same as
+	the last it sent whole (network_distributed.c, unreliable, to an OpenH1
+	host, in place of _distributed_message_player_inputs and
+	_distributed_message_player_prediction): the player, the tick, the
+	host's tick it has had, and the checksum of what it repeats */
+	_distributed_message_player_inputs_held = 145,
+	_distributed_message_player_prediction_held = 146,
 
 	NUMBER_OF_DISTRIBUTED_MESSAGES
 };

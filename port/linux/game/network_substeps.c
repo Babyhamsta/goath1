@@ -206,6 +206,17 @@ typedef char forward_maximum_size_assert[
 typedef char distributed_substep_input_size_assert[
 	sizeof(struct distributed_substep_input) == 8 + 24 * MAXIMUM_LATER_SUBSTEPS ? 1 : -1];
 
+/* ... on the wire as the game's count has it: its controls of the later
+sub-steps alone (1 at 60, 3 at 120), none of the others' room */
+#define SUBSTEP_INPUT_HEADER_SIZE (sizeof(struct distributed_substep_input) - \
+	MAXIMUM_LATER_SUBSTEPS * sizeof(struct distributed_substep_input_control))
+
+static word substep_input_size(
+	short substep_count)
+{
+	return (word)(SUBSTEP_INPUT_HEADER_SIZE + (substep_count - 1) * sizeof(struct distributed_substep_input_control));
+}
+
 /* ---------- globals */
 
 static struct
@@ -343,10 +354,12 @@ static real substep_pin(
 	return PIN(value, minimum, maximum);
 }
 
-/* (the host) a client's players' sub-steps */
+/* (the host) a client's players' sub-steps, each its size by its count
+(substep_input_size), no further than end */
 static void network_substeps_handle_inputs(
 	long machine_index,
-	struct distributed_substep_input const *inputs,
+	byte const *data,
+	byte const *end,
 	short count)
 {
 	short index;
@@ -356,8 +369,19 @@ static void network_substeps_handle_inputs(
 		struct distributed_substep_input input;
 		struct substep_record record;
 		short substep;
+		word size;
 
-		csmemcpy(&input, &inputs[index], sizeof(input));
+		if (end - data < (long)SUBSTEP_INPUT_HEADER_SIZE)
+			return;
+		csmemset(&input, 0, sizeof(input));
+		csmemcpy(&input, data, SUBSTEP_INPUT_HEADER_SIZE);
+		if (input.substep_count < 2 || input.substep_count > MAXIMUM_SIM_SUBSTEPS)
+			return;
+		size = substep_input_size(input.substep_count);
+		if (end - data < (long)size)
+			return;
+		csmemcpy(&input, data, size);
+		data += size;
 		if (input.player_index >= MAXIMUM_TRACKED_PLAYERS ||
 			!distributed_machine_has_player(machine_index, input.player_index) ||
 			input.substep_count != network_substeps_count() || input.substep_count < 2)
@@ -1137,9 +1161,10 @@ void network_substeps_client_send(
 	struct
 	{
 		struct distributed_message_header header;
-		struct distributed_substep_input inputs[MAXIMUM_LOCAL_PLAYERS];
+		byte data[MAXIMUM_LOCAL_PLAYERS * sizeof(struct distributed_substep_input)];
 	} message;
 	short count = 0;
+	word used = 0;
 	short local_player_index;
 
 	if (!network_substeps_active())
@@ -1148,7 +1173,8 @@ void network_substeps_client_send(
 	{
 		long player_index = local_player_get_player_index(local_player_index);
 		long absolute_index = player_index != NONE ? DATUM_INDEX_TO_ABSOLUTE_INDEX(player_index) : NONE;
-		struct distributed_substep_input *input = &message.inputs[count];
+		struct distributed_substep_input entry;
+		struct distributed_substep_input *input = &entry;
 		struct substep_record const *ran;
 		struct player_action action;
 		unsigned short control_flags[DISTRIBUTED_INPUT_HISTORY];
@@ -1181,11 +1207,14 @@ void network_substeps_client_send(
 			input->controls[substep].yaw = control->facing.yaw;
 			input->controls[substep].pitch = control->facing.pitch;
 		}
+		/* (the game's count of sub-steps' controls alone) */
+		csmemcpy(message.data + used, input, substep_input_size(ran->count));
+		used += substep_input_size(ran->count);
 		count++;
 	}
 	if (count)
 	{
-		word size = (word)(sizeof(message.header) + count * sizeof(struct distributed_substep_input));
+		word size = (word)(sizeof(message.header) + used);
 
 		distributed_send(&message, _distributed_message_player_substeps, count, size, _distributed_to_host);
 		network_substeps_globals.bytes_sent += size;
@@ -1320,13 +1349,9 @@ void network_substeps_handle_message(
 	if (header.type == _distributed_message_player_substeps)
 	{
 		/* (the host's, from a client machine) */
-		if (game_connection() != _game_connection_network_server || machine_index == NONE ||
-			size < sizeof(header) + header.count * sizeof(struct distributed_substep_input))
-		{
+		if (game_connection() != _game_connection_network_server || machine_index == NONE)
 			return;
-		}
-		network_substeps_handle_inputs(machine_index, (struct distributed_substep_input const *)entries,
-			header.count);
+		network_substeps_handle_inputs(machine_index, entries, end, header.count);
 	}
 	else if (header.type == _distributed_message_relayed_substeps)
 	{
