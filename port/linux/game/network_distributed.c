@@ -1019,6 +1019,10 @@ for the host */
 static struct distributed_batch distributed_batches[MAXIMUM_SENDERS];
 /* (the largest messages, packed a machine at a time) */
 static struct distributed_packer distributed_packer;
+/* (the host) the batches holding what a tick's last sub-step sent on, for
+the tick's flush that follows it at once (distributed_batches_flush; or, if
+none came, the next frame's: network_distributed_frame_received) */
+static boolean distributed_forward_held;
 
 /* for the automated tests' reports (network_test.c) */
 static struct
@@ -1620,6 +1624,7 @@ static void distributed_batches_flush(
 
 	for (step = 0; step < MAXIMUM_SENDERS; step++)
 		distributed_batch_flush((short)((first + step) % MAXIMUM_SENDERS));
+	distributed_forward_held = FALSE;
 }
 
 static boolean distributed_fill_header(
@@ -5395,10 +5400,27 @@ static boolean distributed_forward_covers(
 		distributed_forwarded_ticks[machine_index][player_index] >= input_time;
 }
 
+/* when the host sends on what it heard (distributed_forward_flush) */
+enum
+{
+	/* as its datagrams are read (a frame's, or a dedicated server's wait):
+	in a datagram of their own at once, no sooner than the interval after
+	the last */
+	_forward_at_read,
+	/* as a sub-step but a tick's last ends: in the datagram of the
+	sub-step's states, which goes then, whatever the interval */
+	_forward_at_substep,
+	/* as a tick's last sub-step ends: in the tick's datagram, which its
+	messages fill and send at once (network_distributed_tick) */
+	_forward_at_tick_end,
+};
+
 /* (the host) the inputs heard since last sent on (and the live controls of
-the sub-steps, network_substeps.c's), to each OpenH1 client in one datagram */
+the sub-steps, network_substeps.c's), to each OpenH1 client in one datagram:
+at a sub-step's end the sub-step's own (one per sub-step and machine, the
+messages bound for it together, split only where a datagram is full) */
 static void distributed_forward_flush(
-	void)
+	short occasion)
 {
 	long machine_indices[HALO_PORT_MAXIMUM_NETWORK_MACHINES];
 	short machine_count;
@@ -5415,7 +5437,11 @@ static void distributed_forward_flush(
 		return;
 	for (player_index = 0; player_index < MAXIMUM_TRACKED_PLAYERS && !inputs; player_index++)
 		inputs = distributed_forwards[player_index].pending;
-	if ((!inputs && !live) || now - last_sent < (unsigned long long)(halo_server_mode() ?
+	/* (the interval is between datagrams of their own: at a sub-step's end
+	one goes anyway, with what is due then) */
+	if (!inputs && !live)
+		return;
+	if (occasion == _forward_at_read && now - last_sent < (unsigned long long)(halo_server_mode() ?
 		FORWARDED_INPUT_SERVER_INTERVAL_MILLISECONDS : FORWARDED_INPUT_INTERVAL_MILLISECONDS))
 	{
 		return;
@@ -5488,10 +5514,14 @@ static void distributed_forward_flush(
 		}
 		/* (at once: not with the next tick's; the next no sooner than the
 		interval after, where one went: a far player's controls that made
-		no press went nowhere) */
+		no press went nowhere. A tick's last sub-step's go with the tick's
+		messages, sent as soon as they are written, in one datagram) */
 		if (any)
 		{
-			distributed_batch_flush((short)machine_index);
+			if (occasion == _forward_at_tick_end)
+				distributed_forward_held = TRUE;
+			else
+				distributed_batch_flush((short)machine_index);
 			last_sent = now;
 		}
 	}
@@ -5507,7 +5537,10 @@ void network_distributed_frame_received(
 {
 	/* (the frame its clients' inputs were read in: network_clock.c) */
 	network_clock_frame_read();
-	distributed_forward_flush();
+	distributed_forward_flush(_forward_at_read);
+	/* (a tick's last sub-step's, whose tick sent nothing after) */
+	if (distributed_forward_held)
+		distributed_batches_flush();
 }
 
 /* (a dedicated server of an OpenH1 game, waiting for its frame's time:
@@ -5545,7 +5578,7 @@ int network_distributed_server_receive(
 	}
 	else
 	{
-		distributed_forward_flush();
+		distributed_forward_flush(_forward_at_read);
 	}
 	return TRUE;
 }
@@ -5867,9 +5900,15 @@ void network_distributed_host_substep_ended(
 			distributed_packer_flush(&distributed_packer);
 		}
 	}
-	/* (with the controls of the sub-step, in one datagram where they go
-	now; at once where they do not) */
-	distributed_forward_flush();
+	/* (with the controls of the sub-step, in one datagram to each machine:
+	at once, but for the tick's last sub-step's, which go with the tick's
+	messages, written and sent as it ends, network_distributed_tick) */
+	if (substep_index == substep_count - 1)
+	{
+		distributed_forward_flush(_forward_at_tick_end);
+		return;
+	}
+	distributed_forward_flush(_forward_at_substep);
 	for (machine_number = 0; machine_number < machine_count; machine_number++)
 	{
 		if (sent[machine_indices[machine_number]])

@@ -1379,6 +1379,16 @@ in an OpenH1 game of several sub-steps a tick (`network_distributed.c`,
   datagram of the sub-step's live controls where one goes then, else in
   one of its own. A client player's names the client's tick the host's tick
   is running, as the tick's own state will.
+- What the host sends a machine as a sub-step ends leaves in one datagram
+  (split only where the next message or entry does not fit): the
+  forwarded input and live controls go with the sub-step's states whatever
+  the interval since the frame's own forward (that interval spaces only
+  datagrams of their own), and a tick's last sub-step's go first in the
+  tick's datagram, written and sent at once as the tick ends
+  (`distributed_forward_flush`'s occasions; held for the next frame where
+  no tick follows). Nothing waits for a later sub-step; a client's own
+  sub-steps already went so. The bytes of each message are unchanged
+  (`tools/harness/tests/test_substep_datagrams.py`).
 - A client notes where its copy of each other client's player was as each
   sub-step of its ticks but the last ended, by the same key as the tick's
   (`distributed_note_remote_positions`), and compares a sub-step's state
