@@ -43,6 +43,8 @@ static void render_interpolation_frame_begin(void) {}
 static void render_interpolation_frame_end(void) {}
 static void network_test_elevator_frame(void) {}
 static void game_frame(real seconds) { (void)seconds; }
+/* (the demo recorder's copy once the frame's steps are run: none here) */
+static void demo_steps_end(void) {}
 static real game_time_get_speed(void) { return 1.0f; }
 /* (a local game: no MCC host's speed, no distributed client's catch-up toward a
 host update: game_time.c's) */
