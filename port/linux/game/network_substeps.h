@@ -15,6 +15,8 @@ boolean network_substeps_active(void);
 
 /* a new game: nothing heard or kept of the last */
 void network_substeps_new_game(void);
+/* a co-op revert: the records and controls heard, of the world reverted from, forgotten */
+void network_substeps_reverted(void);
 
 /* the fast phase (player_control.c's slot): its first sub-step, before
 which each player's tick input was taken, and each later one, after the

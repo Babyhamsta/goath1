@@ -78,6 +78,7 @@ machine (their datum identifiers need not be).
 #include "network_clock.h"
 #include "vehicle_riding.h"
 #include "network_coop.h"
+#include "vehicle_hijack.h"
 #include "network_distributed.h"
 #include "network_legacy.h"
 #include "network_link.h"
@@ -182,10 +183,11 @@ host's copies go as its own ticks have them) ... */
 #define CLIENT_CLOCK_FAST_WINDOWS 5
 /* the longest notice's text (_distributed_message_notice) */
 #define MAXIMUM_NOTICE_LENGTH 160
-/* how far a datagram's tick may be from the latest a message from its
-sender had, either way (distributed_sender_times): as long as a machine may
-go silent before it is dropped */
-#define DISTRIBUTED_TIME_WINDOW_TICKS (15 * TICKS_PER_SECOND)
+/* how far a datagram's tick may be from its sender's clock as this machine
+has it, either way (distributed_sender_offsets): as long as a machine may go
+silent before it is dropped (player_queues_new.h's bound on a tick a message
+states, DISTRIBUTED_TICK_WINDOW_TICKS, is the same) */
+#define DISTRIBUTED_TIME_WINDOW_TICKS DISTRIBUTED_TICK_WINDOW_TICKS
 /* a Discord user's id and name as kept, with their ends (p2p.h's
 P2P_DISCORD_ID_SIZE and P2P_DISCORD_NAME_SIZE) */
 #define DISCORD_ID_SIZE 24
@@ -880,17 +882,48 @@ static unsigned long distributed_game_state_checksum;
 static long distributed_game_state_postgame;
 static long distributed_game_state_time;
 
-/* the latest tick of each kind of unreliable message had from each sender
-(a machine, or the host), NONE for none */
+/* the latest tick of each kind of message had in a datagram from each sender
+(a machine, or the host), NONE for none: the kinds whose every message is the
+whole of what it tells (distributed_message_stale) */
 static long distributed_received_times[MAXIMUM_SENDERS][NUMBER_OF_DISTRIBUTED_MESSAGES];
-/* the latest tick of any message had from each sender, NONE for none: a
-datagram, which anyone can send as from another machine, is dropped when
-its tick is further from it than DISTRIBUTED_TIME_WINDOW_TICKS (one stamped
-far ahead would have every newer one of the sender's taken for stale, and
-its clock for fast); a message over the sender's stream, which only it can
-send, is taken whatever its tick, and moves it
-(distributed_message_time_bounded) */
-static long distributed_sender_times[MAXIMUM_SENDERS];
+/* the host's kinds each of whose messages tells of some things only (an
+inventory, an object, a player): the latest tick of each thing had, by its
+key (the entry's first field, or the object it names), in a slot by the
+key's low bits; a key other than the slot's is new (distributed_keyed_fresh) */
+enum
+{
+	KEYED_FRESHNESS_SLOTS = 2048,
+};
+struct distributed_keyed_kind
+{
+	byte type;
+	byte offset;
+	byte size;
+};
+static struct distributed_keyed_kind const distributed_keyed_kinds[] =
+{
+	{ _distributed_message_inventories, 0, sizeof(long) },
+	{ _distributed_message_object_states, 0, sizeof(long) },
+	{ _distributed_message_player_statistics, 0, sizeof(short) },
+	{ _distributed_message_pings, 0, sizeof(byte) },
+	{ _distributed_message_coop_object_transforms, 4, sizeof(long) },
+	{ _distributed_message_coop_object_looks, 4, sizeof(long) },
+	{ _distributed_message_coop_device_states, 0, sizeof(short) },
+};
+static struct distributed_keyed_time
+{
+	long key;
+	long time;
+} distributed_keyed_times[NUMBEROF(distributed_keyed_kinds)][KEYED_FRESHNESS_SLOTS];
+/* each sender's clock as this machine has it: the ticks from its own clock
+(distributed_sender_clock). 0 (each machine's clock began at the host's, and
+follows it) until a message over the sender's stream, which only it can send,
+comes stamped further than DISTRIBUTED_TIME_WINDOW_TICKS from it, and moves
+it there; a datagram, which anyone can send as from another machine, never
+moves it, and further than that from it is dropped (one stamped far ahead
+would have every newer one of the sender's taken for stale, and its clock
+for fast: distributed_message_time_bounded) */
+static long distributed_sender_offsets[MAXIMUM_SENDERS];
 /* Outside saved game state. A restored handle may name a new life; packets
 from the world before the restore must not act on it. Zero means that a
 client is still waiting for the host's ordered boundary. */
@@ -1904,7 +1937,7 @@ static boolean distributed_machine_loaded(
 		sizeof(distributed_machine_players[machine_index]));
 	for (type = 0; type < NUMBER_OF_DISTRIBUTED_MESSAGES; type++)
 		distributed_received_times[machine_index][type] = NONE;
-	distributed_sender_times[machine_index] = NONE;
+	distributed_sender_offsets[machine_index] = 0;
 	csmemset(&distributed_round_trips[machine_index], 0, sizeof(distributed_round_trips[machine_index]));
 	csmemset(distributed_viewers[machine_index], 0, sizeof(distributed_viewers[machine_index]));
 	csmemset(&distributed_client_clocks[machine_index], 0, sizeof(distributed_client_clocks[machine_index]));
@@ -5085,7 +5118,8 @@ static void distributed_handle_inputs(
 		/* (an OpenH1 game's: sent on to the other clients as it came, the
 		latest of the frame's, network_distributed_frame_received) */
 		if (update_server_handle_distributed_input(DATUM_INDEX_NEW(input->player_index, player->identifier),
-			input->tick, &action, input->control_flags, DISTRIBUTED_INPUT_HISTORY))
+			input->tick, &action, input->control_flags, DISTRIBUTED_INPUT_HISTORY,
+			distributed_sender_clock(machine_index)))
 		{
 			distributed_forward_note(input->player_index, input->tick, &action, input->control_flags);
 		}
@@ -6729,6 +6763,22 @@ static void distributed_send_game_state(
 
 /* ---------- the game */
 
+/* every keyed kind's thing's latest tick forgotten (distributed_keyed_times) */
+static void distributed_keyed_reset(void)
+{
+	short kind;
+	short slot;
+
+	for (kind = 0; kind < (short)NUMBEROF(distributed_keyed_kinds); kind++)
+	{
+		for (slot = 0; slot < KEYED_FRESHNESS_SLOTS; slot++)
+		{
+			distributed_keyed_times[kind][slot].key = NONE;
+			distributed_keyed_times[kind][slot].time = NONE;
+		}
+	}
+}
+
 /* Predictions, delayed effects and send caches belong to one world, even
 when a checkpoint restores the same object handles. Connection identity,
 permissions, round trips and the host's current roster do not. */
@@ -6797,11 +6847,13 @@ static void distributed_reset_checkpoint_state(boolean reset_received_times)
 		distributed_batches[sender].size = 0;
 		if (reset_received_times)
 		{
-			distributed_sender_times[sender] = NONE;
+			distributed_sender_offsets[sender] = 0;
 			for (type = 0; type < NUMBER_OF_DISTRIBUTED_MESSAGES; type++)
 				distributed_received_times[sender][type] = NONE;
 		}
 	}
+	if (reset_received_times)
+		distributed_keyed_reset();
 	for (sender = 0; sender < MAXIMUM_LOCAL_PLAYERS; sender++)
 	{
 		for (type = 0; type < OWN_POSITION_TICKS; type++)
@@ -6873,6 +6925,10 @@ static void distributed_restore_checkpoint(void)
 	network_damage_new_game();
 	network_actors_new_game();
 	network_coop_reset_recovery();
+	/* (sub-steps keyed by the ticks, and hijacks by the units, of the world
+	reverted from) */
+	network_substeps_reverted();
+	vehicle_hijack_reset();
 }
 
 void network_distributed_reverted(void)
@@ -7059,83 +7115,149 @@ void network_distributed_tick(
 	network_clock_tick_ended();
 }
 
-/* whether a message's tick is near enough the latest had from its sender
-to be taken (distributed_sender_times); from_stream: it came over the
-sender's stream (or a client's connection to the host), not in a datagram */
+long distributed_sender_clock(
+	long machine_index)
+{
+	short sender = machine_index == NONE ? HOST_SENDER : (short)machine_index;
+
+	if (sender < 0 || sender >= MAXIMUM_SENDERS)
+		return game_time_get();
+	return game_time_get() + distributed_sender_offsets[sender];
+}
+
+/* whether a message's tick is near enough its sender's clock as this
+machine has it to be taken (distributed_sender_offsets); from_stream: it
+came over the sender's stream (or a client's connection to the host), not
+in a datagram */
 static boolean distributed_message_time_bounded(
 	long machine_index,
 	long game_time,
 	boolean from_stream)
 {
 	short sender = machine_index == NONE ? HOST_SENDER : (short)machine_index;
-	long *latest;
+	long clock;
 	unsigned long distance;
 	short type;
 
 	if (sender < 0 || sender >= MAXIMUM_SENDERS)
 		return FALSE;
-	latest = &distributed_sender_times[sender];
-	if (*latest == NONE)
-	{
-		*latest = game_time;
-		return TRUE;
-	}
+	clock = distributed_sender_clock(machine_index);
 	/* (unsigned: no tick, however far, overflows it) */
-	distance = game_time > *latest ?
-		(unsigned long)game_time - (unsigned long)*latest :
-		(unsigned long)*latest - (unsigned long)game_time;
-	if (distance > DISTRIBUTED_TIME_WINDOW_TICKS)
+	distance = game_time > clock ?
+		(unsigned long)game_time - (unsigned long)clock :
+		(unsigned long)clock - (unsigned long)game_time;
+	if (distance <= DISTRIBUTED_TIME_WINDOW_TICKS)
+		return TRUE;
+	if (!from_stream)
 	{
 		static unsigned long last_logged_time;
 		static boolean logged;
+		unsigned long now = system_milliseconds();
 
-		if (!from_stream)
+		if (!logged || now - last_logged_time >= 1000)
 		{
-			unsigned long now = system_milliseconds();
-
-			if (!logged || now - last_logged_time >= 1000)
-			{
-				error(_error_silent, "distributed message stamped %ld ticks from its sender's latest in a datagram; dropped",
-					game_time > *latest ? (long)distance : -(long)distance);
-				last_logged_time = now;
-				logged = TRUE;
-			}
-			return FALSE;
+			error(_error_silent, "distributed message stamped %ld ticks from its sender's clock in a datagram; dropped",
+				game_time > clock ? (long)distance : -(long)distance);
+			last_logged_time = now;
+			logged = TRUE;
 		}
-		/* (the sender's own word: what a datagram sent as from it had moved
-		its latest to is forgotten) */
-		*latest = game_time;
-		for (type = 0; type < NUMBER_OF_DISTRIBUTED_MESSAGES; type++)
-			distributed_received_times[sender][type] = NONE;
-		return TRUE;
+		return FALSE;
 	}
-	if (game_time > *latest)
-		*latest = game_time;
+	/* (the sender's own word: its clock is where it says, and what was had
+	of it at the old one is forgotten) */
+	distributed_sender_offsets[sender] = game_time - game_time_get();
+	for (type = 0; type < NUMBER_OF_DISTRIBUTED_MESSAGES; type++)
+		distributed_received_times[sender][type] = NONE;
+	if (sender == HOST_SENDER)
+		distributed_keyed_reset();
 	return TRUE;
 }
 
-/* whether an unreliable message of the kind is older than one had already
-(then it is dropped: the newer has overtaken it) */
+/* the keyed kind's index of a kind of message (distributed_keyed_kinds),
+NONE for one whose messages tell the whole of what they are of */
+static short distributed_keyed_kind(
+	byte type)
+{
+	short kind;
+
+	for (kind = 0; kind < (short)NUMBEROF(distributed_keyed_kinds); kind++)
+	{
+		if (distributed_keyed_kinds[kind].type == type)
+			return kind;
+	}
+	return NONE;
+}
+
+/* (a keyed kind's message from the host) its entries of things it has had
+newer of left out, in order, and the rest noted as the latest of their
+things: the count kept. A datagram's and the stream's alike: a stream's
+snapshot overtaken by a newer datagram for some units is still the latest
+of the others (G3) */
+static short distributed_keyed_fresh(
+	short kind,
+	long time,
+	byte *entries,
+	short count,
+	word entry_size)
+{
+	struct distributed_keyed_kind const *keyed = &distributed_keyed_kinds[kind];
+	long clock = distributed_sender_clock(NONE);
+	short kept = 0;
+	short index;
+
+	if (entry_size < keyed->offset + keyed->size)
+		return count;
+	for (index = 0; index < count; index++)
+	{
+		byte *entry = entries + index * entry_size;
+		struct distributed_keyed_time *slot;
+		long key = 0;
+
+		switch (keyed->size)
+		{
+		case sizeof(byte): key = entry[keyed->offset]; break;
+		case sizeof(short): { short value; csmemcpy(&value, entry + keyed->offset, sizeof(value)); key = value; break; }
+		default: csmemcpy(&key, entry + keyed->offset, sizeof(key)); break;
+		}
+		slot = &distributed_keyed_times[kind][(unsigned long)key & (KEYED_FRESHNESS_SLOTS - 1)];
+		if (slot->key == key && slot->time != NONE && time < slot->time &&
+			!distributed_tick_stuck(slot->time, time, clock))
+		{
+			continue;
+		}
+		slot->key = key;
+		slot->time = time;
+		if (kept != index)
+			csmemmove(entries + kept * entry_size, entry, entry_size);
+		kept++;
+	}
+	return kept;
+}
+
+/* whether a datagram of a kind whose every message tells the whole of what
+it is of is older than one had already (then it is dropped: the newer has
+overtaken it). A message over the stream is never stale: it is the sender's
+ordered word, and a datagram's tick does not stand for it */
 static boolean distributed_message_stale(
 	long machine_index,
-	struct distributed_message_header const *header)
+	struct distributed_message_header const *header,
+	boolean from_stream)
 {
 	short sender = machine_index == NONE ? HOST_SENDER : (short)machine_index;
 	long *latest;
 
+	if (from_stream)
+		return FALSE;
 	switch (header->type)
 	{
 	case _distributed_message_player_prediction:
 	case _distributed_message_unit_states:
 	case _distributed_message_unit_state_differences:
-	case _distributed_message_player_statistics:
-	case _distributed_message_inventories:
 	case _distributed_message_object_states:
 	case _distributed_message_vehicle_prediction:
 	case _distributed_message_player_inputs:
 	case _distributed_message_relayed_actions:
 	case _distributed_message_damage_events:
-	case _distributed_message_pings:
 	case _distributed_message_actor_states:
 	case _distributed_message_actor_states_compact:
 	case _distributed_message_structure_bsp:
@@ -7144,12 +7266,9 @@ static boolean distributed_message_stale(
 	case _distributed_message_coop_object_names:
 	case _distributed_message_coop_skip_vote:
 	case _distributed_message_coop_events:
-	case _distributed_message_coop_object_transforms:
 	case _distributed_message_actor_damage:
-	case _distributed_message_coop_object_looks:
 	case _distributed_message_damage_animations:
 	case _distributed_message_coop_screen_effect:
-	case _distributed_message_coop_device_states:
 	case _distributed_message_votekick_status:
 	case _distributed_message_mcc_grenades:
 	case _distributed_message_mcc_campaign:
@@ -7158,12 +7277,20 @@ static boolean distributed_message_stale(
 	default:
 		return FALSE;
 	}
+	/* (a client's object states, its vehicles' predictions' kind, and the
+	host's, keyed: distributed_keyed_fresh) */
+	if (sender == HOST_SENDER && distributed_keyed_kind(header->type) != NONE)
+		return FALSE;
 	if (sender < 0 || sender >= MAXIMUM_SENDERS)
 		return TRUE;
 	latest = &distributed_received_times[sender][header->type];
-	/* (a tick's several messages of a kind have its time alike) */
-	if (*latest != NONE && header->game_time < *latest)
+	/* (a tick's several messages of a kind have its time alike; a latest no
+	clock could have run gives way, as an input's does) */
+	if (*latest != NONE && header->game_time < *latest &&
+		!distributed_tick_stuck(*latest, header->game_time, distributed_sender_clock(machine_index)))
+	{
 		return TRUE;
+	}
 	*latest = header->game_time;
 	return FALSE;
 }
@@ -8090,7 +8217,119 @@ static boolean distributed_message_epoch_valid(
 		if (!distributed_checkpoint_synchronized)
 			return header->type == _distributed_message_object_changes ||
 				(header->type == _distributed_message_inventories &&
-					!network_connection_last_read_was_unreliable() && !distributed_handling_batch);
+					!network_connection_last_read_was_unreliable() && !distributed_handling_batch) ||
+				/* (none of the world's objects in them: the host's word on
+				this machine's clock, and its team moves) */
+				header->type == _distributed_message_clock_phase || header->type == _distributed_message_host_team;
+	}
+	return TRUE;
+}
+
+/* OpenH1's own kinds of the game world handled in their own files (they
+read their messages whole), which pass the world gate as the rest do */
+static boolean distributed_world_side_kind(
+	byte type)
+{
+	switch (type)
+	{
+	case _distributed_message_player_substeps:
+	case _distributed_message_relayed_substeps:
+	case _distributed_message_player_live_controls:
+	case _distributed_message_forwarded_live_controls:
+	case _distributed_message_opence_players:
+	case _distributed_message_host_team:
+	case _distributed_message_host_teleport:
+	case _distributed_message_vehicle_hijack:
+	case _distributed_message_clock_phase:
+	case _distributed_message_marker_up:
+	case _distributed_message_marker_down:
+		return TRUE;
+	}
+	return FALSE;
+}
+
+/* The one gate every message of the game world passes before it is
+handled (the settings', the lobby's, chat's and the connection's own
+kinds, handled before it, are of no world): FALSE, dropped. In order:
+- the world (epoch) it is of: distributed_message_epoch_valid;
+- its tick near its sender's clock as this machine has it, a datagram's
+  (distributed_message_time_bounded: the stream sets the clock, a
+  datagram never does);
+- not older than what was had of the same things: the kinds whose messages
+  tell the whole of what they are of, by the kind, of datagrams alone
+  (distributed_message_stale); the host's kinds that tell of some things
+  only, by each thing, the stream's too (distributed_keyed_fresh: entries
+  and the header's count left with the fresh ones);
+- (the host) the client's clock measured by it, and a client whose game
+  runs fast not driving its players.
+The ticks a message's entries state (inputs', sub-steps') are bounded by
+the same clock where they are taken (distributed_sender_clock,
+player_queues_new.c's distributed_tick_plausible) */
+static boolean distributed_world_gate(
+	long machine_index,
+	struct distributed_message_header *header,
+	word size,
+	boolean from_stream,
+	void const **entries,
+	word entry_size)
+{
+	short kind;
+
+	if (!distributed_message_epoch_valid(machine_index, header, size))
+		return FALSE;
+	/* Readiness can name an earlier world; it requests the current boundary
+	but supplies no clock or simulation evidence for that world. */
+	if (header->type != _distributed_message_client_ready &&
+		!distributed_message_time_bounded(machine_index, header->game_time, from_stream))
+	{
+		return FALSE;
+	}
+	/* (a client: the host's latest tick, which its input messages tell it
+	back; and when it came, the latency meter's. Not a forwarded input's,
+	sent between the host's ticks, nor OpenH1's own kinds': the round trips
+	are timed by when each tick's own messages went) */
+	if (machine_index == NONE && header->type != _distributed_message_forwarded_inputs &&
+		header->type != _distributed_message_substep_states && !distributed_world_side_kind(header->type) &&
+		(distributed_host_time == NONE || header->game_time > distributed_host_time))
+	{
+		distributed_host_time = header->game_time;
+		distributed_host_time_received = system_milliseconds();
+	}
+	if (distributed_message_stale(machine_index, header, from_stream))
+		return FALSE;
+	kind = machine_index == NONE ? distributed_keyed_kind(header->type) : NONE;
+	if (kind != NONE && header->count > 0 && entry_size > 0)
+	{
+		/* (the fresh entries, in a copy, aligned as a message's: the message
+		is the network's) */
+		static union
+		{
+			long alignment;
+			byte bytes[MAXIMUM_MESSAGE_SIZE];
+		} fresh;
+
+		if ((long)header->count * entry_size > (long)sizeof(fresh.bytes))
+			return FALSE;
+		csmemcpy(fresh.bytes, *entries, (long)header->count * entry_size);
+		header->count = (byte)distributed_keyed_fresh(kind, header->game_time, fresh.bytes, header->count,
+			entry_size);
+		if (!header->count)
+			return FALSE;
+		*entries = fresh.bytes;
+	}
+	/* (the host: a client's clock, by its messages' ticks; and its players'
+	predictions and sub-steps not taken while its game runs fast) */
+	if (machine_index != NONE && header->type != _distributed_message_client_ready)
+	{
+		distributed_note_client_clock(machine_index, header->game_time);
+		if ((header->type == _distributed_message_player_prediction ||
+				header->type == _distributed_message_vehicle_prediction ||
+				header->type == _distributed_message_player_substeps ||
+				header->type == _distributed_message_player_live_controls) &&
+			distributed_machine_clock_fast(machine_index))
+		{
+			return FALSE;
+		}
 	}
 	return TRUE;
 }
@@ -8106,6 +8345,8 @@ void network_distributed_handle_message(
 	void const *entries = (byte const *)message + sizeof(header);
 	short index;
 	word entry_size;
+	boolean world_side;
+	boolean from_stream;
 
 	/* (voice chat's, in the lobby too: network_voice.c) */
 	if (network_aim_assist_handles_message(message, size))
@@ -8129,18 +8370,6 @@ void network_distributed_handle_message(
 	{
 		csmemcpy(&header, message, sizeof(header));
 		network_standard_message_heard(header.type);
-	}
-	/* (an OpenH1 game's sub-steps: network_substeps.c) */
-	if (network_substeps_handles_message(message, size))
-	{
-		network_substeps_handle_message(machine_index, message, size);
-		return;
-	}
-	/* (a mixed game's OpenCE players: network_standard.c) */
-	if (network_standard_handles_message(message, size))
-	{
-		network_standard_handle_message(machine_index, message, size);
-		return;
 	}
 	if (network_voice_handles_message(message, size))
 	{
@@ -8190,31 +8419,10 @@ void network_distributed_handle_message(
 			distributed_handling_stream_message : !network_connection_last_read_was_unreliable());
 		return;
 	}
-	/* (the host's team moves: network_host_controls.c) */
-	if (network_host_controls_handles_message(message, size))
-	{
-		network_host_controls_handle_message(machine_index, message, size, machine_index != NONE ?
-			distributed_handling_stream_message : !network_connection_last_read_was_unreliable());
-		return;
-	}
 	/* (the host's rules of the game under way: network_host_rules.c) */
 	if (network_host_rules_handles_message(message, size))
 	{
 		network_host_rules_handle_message(machine_index, message, size, machine_index != NONE ?
-			distributed_handling_stream_message : !network_connection_last_read_was_unreliable());
-		return;
-	}
-	/* (the host's vehicle hijacks: network_hijack.c) */
-	if (network_hijack_handles_message(message, size))
-	{
-		network_hijack_handle_message(machine_index, message, size, machine_index != NONE ?
-			distributed_handling_stream_message : !network_connection_last_read_was_unreliable());
-		return;
-	}
-	/* (the host's word on a client's clock: network_clock.c) */
-	if (network_clock_handles_message(message, size))
-	{
-		network_clock_handle_message(machine_index, message, size, machine_index != NONE ?
 			distributed_handling_stream_message : !network_connection_last_read_was_unreliable());
 		return;
 	}
@@ -8223,13 +8431,6 @@ void network_distributed_handle_message(
 	if (network_admin_handles_message(message, size))
 	{
 		network_admin_handle_message(machine_index, message, size, machine_index != NONE ?
-			distributed_handling_stream_message : !network_connection_last_read_was_unreliable());
-		return;
-	}
-	/* (the players' pings, in an OpenH1 game: network_markers.c) */
-	if (network_markers_handles_message(message, size))
-	{
-		network_markers_handle_message(machine_index, message, size, machine_index != NONE ?
 			distributed_handling_stream_message : !network_connection_last_read_was_unreliable());
 		return;
 	}
@@ -8283,9 +8484,13 @@ void network_distributed_handle_message(
 		}
 		return;
 	}
+	world_side = distributed_world_side_kind(header.type);
+	from_stream = machine_index != NONE ? distributed_handling_stream_message :
+		!network_connection_last_read_was_unreliable();
 	/* (entries of a size of their own: their least here, and each read no
-	further than the message's end) */
-	switch (header.type)
+	further than the message's end; OpenH1's own kinds' read by their
+	handlers, whole) */
+	switch (world_side ? 0 : header.type)
 	{
 	case _distributed_message_player_prediction:
 	case _distributed_message_unit_states: entry_size = DISTRIBUTED_UNIT_STATE_MINIMUM_SIZE; break;
@@ -8338,7 +8543,7 @@ void network_distributed_handle_message(
 	default: entry_size = network_objects_entry_size(header.type); break;
 	}
 	if (header.type == 0 || header.type >= NUMBER_OF_DISTRIBUTED_MESSAGES ||
-		size < sizeof(header) + header.count * entry_size)
+		(!world_side && size < sizeof(header) + header.count * entry_size))
 	{
 		return;
 	}
@@ -8360,7 +8565,8 @@ void network_distributed_handle_message(
 	default:
 		break;
 	}
-	distributed_statistics.received++;
+	if (!world_side)
+		distributed_statistics.received++;
 
 	/* (the kinds a client sends only over its stream: in a datagram, which
 	anyone can send as from it, they are not its) */
@@ -8386,6 +8592,9 @@ void network_distributed_handle_message(
 	case _distributed_message_votekick:
 	case _distributed_message_chat_up:
 	case _distributed_message_fire_origins:
+	case _distributed_message_player_substeps:
+	case _distributed_message_player_live_controls:
+	case _distributed_message_marker_up:
 		if (machine_index == NONE || game_connection() != _game_connection_network_server)
 			return;
 		/* (heard from: the latency meter's connection problem) */
@@ -8397,47 +8606,37 @@ void network_distributed_handle_message(
 			return;
 		break;
 	}
-	if (!distributed_message_epoch_valid(machine_index, &header, size))
+	if (!distributed_world_gate(machine_index, &header, size, from_stream, &entries, entry_size))
 		return;
-	/* Readiness can name an earlier world; it requests the current boundary
-	but supplies no clock or simulation evidence for that world. */
-	if (header.type != _distributed_message_client_ready &&
-		!distributed_message_time_bounded(machine_index, header.game_time,
-		machine_index == NONE ? !network_connection_last_read_was_unreliable() : distributed_handling_stream_message))
-	{
-		return;
-	}
-	/* (a client: the host's latest tick, which its input messages tell it
-	back; and when it came, the latency meter's. Not a forwarded input's,
-	sent between the host's ticks: the round trips are timed by when each
-	tick's own messages went) */
-	if (machine_index == NONE && header.type != _distributed_message_forwarded_inputs &&
-		header.type != _distributed_message_substep_states &&
-		(distributed_host_time == NONE || header.game_time > distributed_host_time))
-	{
-		distributed_host_time = header.game_time;
-		distributed_host_time_received = system_milliseconds();
-	}
-	if ((distributed_handling_batch || header.type != _distributed_message_damage_events) &&
-		distributed_message_stale(machine_index, &header))
-	{
-		return;
-	}
-	/* (the host: a client's clock, by its messages' ticks; and its players'
-	predictions not taken while its game runs fast) */
-	if (machine_index != NONE && header.type != _distributed_message_client_ready)
-	{
-		distributed_note_client_clock(machine_index, header.game_time);
-		if ((header.type == _distributed_message_player_prediction ||
-				header.type == _distributed_message_vehicle_prediction) &&
-			distributed_machine_clock_fast(machine_index))
-		{
-			return;
-		}
-	}
 
 	switch (header.type)
 	{
+	/* (OpenH1's own, read whole: network_substeps.c, network_standard.c,
+	network_host_controls.c, network_hijack.c, network_clock.c,
+	network_markers.c) */
+	case _distributed_message_player_substeps:
+	case _distributed_message_relayed_substeps:
+	case _distributed_message_player_live_controls:
+	case _distributed_message_forwarded_live_controls:
+		network_substeps_handle_message(machine_index, message, size);
+		break;
+	case _distributed_message_opence_players:
+		network_standard_handle_message(machine_index, message, size);
+		break;
+	case _distributed_message_host_team:
+	case _distributed_message_host_teleport:
+		network_host_controls_handle_message(machine_index, message, size, from_stream);
+		break;
+	case _distributed_message_vehicle_hijack:
+		network_hijack_handle_message(machine_index, message, size, from_stream);
+		break;
+	case _distributed_message_clock_phase:
+		network_clock_handle_message(machine_index, message, size, from_stream);
+		break;
+	case _distributed_message_marker_up:
+	case _distributed_message_marker_down:
+		network_markers_handle_message(machine_index, message, size, from_stream);
+		break;
 	case _distributed_message_player_prediction:
 		distributed_handle_predictions(machine_index, header.game_time, (byte const *)entries,
 			(byte const *)message + size, header.count);

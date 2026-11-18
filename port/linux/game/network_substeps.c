@@ -285,17 +285,24 @@ static short network_substeps_count(
 	return sim_substep_count();
 }
 
-/* a heard record kept (of heard, or of forwarded), if newer than the one kept */
+/* a heard record kept (of heard, or of forwarded), if newer than the one kept;
+now not NONE: its key a tick another machine states, checked against now as
+an input's is (player_queues_new.c's distributed_tick_plausible and
+distributed_tick_stuck), not the host's update */
 static void substep_record_heard(
 	struct substep_record *records,
 	short player_index,
-	struct substep_record const *record)
+	struct substep_record const *record,
+	long now)
 {
 	struct substep_record *kept = &records[player_index];
 
+	if (now != NONE && !distributed_tick_plausible(record->key, now))
+		return;
 	if (kept->valid && record->key <= kept->key &&
 		/* (a key far behind: the sender's game began again) */
-		kept->key - record->key < TICKS_PER_SECOND * 10)
+		kept->key - record->key < TICKS_PER_SECOND * 10 &&
+		!(now != NONE && distributed_tick_stuck(kept->key, record->key, now)))
 	{
 		return;
 	}
@@ -351,7 +358,8 @@ static void network_substeps_handle_inputs(
 			control->facing.yaw = substep_pin(wire->yaw, -4.0f * _pi, 4.0f * _pi);
 			control->facing.pitch = substep_pin(wire->pitch, -_pi, _pi);
 		}
-		substep_record_heard(network_substeps_globals.heard, input.player_index, &record);
+		substep_record_heard(network_substeps_globals.heard, input.player_index, &record,
+			distributed_sender_clock(machine_index));
 	}
 }
 
@@ -467,7 +475,7 @@ static void network_substeps_handle_relayed(
 		/* (a count other than the game's, or a player not tracked: passed
 		over, its bytes read) */
 		if (player_index < MAXIMUM_TRACKED_PLAYERS && record.count == network_substeps_count())
-			substep_record_heard(network_substeps_globals.heard, player_index, &record);
+			substep_record_heard(network_substeps_globals.heard, player_index, &record, NONE);
 	}
 }
 
@@ -529,17 +537,22 @@ static boolean live_control_far_pressed(
 }
 
 /* a heard live control kept, if later than the one kept (or of the other
-kind of key) */
+kind of key); now not NONE: its key a tick another machine states, checked
+as substep_record_heard's is */
 static boolean live_control_heard(
 	short player_index,
-	struct live_control const *live)
+	struct live_control const *live,
+	long now)
 {
 	struct live_control *kept = &network_substeps_globals.live[player_index];
 
+	if (now != NONE && !distributed_tick_plausible(live->key, now))
+		return FALSE;
 	if (kept->valid && kept->host_update == live->host_update &&
 		!live_control_later(live->key, live->substep, kept->key, kept->substep) &&
 		/* (a key far behind: its sender's game began again) */
-		live->key >= kept->key - TICKS_PER_SECOND * 10)
+		live->key >= kept->key - TICKS_PER_SECOND * 10 &&
+		!(now != NONE && distributed_tick_stuck(kept->key, live->key, now)))
 	{
 		return FALSE;
 	}
@@ -706,6 +719,7 @@ static void network_substeps_handle_live(
 	struct distributed_live_control const *entries,
 	short count)
 {
+	long now = distributed_sender_clock(machine_index);
 	short index;
 
 	for (index = 0; index < count; index++)
@@ -731,8 +745,9 @@ static void network_substeps_handle_live(
 		live.aim.i = substep_pin(entry.aim_i, -1.0f, 1.0f);
 		live.aim.j = substep_pin(entry.aim_j, -1.0f, 1.0f);
 		live.aim.k = substep_pin(entry.aim_k, -1.0f, 1.0f);
-		/* (a unit vector, or none taken) */
-		if (normalize3d(&live.aim) == 0.0f)
+		/* (a unit vector, or none taken; of a tick the client's clock could
+		have run, before its tick's table takes it) */
+		if (normalize3d(&live.aim) == 0.0f || !distributed_tick_plausible(live.key, now))
 			continue;
 		/* (each sub-step's of the latest ticks, for the host's own run of
 		them: host_live_apply) */
@@ -750,7 +765,7 @@ static void network_substeps_handle_live(
 			tick->given |= (word)FLAG(live.substep);
 		}
 		live.pending = TRUE;
-		live_control_heard(entry.player_index, &live);
+		live_control_heard(entry.player_index, &live, now);
 	}
 }
 
@@ -789,7 +804,8 @@ static void network_substeps_handle_forwarded_live(
 		{
 			continue;
 		}
-		live_control_heard(player_index, &live);
+		live_control_heard(player_index, &live,
+			live.host_update || !game_time_initialized() ? NONE : game_time_get());
 	}
 }
 
@@ -823,6 +839,17 @@ void network_substeps_new_game(
 			network_substeps_globals.host_live[player_index][tick].key = NONE;
 	}
 	sim_substep_register(_sim_substep_network, network_substeps_substep_end);
+}
+
+void network_substeps_reverted(
+	void)
+{
+	/* (the records and controls are of the world reverted from; what was
+	sent, counted, stays) */
+	long bytes_sent = network_substeps_globals.bytes_sent;
+
+	network_substeps_new_game();
+	network_substeps_globals.bytes_sent = bytes_sent;
 }
 
 void network_substeps_tick_begun(
@@ -1143,7 +1170,8 @@ word network_substeps_forward_read(
 	if (network_substeps_active() && player_index >= 0 && player_index < MAXIMUM_TRACKED_PLAYERS &&
 		record.count == network_substeps_count())
 	{
-		substep_record_heard(network_substeps_globals.forwarded, player_index, &record);
+		substep_record_heard(network_substeps_globals.forwarded, player_index, &record,
+			game_time_initialized() ? game_time_get() : NONE);
 	}
 	return (word)(after - data);
 }
@@ -1324,7 +1352,7 @@ static void network_substeps_substep_end(
 		if (connection == _game_connection_network_server)
 		{
 			now.pending = TRUE;
-			live_control_heard(absolute_index, &now);
+			live_control_heard(absolute_index, &now, NONE);
 		}
 		else
 		{
