@@ -41,6 +41,8 @@ game, and an OpenCE machine in a mixed game, play as before.
 /* xbox_kernel.c's and game_time.c's */
 unsigned long long platform_shared_clock_microseconds(void);
 void game_time_port_advance(long ticks);
+/* port_config.c's */
+int config_boolean(char const *name);
 
 /* ---------- globals */
 
@@ -375,6 +377,18 @@ boolean network_clock_server_pace_first(
 {
 	clock_server_paced = game_connection() == _game_connection_network_server && network_standard_agreed_rate();
 	return clock_server_paced;
+}
+
+/* a machine of an OpenH1 game whose frames nobody sees (unseen_frames.c):
+whether its frame waits for its step before its datagrams are read (main.c),
+not after; debug.network_timing_before, after, as before */
+boolean network_clock_unseen_wait_first(
+	void)
+{
+	short connection = game_connection();
+
+	return (connection == _game_connection_network_server || connection == _game_connection_network_client) &&
+		network_standard_agreed_rate() && !config_boolean("debug.network_timing_before");
 }
 
 boolean network_clock_server_paced(

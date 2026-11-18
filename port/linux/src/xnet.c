@@ -1060,8 +1060,19 @@ int xnet_socket_wait_readable(long socket, long milliseconds)
 	int readable = (int)socket;
 	int readable_count = 1;
 
+	/* (debug.network_latency: what is held back comes due by the clock, not
+	by the socket; a millisecond's wait at a time, readable when something
+	is due or has come to be held back, so that a waiting frame reads it
+	then, as it would come over a network) */
 	if (delayed_enabled())
-		return -1;
+	{
+		if (posix_socket_select(&readable, &readable_count, NULL, NULL, NULL, NULL, 0,
+			(posix_long)(milliseconds < 1 ? milliseconds : 1) * 1000, 0) < 0)
+		{
+			return -1;
+		}
+		return readable_count > 0 || delayed_due((int)socket);
+	}
 	if (posix_socket_select(&readable, &readable_count, NULL, NULL, NULL, NULL, 0,
 		(posix_long)milliseconds * 1000, 0) < 0)
 	{

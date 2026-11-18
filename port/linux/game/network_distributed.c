@@ -7404,12 +7404,14 @@ void network_distributed_frame_received(
 }
 
 /* (a dedicated server of an OpenH1 game, waiting for its frame's time:
-server_mode_pace_frame_receiving, from main.c) waits up to milliseconds for
-datagrams, reads those that come as its frame's read does and sends the
-input in them on at once, as the frame does after its read: a client's
-press goes on to the others as it comes, not at the server's next frame
-(at most 120 a second). FALSE when it cannot wait so (no game in progress,
-debug.network_latency holding datagrams back): the frame sleeps */
+server_mode_pace_frame_receiving, from main.c; and a host whose frames
+nobody sees, waiting for its step: unseen_frame_wait_receiving) waits up to
+milliseconds for datagrams, reads those that come as its frame's read does
+and sends the input in them on at once, as the frame does after its read: a
+client's press goes on to the others as it comes, not at the server's next
+frame (at most 120 a second). With debug.network_latency, what is held back is
+read as it comes due, a millisecond's wait at a time (xnet.c). FALSE when it
+cannot wait so (no game in progress): the frame sleeps */
 int network_distributed_server_receive(
 	long milliseconds)
 {

@@ -96,6 +96,7 @@ real network_clock_frame_seconds(real time_delta_sec);
 /* (a dedicated server, main.c) whether its frame waits for its time before
 its datagrams are read: an OpenH1 game's; and, once a frame, whether it did */
 boolean network_clock_server_pace_first(void);
+boolean network_clock_unseen_wait_first(void);
 boolean network_clock_server_paced(void);
 boolean network_clock_handles_message(word const *message, word size);
 void network_clock_handle_message(long machine_index, word const *message, word size, boolean from_stream);

@@ -2759,6 +2759,14 @@ static const struct config_setting config_settings[] =
 	{ "debug.voice_test", _config_boolean, "false", "HALO_VOICE_TEST", _environment_set_is_true, _platform_all,
 		"Voice chat's automated tests: a tone instead of the microphone, and\n"
 		"each voice heard logged once a second." },
+	{ "debug.network_timing_before", _config_boolean, "false", "HALO_NETWORK_TIMING_BEFORE", _environment_set_is_true,
+		_platform_all,
+		"A network game's machine whose frames nobody sees (a headless host or\n"
+		"client) reads its datagrams before it waits for its next step, not\n"
+		"after (a datagram that came in the wait then ran a step later); a host\n"
+		"sends on what it read just before its step in a datagram of its own;\n"
+		"and a client's clock takes no account of its frames: as before, to\n"
+		"compare the two, and as a fallback." },
 	{ "debug.network_latency_trace", _config_string, "\"\"", "HALO_NETWORK_LATENCY_TRACE", _environment_value,
 		_platform_all,
 		"A file to write, in a network game, when each of the players' control\n"
