@@ -14,7 +14,11 @@ so each machine needs each player's sub-steps too, not only their ticks:
   if its aim turned.
 - Up: a client sends its own players' sub-steps of the tick just run with
   its input of that tick (_distributed_message_player_substeps, unreliable,
-  in the same datagram), keyed by the client's tick, at full precision.
+  in the same datagram), keyed by the client's tick, at full precision;
+  packed (_distributed_message_player_substeps_packed, substep_input_pack),
+  as its live controls are (_distributed_message_player_live_controls_packed,
+  live_control_up_pack), each number the host reads exactly as the whole
+  record gave it, unless debug.network_controls_unpacked.
 - Replayed: in the next tick that runs the input of a tick, each sub-step
   past the first gives the player's unit that sub-step's controls, before
   the units and bipeds move (network_substeps_replay). A record is taken
@@ -59,6 +63,8 @@ within a controller's reach.
 
 /* source/game/player_queues_new.c */
 long update_queues_distributed_input_key(long absolute_player_index);
+/* port_config.c */
+int config_boolean(char const *name);
 
 /* ---------- constants */
 
@@ -90,6 +96,24 @@ enum
 	LIVE_CONTROL_FORWARD_HOST_UPDATE_BIT = 7,
 	LIVE_CONTROL_FORWARD_SUBSTEP_SHIFT = 5,
 	LIVE_CONTROL_FORWARD_WHOLE_KEY_BIT = 7,
+
+	/* the packed controls to the host (live_control_up_pack,
+	substep_input_pack): the first byte's player and whether the tick follows
+	whole (else the message's, or for sub-steps within a byte of it); a
+	number's code in 2 bits, +0, 1 or -1 exactly, or its 4 bytes; the held
+	controls' byte's sub-step (a live control's), or whether the sub-step
+	turned and has the sticks and trigger of the one before (a sub-step's) */
+	PACKED_WHOLE_KEY_BIT = 7,
+	PACKED_REAL_WHOLE = 3,
+	PACKED_CODE_COUNT_SHIFT = 6,
+	PACKED_SUBSTEP_SHIFT = 5,
+	PACKED_TURNED_BIT = 5,
+	PACKED_AS_BEFORE_BIT = 6,
+	/* ... their bytes at most: a live control's (3, its tick 4, the sticks
+	and trigger 4 each, the aim 12) and a sub-step record's (2, its tick 4,
+	each later sub-step's 2, 12 and 8) */
+	LIVE_CONTROL_PACKED_MAXIMUM_SIZE = 3 + 4 + 3 * 4 + 12,
+	SUBSTEP_INPUT_PACKED_MAXIMUM_SIZE = 2 + 4 + MAXIMUM_LATER_SUBSTEPS * (2 + 12 + 8),
 };
 
 /* the held controls (SUBSTEP_HELD_FLAGS, below) in the bits of a forwarded
@@ -215,6 +239,334 @@ static word substep_input_size(
 	short substep_count)
 {
 	return (word)(SUBSTEP_INPUT_HEADER_SIZE + (substep_count - 1) * sizeof(struct distributed_substep_input_control));
+}
+
+typedef char packed_bits_assert[
+	NUMBEROF(live_control_held_bits) <= PACKED_SUBSTEP_SHIFT && PACKED_SUBSTEP_SHIFT <= PACKED_TURNED_BIT &&
+	MAXIMUM_SIM_SUBSTEPS <= 1 << (PACKED_WHOLE_KEY_BIT - PACKED_SUBSTEP_SHIFT) &&
+	MAXIMUM_SIM_SUBSTEPS <= 1 << (8 - PACKED_CODE_COUNT_SHIFT) &&
+	MAXIMUM_TRACKED_PLAYERS <= 1 << PACKED_WHOLE_KEY_BIT ? 1 : -1];
+
+/* the held controls (SUBSTEP_HELD_FLAGS) in the low bits of a byte, and
+back */
+static byte held_bits_pack(
+	unsigned long held_flags)
+{
+	byte held = 0;
+	short bit;
+
+	for (bit = 0; bit < (short)NUMBEROF(live_control_held_bits); bit++)
+	{
+		if (TEST_FLAG(held_flags, live_control_held_bits[bit]))
+			held |= (byte)FLAG(bit);
+	}
+	return held;
+}
+
+static unsigned long held_bits_unpack(
+	byte held)
+{
+	unsigned long held_flags = 0;
+	short bit;
+
+	for (bit = 0; bit < (short)NUMBEROF(live_control_held_bits); bit++)
+	{
+		if (TEST_FLAG(held, bit))
+			held_flags |= FLAG(live_control_held_bits[bit]);
+	}
+	return held_flags;
+}
+
+/* a number's code (packed_real_write): +0, 1 and -1 exactly (each bit:
+-0 is whole), else PACKED_REAL_WHOLE */
+static real const packed_reals[PACKED_REAL_WHOLE] = { 0.0f, 1.0f, -1.0f };
+
+static short packed_real_code(
+	real value)
+{
+	short code;
+
+	for (code = 0; code < PACKED_REAL_WHOLE; code++)
+	{
+		if (!csmemcmp(&value, &packed_reals[code], sizeof(value)))
+			return code;
+	}
+	return PACKED_REAL_WHOLE;
+}
+
+/* ... its bytes (none but a whole one's), and read back exactly, no further
+than end (NULL: too few) */
+static byte *packed_real_write(
+	real value,
+	short code,
+	byte *cursor)
+{
+	if (code != PACKED_REAL_WHOLE)
+		return cursor;
+	csmemcpy(cursor, &value, sizeof(value));
+	return cursor + sizeof(value);
+}
+
+static byte const *packed_real_read(
+	byte const *data,
+	byte const *end,
+	short code,
+	real *value)
+{
+	if (code != PACKED_REAL_WHOLE)
+	{
+		*value = packed_reals[code];
+		return data;
+	}
+	if (end - data < (long)sizeof(*value))
+		return NULL;
+	csmemcpy(value, data, sizeof(*value));
+	return data + sizeof(*value);
+}
+
+/* a tick's 4 bytes, least first, and back */
+static byte *packed_key_write(
+	long key,
+	byte *cursor)
+{
+	short index;
+
+	for (index = 0; index < 4; index++)
+		*cursor++ = (byte)((unsigned long)key >> (8 * index));
+	return cursor;
+}
+
+static long packed_key_read(
+	byte const *data)
+{
+	unsigned long key = 0;
+	short index;
+
+	for (index = 0; index < 4; index++)
+		key |= (unsigned long)data[index] << (8 * index);
+	return (long)(int)key;
+}
+
+/* a client's live control packed for the host
+(_distributed_message_player_live_controls_packed), of a message of the
+client's game time: the bytes written, at most
+LIVE_CONTROL_PACKED_MAXIMUM_SIZE. Every part the host reads as the whole
+entry (struct distributed_live_control) had it: its player, and whether its
+tick is not the message's (then 4 bytes whole); its five held controls and
+its sub-step; the codes of its sticks and trigger and its count of
+sub-steps; each of the sticks and trigger exactly (+0, 1 and -1 in their
+code, else whole); its aim's three parts whole */
+static word live_control_up_pack(
+	struct distributed_live_control const *entry,
+	long time,
+	byte *buffer)
+{
+	real values[3];
+	short codes[3];
+	byte *cursor = buffer + 3;
+	short index;
+
+	values[0] = entry->throttle_i;
+	values[1] = entry->throttle_j;
+	values[2] = entry->primary_trigger;
+	for (index = 0; index < 3; index++)
+		codes[index] = packed_real_code(values[index]);
+	buffer[0] = (byte)(entry->player_index | (entry->tick != time ? FLAG(PACKED_WHOLE_KEY_BIT) : 0));
+	buffer[1] = (byte)(held_bits_pack(entry->held_flags) | entry->substep_index << PACKED_SUBSTEP_SHIFT);
+	buffer[2] = (byte)(codes[0] | codes[1] << 2 | codes[2] << 4 |
+		((entry->substep_count - 1) & 3) << PACKED_CODE_COUNT_SHIFT);
+	if (entry->tick != time)
+		cursor = packed_key_write(entry->tick, cursor);
+	for (index = 0; index < 3; index++)
+		cursor = packed_real_write(values[index], codes[index], cursor);
+	csmemcpy(cursor, &entry->aim_i, sizeof(entry->aim_i));
+	cursor += sizeof(entry->aim_i);
+	csmemcpy(cursor, &entry->aim_j, sizeof(entry->aim_j));
+	cursor += sizeof(entry->aim_j);
+	csmemcpy(cursor, &entry->aim_k, sizeof(entry->aim_k));
+	cursor += sizeof(entry->aim_k);
+	return (word)(cursor - buffer);
+}
+
+/* ... read back, no further than end, of a message of the client's game
+time: the bytes it took (0: too few), the whole entry (its pads 0) */
+static word live_control_up_unpack(
+	byte const *data,
+	byte const *end,
+	long time,
+	struct distributed_live_control *entry)
+{
+	byte const *cursor = data + 3;
+	real *values[3];
+	short index;
+
+	if (end - data < 3)
+		return 0;
+	csmemset(entry, 0, sizeof(*entry));
+	values[0] = &entry->throttle_i;
+	values[1] = &entry->throttle_j;
+	values[2] = &entry->primary_trigger;
+	entry->player_index = (byte)(data[0] & ~FLAG(PACKED_WHOLE_KEY_BIT));
+	entry->held_flags = (word)held_bits_unpack((byte)(data[1] & (FLAG(PACKED_SUBSTEP_SHIFT) - 1)));
+	entry->substep_index = (byte)((data[1] & ~FLAG(PACKED_WHOLE_KEY_BIT)) >> PACKED_SUBSTEP_SHIFT);
+	entry->substep_count = (byte)((data[2] >> PACKED_CODE_COUNT_SHIFT) + 1);
+	entry->tick = time;
+	if (TEST_FLAG(data[0], PACKED_WHOLE_KEY_BIT))
+	{
+		if (end - cursor < 4)
+			return 0;
+		entry->tick = packed_key_read(cursor);
+		cursor += 4;
+	}
+	for (index = 0; index < 3 && cursor; index++)
+		cursor = packed_real_read(cursor, end, (short)((data[2] >> (2 * index)) & 3), values[index]);
+	if (!cursor || end - cursor < 3 * (long)sizeof(real))
+		return 0;
+	csmemcpy(&entry->aim_i, cursor, sizeof(entry->aim_i));
+	cursor += sizeof(entry->aim_i);
+	csmemcpy(&entry->aim_j, cursor, sizeof(entry->aim_j));
+	cursor += sizeof(entry->aim_j);
+	csmemcpy(&entry->aim_k, cursor, sizeof(entry->aim_k));
+	cursor += sizeof(entry->aim_k);
+	return (word)(cursor - data);
+}
+
+/* a client's player's sub-steps packed for the host
+(_distributed_message_player_substeps_packed), of a message of the client's
+game time: the bytes written, at most SUBSTEP_INPUT_PACKED_MAXIMUM_SIZE.
+Every part the host reads as the whole record (struct
+distributed_substep_input) had it: its player, and whether its tick is
+further than a byte from the message's (then 4 bytes whole, else the byte);
+its count; each later sub-step's five held controls and whether it turned,
+its sticks and trigger exactly (as packed_real_code has them, or none where
+the same bits as the sub-step's before), and the facing it turned to whole
+(none where it did not turn: the host reads a facing only of a sub-step that
+turned) */
+static word substep_input_pack(
+	struct distributed_substep_input const *input,
+	long time,
+	byte *buffer)
+{
+	long offset = input->tick - time;
+	boolean whole = offset < -128 || offset > 127;
+	byte *cursor = buffer + 2;
+	short substep;
+
+	buffer[0] = (byte)(input->player_index | (whole ? FLAG(PACKED_WHOLE_KEY_BIT) : 0));
+	buffer[1] = input->substep_count;
+	if (whole)
+		cursor = packed_key_write(input->tick, cursor);
+	else
+		*cursor++ = (byte)(signed char)offset;
+	for (substep = 0; substep < input->substep_count - 1; substep++)
+	{
+		struct distributed_substep_input_control const *control = &input->controls[substep];
+		struct distributed_substep_input_control const *before = substep ? control - 1 : NULL;
+		byte *held = cursor++;
+
+		*held = (byte)(held_bits_pack(control->held_flags) | (control->turned ? FLAG(PACKED_TURNED_BIT) : 0));
+		if (before && !csmemcmp(&control->throttle_i, &before->throttle_i, sizeof(real)) &&
+			!csmemcmp(&control->throttle_j, &before->throttle_j, sizeof(real)) &&
+			!csmemcmp(&control->primary_trigger, &before->primary_trigger, sizeof(real)))
+		{
+			*held |= (byte)FLAG(PACKED_AS_BEFORE_BIT);
+		}
+		else
+		{
+			short code_i = packed_real_code(control->throttle_i);
+			short code_j = packed_real_code(control->throttle_j);
+			short code_trigger = packed_real_code(control->primary_trigger);
+
+			*cursor++ = (byte)(code_i | code_j << 2 | code_trigger << 4);
+			cursor = packed_real_write(control->throttle_i, code_i, cursor);
+			cursor = packed_real_write(control->throttle_j, code_j, cursor);
+			cursor = packed_real_write(control->primary_trigger, code_trigger, cursor);
+		}
+		if (control->turned)
+		{
+			csmemcpy(cursor, &control->yaw, sizeof(control->yaw));
+			cursor += sizeof(control->yaw);
+			csmemcpy(cursor, &control->pitch, sizeof(control->pitch));
+			cursor += sizeof(control->pitch);
+		}
+	}
+	return (word)(cursor - buffer);
+}
+
+/* ... read back, no further than end, of a message of the client's game
+time: the bytes it took (0: too few, or a count of sub-steps no game has),
+the whole record (its pads, and the facing of a sub-step that did not turn,
+0) */
+static word substep_input_unpack(
+	byte const *data,
+	byte const *end,
+	long time,
+	struct distributed_substep_input *input)
+{
+	byte const *cursor = data + 2;
+	short substep;
+
+	if (end - data < 3)
+		return 0;
+	csmemset(input, 0, sizeof(*input));
+	input->player_index = (byte)(data[0] & ~FLAG(PACKED_WHOLE_KEY_BIT));
+	input->substep_count = data[1];
+	if (input->substep_count < 2 || input->substep_count > MAXIMUM_SIM_SUBSTEPS)
+		return 0;
+	if (TEST_FLAG(data[0], PACKED_WHOLE_KEY_BIT))
+	{
+		if (end - cursor < 4)
+			return 0;
+		input->tick = packed_key_read(cursor);
+		cursor += 4;
+	}
+	else
+		input->tick = time + (signed char)*cursor++;
+	for (substep = 0; substep < input->substep_count - 1; substep++)
+	{
+		struct distributed_substep_input_control *control = &input->controls[substep];
+		byte held;
+
+		if (end - cursor < 1)
+			return 0;
+		held = *cursor++;
+		control->held_flags = (word)held_bits_unpack((byte)(held & (FLAG(PACKED_SUBSTEP_SHIFT) - 1)));
+		control->turned = (byte)(TEST_FLAG(held, PACKED_TURNED_BIT) ? 1 : 0);
+		if (TEST_FLAG(held, PACKED_AS_BEFORE_BIT))
+		{
+			/* (the first has none before it) */
+			if (!substep)
+				return 0;
+			control->throttle_i = control[-1].throttle_i;
+			control->throttle_j = control[-1].throttle_j;
+			control->primary_trigger = control[-1].primary_trigger;
+		}
+		else
+		{
+			byte codes;
+
+			if (end - cursor < 1)
+				return 0;
+			codes = *cursor++;
+			cursor = packed_real_read(cursor, end, (short)(codes & 3), &control->throttle_i);
+			if (cursor)
+				cursor = packed_real_read(cursor, end, (short)((codes >> 2) & 3), &control->throttle_j);
+			if (cursor)
+				cursor = packed_real_read(cursor, end, (short)((codes >> 4) & 3), &control->primary_trigger);
+			if (!cursor)
+				return 0;
+		}
+		if (control->turned)
+		{
+			if (end - cursor < 2 * (long)sizeof(real))
+				return 0;
+			csmemcpy(&control->yaw, cursor, sizeof(control->yaw));
+			cursor += sizeof(control->yaw);
+			csmemcpy(&control->pitch, cursor, sizeof(control->pitch));
+			cursor += sizeof(control->pitch);
+		}
+	}
+	return (word)(cursor - data);
 }
 
 /* ---------- globals */
@@ -355,12 +707,15 @@ static real substep_pin(
 }
 
 /* (the host) a client's players' sub-steps, each its size by its count
-(substep_input_size), no further than end */
+(substep_input_size), or packed (substep_input_unpack, of a message of the
+client's game time), no further than end */
 static void network_substeps_handle_inputs(
 	long machine_index,
 	byte const *data,
 	byte const *end,
-	short count)
+	short count,
+	boolean packed,
+	long time)
 {
 	short index;
 
@@ -371,16 +726,25 @@ static void network_substeps_handle_inputs(
 		short substep;
 		word size;
 
-		if (end - data < (long)SUBSTEP_INPUT_HEADER_SIZE)
-			return;
-		csmemset(&input, 0, sizeof(input));
-		csmemcpy(&input, data, SUBSTEP_INPUT_HEADER_SIZE);
-		if (input.substep_count < 2 || input.substep_count > MAXIMUM_SIM_SUBSTEPS)
-			return;
-		size = substep_input_size(input.substep_count);
-		if (end - data < (long)size)
-			return;
-		csmemcpy(&input, data, size);
+		if (packed)
+		{
+			size = substep_input_unpack(data, end, time, &input);
+			if (!size)
+				return;
+		}
+		else
+		{
+			if (end - data < (long)SUBSTEP_INPUT_HEADER_SIZE)
+				return;
+			csmemset(&input, 0, sizeof(input));
+			csmemcpy(&input, data, SUBSTEP_INPUT_HEADER_SIZE);
+			if (input.substep_count < 2 || input.substep_count > MAXIMUM_SIM_SUBSTEPS)
+				return;
+			size = substep_input_size(input.substep_count);
+			if (end - data < (long)size)
+				return;
+			csmemcpy(&input, data, size);
+		}
 		data += size;
 		if (input.player_index >= MAXIMUM_TRACKED_PLAYERS ||
 			!distributed_machine_has_player(machine_index, input.player_index) ||
@@ -1163,9 +1527,13 @@ void network_substeps_client_send(
 		struct distributed_message_header header;
 		byte data[MAXIMUM_LOCAL_PLAYERS * sizeof(struct distributed_substep_input)];
 	} message;
+	boolean unpacked = config_boolean("debug.network_controls_unpacked") != 0;
 	short count = 0;
 	word used = 0;
 	short local_player_index;
+
+	typedef char packed_room_assert[
+		1 + MAXIMUM_LOCAL_PLAYERS * SUBSTEP_INPUT_PACKED_MAXIMUM_SIZE <= sizeof(message.data) ? 1 : -1];
 
 	if (!network_substeps_active())
 		return;
@@ -1207,16 +1575,31 @@ void network_substeps_client_send(
 			input->controls[substep].yaw = control->facing.yaw;
 			input->controls[substep].pitch = control->facing.pitch;
 		}
-		/* (the game's count of sub-steps' controls alone) */
-		csmemcpy(message.data + used, input, substep_input_size(ran->count));
-		used += substep_input_size(ran->count);
+		/* (the game's count of sub-steps' controls alone; packed, after the
+		count) */
+		if (unpacked)
+		{
+			csmemcpy(message.data + used, input, substep_input_size(ran->count));
+			used += substep_input_size(ran->count);
+		}
+		else
+			used = (word)(used + substep_input_pack(input, game_time_get(), message.data + 1 + used));
 		count++;
 	}
-	if (count)
+	if (count && unpacked)
 	{
 		word size = (word)(sizeof(message.header) + used);
 
 		distributed_send(&message, _distributed_message_player_substeps, count, size, _distributed_to_host);
+		network_substeps_globals.bytes_sent += size;
+	}
+	else if (count)
+	{
+		/* (whole: its records are of no one size) */
+		word size = (word)(sizeof(message.header) + 1 + used);
+
+		message.data[0] = (byte)count;
+		distributed_send(&message, _distributed_message_player_substeps_packed, 0, size, _distributed_to_host);
 		network_substeps_globals.bytes_sent += size;
 	}
 }
@@ -1331,7 +1714,9 @@ boolean network_substeps_handles_message(
 	csmemcpy(&header, message, sizeof(header));
 	return header.type == _distributed_message_player_substeps || header.type == _distributed_message_relayed_substeps ||
 		header.type == _distributed_message_player_live_controls ||
-		header.type == _distributed_message_forwarded_live_controls;
+		header.type == _distributed_message_forwarded_live_controls ||
+		header.type == _distributed_message_player_live_controls_packed ||
+		header.type == _distributed_message_player_substeps_packed;
 }
 
 void network_substeps_handle_message(
@@ -1351,7 +1736,37 @@ void network_substeps_handle_message(
 		/* (the host's, from a client machine) */
 		if (game_connection() != _game_connection_network_server || machine_index == NONE)
 			return;
-		network_substeps_handle_inputs(machine_index, entries, end, header.count);
+		network_substeps_handle_inputs(machine_index, entries, end, header.count, FALSE, NONE);
+	}
+	else if (header.type == _distributed_message_player_substeps_packed)
+	{
+		/* (the host's, from a client machine: its count of records, then
+		each packed) */
+		if (game_connection() != _game_connection_network_server || machine_index == NONE || end - entries < 1)
+			return;
+		network_substeps_handle_inputs(machine_index, entries + 1, end, entries[0], TRUE, header.game_time);
+	}
+	else if (header.type == _distributed_message_player_live_controls_packed)
+	{
+		/* (the host's, from a client machine: its count of entries, then
+		each packed, taken as the whole ones are) */
+		struct distributed_live_control unpacked[MAXIMUM_LOCAL_PLAYERS];
+		byte const *cursor = entries + 1;
+		short count = 0;
+		short index;
+
+		if (game_connection() != _game_connection_network_server || machine_index == NONE || end - entries < 1)
+			return;
+		for (index = 0; index < entries[0] && count < MAXIMUM_LOCAL_PLAYERS; index++)
+		{
+			word taken = live_control_up_unpack(cursor, end, header.game_time, &unpacked[count]);
+
+			if (!taken)
+				break;
+			cursor += taken;
+			count++;
+		}
+		network_substeps_handle_live(machine_index, unpacked, count);
 	}
 	else if (header.type == _distributed_message_relayed_substeps)
 	{
@@ -1514,12 +1929,31 @@ static void network_substeps_substep_end(
 	}
 	if (connection == _game_connection_network_client)
 	{
-		if (count)
+		if (count && config_boolean("debug.network_controls_unpacked"))
 		{
 			word size = (word)(sizeof(message.header) + count * sizeof(struct distributed_live_control));
 
 			distributed_send(&message, _distributed_message_player_live_controls, count, size, _distributed_to_host);
 			network_substeps_globals.bytes_sent += size;
+		}
+		else if (count)
+		{
+			/* (packed: its count, then each entry; whole, its entries of no
+			one size) */
+			struct
+			{
+				struct distributed_message_header header;
+				byte data[1 + MAXIMUM_LOCAL_PLAYERS * LIVE_CONTROL_PACKED_MAXIMUM_SIZE];
+			} packed;
+			word used = 1;
+			short index;
+
+			packed.data[0] = (byte)count;
+			for (index = 0; index < count; index++)
+				used = (word)(used + live_control_up_pack(&message.entries[index], game_time_get(), packed.data + used));
+			distributed_send(&packed, _distributed_message_player_live_controls_packed, 0,
+				(word)(sizeof(packed.header) + used), _distributed_to_host);
+			network_substeps_globals.bytes_sent += sizeof(packed.header) + used;
 		}
 		/* (an OpenH1 game's input of the tick, as its first sub-step ends,
 		which the host's tick takes as it begins: network_distributed.c) */
