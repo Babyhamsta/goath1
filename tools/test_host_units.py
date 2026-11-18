@@ -222,3 +222,35 @@ def test_host_screenshot(tmp_path):
     )
     result = subprocess.run([str(binary), str(scratch)], capture_output=True, text=True)
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+def host_stall_old(text: str) -> str:
+    """host_stall.c as it was: a 20 ms floor, whatever the frames' time, and
+    a wake-up every 10 ms rather than at the frame's deadline"""
+    for old, new in (("uint64_t floor = period ? 2 * period : STALL_UNKNOWN_FLOOR;",
+                      "uint64_t floor = STALL_UNKNOWN_FLOOR; (void)period;"),
+                     ("\t\t\treturn at + threshold;\n", "\t\t\treturn now + 10000000ull;\n"),
+                     ("return late < threshold + 1000000000ull ? interval : 4 * interval;",
+                      "(void)late; return 10000000ull;"),
+                     ("return at + threshold > now ? at + threshold : now;", "return now + 10000000ull;")):
+        assert text.count(old) == 1, old
+        text = text.replace(old, new)
+    return text
+
+
+@pytest.mark.parametrize("broken", [False, True])
+def test_host_stall(tmp_path, broken):
+    """the stall detector with a clock of the test's (host_stall.c): a 25 ms
+    frame among 7.4 ms ones sampled, the ordinary frames costing no more
+    wake-ups than their deadlines, an unsampled slow frame given its line. The
+    negative control is the old 20 ms floor and 10 ms poll, which miss it"""
+    stall = HOST / "host_stall.c"
+    if broken:
+        stall = tmp_path / "host_stall.c"
+        stall.write_text(host_stall_old((HOST / "host_stall.c").read_text()))
+    sources = [TESTS / "host_stall_test.c", stall]
+    if not broken:
+        run_test(tmp_path, "host_stall_test", sources)
+        return
+    with pytest.raises(AssertionError):
+        run_test(tmp_path, "host_stall_test", sources)

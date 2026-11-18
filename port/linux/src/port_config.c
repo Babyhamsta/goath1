@@ -3158,9 +3158,11 @@ static const struct config_setting config_settings[] =
 		"host, port/android/host/host_debug.c); 0 never." },
 	{ "debug.stall_ms", _config_real, "100.0", "HALO_STALL_MS", _environment_value, _platform_android | _platform_guest,
 		"When the game goes this many milliseconds without a frame, log where\n"
-		"its thread and the render thread were (sampled every 10 ms while it\n"
-		"lasts) and the work in progress, once the frame comes; and count such\n"
-		"frames. Read by the host (port/android/host/host_stall.c); 0 never." },
+		"its thread and the render thread were (sampled from that moment on,\n"
+		"every eighth of it, 1 to 10 ms, while it lasts) and the work in\n"
+		"progress, once the frame comes; and count such frames. Never less than\n"
+		"twice the recent frames' time (1: each frame twice as long as the\n"
+		"others). Read by the host (port/android/host/host_stall.c); 0 never." },
 	{ "debug.demo_perf_log", _config_boolean, "false", "HALO_DEMO_PERF_LOG", _environment_value, _platform_all,
 		"Beside each demo recorded, write a performance log, demos/<name>.perf:\n"
 		"a line for each frame with the demo's tick, the frame's, the game\n"
