@@ -95,6 +95,12 @@ void determinism_log_tick_pause(void);
 PROFILE_SECTION(game_time_network_distributed_tick_section, "network_distributed_tick")
 PROFILE_SECTION(game_time_render_interpolation_tick_section, "render_interpolation_tick")
 PROFILE_SECTION(game_time_game_frame_section, "game_frame")
+/* port: the demo's hooks (port/linux/game/demo.c) */
+PROFILE_SECTION(game_time_demo_tick_begin_section, "demo.tick_begin")
+PROFILE_SECTION(game_time_demo_substep_resume_section, "demo.substep_resume")
+PROFILE_SECTION(game_time_demo_tick_end_section, "demo.tick_end")
+PROFILE_SECTION(game_time_demo_tick_pause_section, "demo.tick_pause")
+PROFILE_SECTION(game_time_demo_steps_end_section, "demo.steps_end")
 
 /* ---------- constants */
 
@@ -465,6 +471,7 @@ void game_time_finish_tick(
 		if (game_time_run_substep())
 			game_time_substeps.ticks_ended_ahead++;
 	}
+	profile_scope(game_time_demo_steps_end_section, demo_steps_end();) /* port: port/linux/game/demo.c */
 	game_time_substeps.boundary_wanted = FALSE;
 	game_time_substeps.boundary_waits = 0;
 
@@ -790,6 +797,9 @@ void game_time_update(
 						ticks_ended_run++;
 					game_time_substeps.boundary_waits = 0;
 				}
+				/* port: the open tick copied as its last sub-step left it, once
+				(port/linux/game/demo.c) */
+				profile_scope(game_time_demo_steps_end_section, demo_steps_end();)
 
 				/* (none while a client's clock waits: a frame that runs no tick
 				reports none; port: with sub-steps, the ticks that ended) */
@@ -835,11 +845,11 @@ static boolean game_time_run_substep(
 	/* port: a tick begun: the demo being recorded or played (port/linux/
 	game/demo.c), as nothing of the tick has run */
 	if (sim_substep_next() == 0 && !game_time_menu_scene())
-		demo_tick_begin(game_time_globals->server_time);
+		profile_scope(game_time_demo_tick_begin_section, demo_tick_begin(game_time_globals->server_time);)
 	/* port: (or a later sub-step: what the frames put in while the tick
 	was open) */
 	else if (!game_time_menu_scene())
-		demo_substep_resume(sim_substep_next());
+		profile_scope(game_time_demo_substep_resume_section, demo_substep_resume(sim_substep_next());)
 	determinism_log_tick_begin();
 	random_math_port_set_ticking(TRUE);
 	LATENCY_LOG(latency_log_substep_begin()); /* port: debug.latency_log */
@@ -848,7 +858,7 @@ static boolean game_time_run_substep(
 	/* port: (and ended, before the netcode's work of the tick, which a
 	demo has as what reached the game state from outside the ticks) */
 	if (tick_ended && !game_time_menu_scene())
-		demo_tick_end(game_time_globals->server_time + 1);
+		profile_scope(game_time_demo_tick_end_section, demo_tick_end(game_time_globals->server_time + 1);)
 	if (tick_ended)
 	{
 		sim_trace_step(game_time_globals->server_time, sim_substep_count() - 1, sim_substep_count()); /* port: debug.trace */
@@ -872,7 +882,7 @@ static boolean game_time_run_substep(
 		determinism_log_tick_pause();
 		/* port: (and the demo's, port/linux/game/demo.c) */
 		if (!game_time_menu_scene())
-			demo_tick_pause();
+			profile_scope(game_time_demo_tick_pause_section, demo_tick_pause();)
 	}
 
 	return tick_ended;

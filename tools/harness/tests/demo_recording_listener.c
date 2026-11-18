@@ -26,6 +26,7 @@ static struct
 	long ticks, patches, structural_snapshots, structural_too_often;
 	unsigned long patch_bytes;
 	unsigned long long work_microseconds;
+	unsigned long long between_microseconds;
 	boolean shadow_valid;
 } demo_recorder;
 
