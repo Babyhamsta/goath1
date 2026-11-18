@@ -10,7 +10,8 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from harness import CHECK_FAILED, build, constant, enum_with, function, mutated, read, run, structure  # noqa: E402
 
-CASES = ["source-addresses", "hashes-sources", "hashes-frames", "progress-advances", "progress-asked-again",
+CASES = ["source-addresses", "hashes-sources", "hashes-frames", "progress-advances", "progress-bounded",
+         "progress-bound-capped", "progress-slow-largest-map", "progress-asked-again",
          "progress-other-level-between", "offer-of-the-version", "requests-apart", "requests-apart-after-another-level"]
 
 # a fault in map_share.c, the function it is in, and the case that must catch it
@@ -32,6 +33,18 @@ NEGATIVE_CONTROLS = {
                           "host_progress", "progress-advances"),
     "more-than-offered": (("MIN(progress->done, machine->offered_total)", "progress->done"), "host_progress",
                           "progress-advances"),
+    # (the code before had no bound: a piece said every 70 seconds kept a machine downloading for days)
+    "no-bound": ((" &&\n\t\t(!machine->deadline || (long)(now - machine->deadline) < 0)", ""),
+                 "host_machine_downloading", "progress-bounded"),
+    "overrun-kept": (("network_game_server_kick_machine(index, FALSE);", ";"), "host_bound_downloads",
+                     "progress-bounded"),
+    "bound-starts-over": (("unsigned long deadline = again ? machine->deadline : 0;", "unsigned long deadline = 0;"),
+                          "host_request", "progress-bounded"),
+    "no-cap": (("MIN(milliseconds, (unsigned long long)DOWNLOAD_CAP)", "milliseconds"), "host_download_bound",
+               "progress-bound-capped"),
+    "floor-too-high": (("DOWNLOAD_GRACE + (unsigned long long)bytes * 1000 / MAX(floor, 1UL)",
+                        "DOWNLOAD_GRACE + (unsigned long long)bytes * 1000 / (floor * 2)"), "host_download_bound",
+                       "progress-slow-largest-map"),
     "asking-starts-over": (("unsigned long advanced_at = again ? machine->advanced_at : 0;",
                             "unsigned long advanced_at = 0;"), "host_request", "progress-asked-again"),
     "slot-kept-for-the-last": (("machine->advanced_at && machine->address", "machine->advanced_at"),
@@ -51,8 +64,8 @@ NEGATIVE_CONTROLS = {
 
 FUNCTIONS = ("get_long", "elapsed", "address_internet", "address_private", "source_address_allowed", "hashes_source",
              "frame_hashes", "host_machine_valid", "host_machine_downloading", "map_share_machine_downloading",
-             "map_share_machine_needs_map", "level_name_copy", "host_offer", "host_request", "host_asked",
-             "host_update", "host_progress")
+             "map_share_machine_needs_map", "host_download_bound", "host_bound_downloads", "level_name_copy",
+             "host_offer", "host_request", "host_asked", "host_update", "host_progress")
 
 
 def generated(fault=None, faulty_function=None):
