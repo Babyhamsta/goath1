@@ -171,6 +171,14 @@ static void unit_kill_silent(long index);
 static void unit_kill_no_statistics(long index);
 static short objects_client_retried_inventory_count;
 static long objects_host_told[MAXIMUM_TRACKED_OBJECTS],objects_host_told_count;
+/* (the objects each machine was sent while in its views: network_objects.c's) */
+#ifndef BIT_VECTOR_SIZE_IN_LONGS
+#define BIT_VECTOR_SIZE_IN_LONGS(bits) (((bits)+31)/32)
+#endif
+#ifndef HALO_PORT_MAXIMUM_NETWORK_MACHINES
+#define HALO_PORT_MAXIMUM_NETWORK_MACHINES 16
+#endif
+static unsigned long objects_host_seen[HALO_PORT_MAXIMUM_NETWORK_MACHINES][BIT_VECTOR_SIZE_IN_LONGS(MAXIMUM_TRACKED_OBJECTS)];
 static struct {long time,player_indices[MAXIMUM_LOCAL_PLAYERS];} objects_host_machines[2];
 static struct {unsigned long checksum,weapons_checksum;} objects_host_inventories[MAXIMUM_TRACKED_OBJECTS];
 static union {long alignment;byte bytes[MAXIMUM_MESSAGE_SIZE];} snapshot_packets[32];
