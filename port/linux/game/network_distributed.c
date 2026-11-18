@@ -316,7 +316,8 @@ third, and every fourth; one no cluster of the client's players' can see
 (the map's potentially visible set), or dead, every sixth. The set errs on
 the side of seeing: a player comes into view in it before any line of sight
 does, and is sent at once when they do, as a player whose buttons have
-changed in the ticks their input carries is sent every tick. A player a client's player
+changed in the ticks their input carries is sent every tick (HIDDEN_PLAYER_PERIOD_TICKS:
+network_distributed.h, as the host's moving objects go). A player a client's player
 aims near is sent at least every second tick, and every tick through a
 scope (a sniper sees a far player as well as a near one, as Ares does).
 (Cosines of the half angles.) */
@@ -325,10 +326,6 @@ scope (a sniper sees a far player as well as a near one, as Ares does).
 #define FAR_PLAYER_DISTANCE 120.0f
 #define AIMED_AT_COSINE 0.819f /* 35 degrees: on the screen */
 #define SCOPED_AT_COSINE 0.940f /* 20 degrees: in a scope's view, and round it */
-enum
-{
-	HIDDEN_PLAYER_PERIOD_TICKS = 6,
-};
 
 /* shields, health and the damage they show in 16 bits: 0 to 4 */
 #define VITALITY_SCALE 16384.0f
@@ -5232,6 +5229,46 @@ static short distributed_object_cluster(
 	return object->object.location.cluster_index;
 }
 
+/* whether a viewer whose cluster's row of the map's potentially visible set
+is pvs (NULL: none, outside the map's clusters) could see the cluster: one
+outside the map's clusters is in sight, to be safe */
+static boolean distributed_pvs_sees(
+	unsigned long const *pvs,
+	short cluster_index,
+	short cluster_count)
+{
+	return !pvs || cluster_index < 0 || cluster_index >= cluster_count || BIT_VECTOR_TEST_FLAG(pvs, cluster_index);
+}
+
+boolean distributed_machine_sees_cluster(
+	long machine_index,
+	short cluster_index)
+{
+	struct structure_bsp *structure_bsp = global_structure_bsp_get();
+	short cluster_count = structure_bsp ? (short)structure_bsp->clusters.count : 0;
+	boolean viewers = FALSE;
+	short index;
+
+	if (machine_index < 0 || machine_index >= HALO_PORT_MAXIMUM_NETWORK_MACHINES)
+		return TRUE;
+	/* (the viewers the player plan last found: distributed_host_plan_players) */
+	for (index = 0; index < MAXIMUM_LOCAL_PLAYERS; index++)
+	{
+		struct distributed_viewer const *viewer = &distributed_viewers[machine_index][index];
+
+		if (!viewer->valid)
+			continue;
+		viewers = TRUE;
+		if (distributed_pvs_sees(viewer->cluster_index >= 0 && viewer->cluster_index < cluster_count ?
+			structure_bsp_get_cluster_pvs(structure_bsp, viewer->cluster_index) : NULL, cluster_index, cluster_count))
+		{
+			return TRUE;
+		}
+	}
+	/* (a client that has had no player alive watches anyone) */
+	return !viewers;
+}
+
 /* the player's input as the host's tick ran it, in fewer bytes; whether
 their buttons or choices changed in the ticks it carries */
 static boolean distributed_relayed_action_from(
@@ -6258,9 +6295,7 @@ static void distributed_host_plan_players(
 					distances_squared[index] = dx * dx + dy * dy + dz * dz;
 					if (nearest < 0.0f || distances_squared[index] < nearest)
 						nearest = distances_squared[index];
-					/* (outside the map's clusters: in sight, to be safe) */
-					sees[index] = !viewer_pvs[index] || to < 0 || to >= cluster_count ||
-						BIT_VECTOR_TEST_FLAG(viewer_pvs[index], to);
+					sees[index] = distributed_pvs_sees(viewer_pvs[index], to, cluster_count);
 					visible |= sees[index];
 				}
 				period = !visible ? HIDDEN_PLAYER_PERIOD_TICKS :
