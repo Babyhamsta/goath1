@@ -2664,7 +2664,11 @@ validation gates; native results do not establish browser compatibility.
      it, 0 for the host's own players, for the scoreboard;
    - twice a second and with every kill, the players' statistics that
      changed (once a second a few more, round them all, as the message is
-     unreliable); when it changes (looked at five times a second, sent at
+     unreliable: to an OpenCE machine every player a second; to an OpenH1
+     one each change again on the next look and two players a second,
+     round them all in eight, 1.07 to 0.31 KB/s a client at 120 Hz on
+     crowded Blood Gulch; `debug.network_forms_before` as an OpenCE
+     machine's, `tools/harness/tests/test_statistics_changes.py`); when it changes (looked at five times a second, sent at
      most every other look unless the game ended; reliably, so never
      again unchanged), the game type's state (scores, the flags, the balls
      and their carriers, the king's hill, the players' speeds) and whether
@@ -2708,7 +2712,12 @@ validation gates; native results do not establish browser compatibility.
      spawned with the button held threw one the host's copy had not). A
      change of weapons or grenades goes to every client at once; one of
      ammunition only to the unit's player's machine at once, and to the
-     others as often as they are sent that player. A client takes its own
+     others as often as they are sent that player. Unchanged, each goes
+     again once a second; to an OpenH1 client, which has a change of
+     weapons or grenades again the round after, only its own unit's so,
+     another's every fifth second (1.23 to 0.55 KB/s a client at 120 Hz on
+     crowded Blood Gulch; `debug.network_forms_before` as before,
+     `tools/harness/tests/test_inventory_refresh.py`). A client takes its own
      players' ammunition and grenade counts from the host only once a
      round trip has passed since it last fired, reloaded or threw (what
      the host says before then is from before). How old what a unit
@@ -3011,7 +3020,8 @@ Unity's Netcode for Entities, lightyear, netfox and the Ares source):
   as often as they are near the client's players, the objects at rest
   round all of them, four a tick; the players' statistics when
   they change (with every kill, twice a second), with sixteen more
-  players' once a second round them all; the game type's state when it
+  players' once a second round them all (to an OpenH1 client each change
+  twice and two more a second); the game type's state when it
   changes, at most two and a half times a second.
 - **The players each client needs, when it needs them.** The host sends a
   client every player's unit and input every tick when they are within 25

@@ -530,6 +530,8 @@ static struct {long unit_index;} distributed_host_speeds[2];
 static int distributed_input_facings[2],distributed_seen[2],distributed_viewers[2];
 static int distributed_sends[2],distributed_host_states[2],distributed_host_actions[2];
 static int distributed_sent_statistics[2],distributed_statistics_cursor,distributed_statistics_due;
+static int distributed_statistics_openh1_cursor;
+static long distributed_statistics_repeat_times[2];
 static long distributed_game_state_checksum,distributed_game_state_time,distributed_host_update_number;
 static long distributed_sent_structure_bsp_index,distributed_pickup_count;
 static struct {boolean valid;} distributed_machines;

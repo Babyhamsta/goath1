@@ -214,9 +214,14 @@ enum
 {
 	STATISTICS_INTERVAL_TICKS = 15,
 	/* the players' statistics sent unchanged once a second, round them all
-	(the message is unreliable) */
+	(the message is unreliable): to an OpenCE machine, and every machine where
+	debug.network_forms_before, 16 players a second; to an OpenH1 one, which
+	has each change twice (at once and on the next look, STATISTICS_INTERVAL_TICKS
+	on), 2 (round 16 players in 8 seconds: a change lost twice, as rare as two
+	lost datagrams half a second apart, heals by then) */
 	STATISTICS_REFRESH_TICKS = TICKS_PER_SECOND,
 	STATISTICS_REFRESH_PLAYERS = 16,
+	STATISTICS_OPENH1_REFRESH_PLAYERS = 2,
 	/* the game type's state looked at, and sent unchanged */
 	GAME_STATE_INTERVAL_TICKS = 6,
 	/* ... when it changes (reliably: no refresh), no more often than this
@@ -1108,9 +1113,14 @@ static struct distributed_relayed_sent
 	struct distributed_relayed_action action;
 } distributed_relayed_sent[HALO_PORT_MAXIMUM_NETWORK_MACHINES][MAXIMUM_TRACKED_PLAYERS];
 /* the host: each player's statistics as last sent (only a change is sent,
-and once a second a few players' whatever they are, round them all) */
+and once a second a few players' whatever they are, round them all), where
+the refreshes of the OpenCE and of the OpenH1 machines have come to, and
+each player's change yet to go again to the OpenH1 ones, and of which tick
+(distributed_send_statistics) */
 static unsigned long distributed_sent_statistics[MAXIMUM_TRACKED_PLAYERS];
 static short distributed_statistics_cursor;
+static short distributed_statistics_openh1_cursor;
+static long distributed_statistics_repeat_times[MAXIMUM_TRACKED_PLAYERS];
 /* the host: the game type's state as last sent (its checksum and its
 leading postgame state), and when */
 static unsigned long distributed_game_state_checksum;
@@ -8696,55 +8706,115 @@ static void distributed_handle_structure_bsp(
 	}
 }
 
-/* the players' statistics that changed since they were last sent, and when
-refreshing, STATISTICS_REFRESH_PLAYERS more whatever they are, round them
-all (a client that lost a change has it again within eight seconds) */
+/* the players' statistics to each client: those that changed since they
+were last sent, and when refreshing, more whatever they are, round them all
+(STATISTICS_REFRESH_PLAYERS to an OpenCE machine, and every machine where
+debug.network_forms_before, as before; STATISTICS_OPENH1_REFRESH_PLAYERS to
+an OpenH1 one, which has each change again on the next look at them not of
+its tick: a client that lost a change, or counted a kill it replayed after
+the host's word on it, has the host's again within half a second) */
 static void distributed_send_statistics(
 	boolean refresh)
 {
 	struct distributed_statistics_message message;
 	short limit = MIN(MAXIMUM_STATISTICS_PER_MESSAGE, RELIABLE_ENTRIES(struct distributed_player_statistics));
-	short count = 0;
-	short refreshed = refresh ? 0 : STATISTICS_REFRESH_PLAYERS;
-	/* (where this round starts: the cursor moves past the last player it
-	refreshed, which must not shift the players this round visits) */
-	short first = distributed_statistics_cursor;
-	short step;
+	long machine_indices[HALO_PORT_MAXIMUM_NETWORK_MACHINES];
+	short machine_count = distributed_client_machines(machine_indices, HALO_PORT_MAXIMUM_NETWORK_MACHINES);
+	boolean before = config_boolean("debug.network_forms_before");
+	long now = game_time_get();
+	/* each player's: changed, refreshed to the OpenCE machines, to the
+	OpenH1 ones, or its change again to the OpenH1 ones */
+	boolean changed[MAXIMUM_TRACKED_PLAYERS];
+	boolean refreshed[MAXIMUM_TRACKED_PLAYERS];
+	boolean openh1_refreshed[MAXIMUM_TRACKED_PLAYERS];
+	boolean repeated[MAXIMUM_TRACKED_PLAYERS];
+	short machine_number;
+	short player_index;
 
-	for (step = 0; step < MAXIMUM_TRACKED_PLAYERS; step++)
+	for (player_index = 0; player_index < MAXIMUM_TRACKED_PLAYERS; player_index++)
 	{
-		short player_index = (short)((first + step) % MAXIMUM_TRACKED_PLAYERS);
 		struct player_datum *player = distributed_player(player_index);
 		unsigned long checksum;
 
+		changed[player_index] = refreshed[player_index] = openh1_refreshed[player_index] =
+			repeated[player_index] = FALSE;
 		if (!player)
+		{
+			distributed_statistics_repeat_times[player_index] = NONE;
 			continue;
-		checksum = distributed_checksum(&player->statistics, sizeof(player->statistics));
-		if (checksum == distributed_sent_statistics[player_index])
-		{
-			if (refreshed >= STATISTICS_REFRESH_PLAYERS)
-				continue;
-			refreshed++;
-			distributed_statistics_cursor = (short)((player_index + 1) % MAXIMUM_TRACKED_PLAYERS);
 		}
-		distributed_sent_statistics[player_index] = checksum;
-		message.players[count].player_index = player_index;
-		message.players[count].pad = 0;
-		message.players[count].statistics = player->statistics;
-		count++;
-		if (count == limit)
+		checksum = distributed_checksum(&player->statistics, sizeof(player->statistics));
+		if (checksum != distributed_sent_statistics[player_index])
 		{
-			distributed_send(&message, _distributed_message_player_statistics, count,
-				(word)(sizeof(message.header) + count * sizeof(struct distributed_player_statistics)),
-				_distributed_to_clients);
-			count = 0;
+			changed[player_index] = TRUE;
+			distributed_sent_statistics[player_index] = checksum;
+			distributed_statistics_repeat_times[player_index] = now;
+		}
+		/* (a change again on the next look not of its tick, and then no more) */
+		else if (distributed_statistics_repeat_times[player_index] != NONE &&
+			distributed_statistics_repeat_times[player_index] != now && now % STATISTICS_INTERVAL_TICKS == 0)
+		{
+			repeated[player_index] = TRUE;
+			distributed_statistics_repeat_times[player_index] = NONE;
 		}
 	}
-	if (count)
+	/* (the refreshes: each round the players from where it came to, those
+	that went changed this time passed over) */
+	if (refresh)
 	{
-		distributed_send(&message, _distributed_message_player_statistics, count,
-			(word)(sizeof(message.header) + count * sizeof(struct distributed_player_statistics)),
-			_distributed_to_clients);
+		short rounds;
+
+		for (rounds = 0; rounds < 2; rounds++)
+		{
+			short *cursor = rounds ? &distributed_statistics_openh1_cursor : &distributed_statistics_cursor;
+			boolean *marks = rounds ? openh1_refreshed : refreshed;
+			short most = rounds ? STATISTICS_OPENH1_REFRESH_PLAYERS : STATISTICS_REFRESH_PLAYERS;
+			short first = *cursor;
+			short count = 0;
+			short step;
+
+			for (step = 0; step < MAXIMUM_TRACKED_PLAYERS && count < most; step++)
+			{
+				player_index = (short)((first + step) % MAXIMUM_TRACKED_PLAYERS);
+				if (!distributed_player(player_index) || changed[player_index])
+					continue;
+				marks[player_index] = TRUE;
+				count++;
+				*cursor = (short)((player_index + 1) % MAXIMUM_TRACKED_PLAYERS);
+			}
+		}
+	}
+	for (machine_number = 0; machine_number < machine_count; machine_number++)
+	{
+		long machine_index = machine_indices[machine_number];
+		boolean openh1 = !before && !network_legacy_machine(machine_index);
+		short count = 0;
+
+		for (player_index = 0; player_index < MAXIMUM_TRACKED_PLAYERS; player_index++)
+		{
+			struct player_datum *player = distributed_player(player_index);
+
+			if (!player || !(changed[player_index] ||
+				(openh1 ? openh1_refreshed[player_index] || repeated[player_index] : refreshed[player_index])))
+			{
+				continue;
+			}
+			message.players[count].player_index = player_index;
+			message.players[count].pad = 0;
+			message.players[count].statistics = player->statistics;
+			count++;
+			if (count == limit)
+			{
+				distributed_send_to_machine(machine_index, &message, _distributed_message_player_statistics, count,
+					(word)(sizeof(message.header) + count * sizeof(struct distributed_player_statistics)));
+				count = 0;
+			}
+		}
+		if (count)
+		{
+			distributed_send_to_machine(machine_index, &message, _distributed_message_player_statistics, count,
+				(word)(sizeof(message.header) + count * sizeof(struct distributed_player_statistics)));
+		}
 	}
 }
 
@@ -9109,6 +9179,13 @@ static void distributed_reset_checkpoint_state(boolean reset_received_times)
 	/* (none sent: every player's the first time) */
 	csmemset(distributed_sent_statistics, 0, sizeof(distributed_sent_statistics));
 	distributed_statistics_cursor = 0;
+	distributed_statistics_openh1_cursor = 0;
+	{
+		short player_index;
+
+		for (player_index = 0; player_index < MAXIMUM_TRACKED_PLAYERS; player_index++)
+			distributed_statistics_repeat_times[player_index] = NONE;
+	}
 	distributed_statistics_due = TRUE;
 	distributed_game_state_checksum = 0;
 	distributed_game_state_time = NONE;
