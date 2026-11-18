@@ -7,7 +7,10 @@ where the next message (or its next entry) does not fit, and the messages
 and entries keep their order. A player the client can react to (near its
 players or in their sight, distributed_forward_immediate) has its presses
 sent in the sub-step's datagram; one it cannot, in the tick's last, unless
-it comes where the client can react to it first (distributed_reacts_at). */
+it comes where the client can react to it first (distributed_reacts_at).
+An OpenH1 machine's batches are compact (distributed_batch_compact): each
+message read back (distributed_compact_batch_handle) with the header it was
+sent with; an OpenCE machine's are as before. */
 #include "harness.h"
 typedef unsigned short word;
 typedef word message_header;
@@ -47,7 +50,7 @@ static byte distributed_forward_periods[HALO_PORT_MAXIMUM_NETWORK_MACHINES][MAXI
 static long distributed_forwarded_ticks[HALO_PORT_MAXIMUM_NETWORK_MACHINES][MAXIMUM_TRACKED_PLAYERS];
 static long distributed_forwarded_times[HALO_PORT_MAXIMUM_NETWORK_MACHINES][MAXIMUM_TRACKED_PLAYERS];
 static struct live_control_far distributed_far_live[HALO_PORT_MAXIMUM_NETWORK_MACHINES][MAXIMUM_TRACKED_PLAYERS];
-static unsigned long distributed_checkpoint_epoch;
+static unsigned long distributed_checkpoint_epoch = 0x1234;
 static boolean distributed_checkpoint_synchronized = TRUE;
 static long distributed_batch_bytes[MAXIMUM_SENDERS];
 static long distributed_batch_datagrams[MAXIMUM_SENDERS];
@@ -76,7 +79,9 @@ static long game_time_get(void) { return now_time; }
 static short game_connection(void) { return _game_connection_network_server; }
 static boolean game_in_progress(void) { return TRUE; }
 static boolean network_standard_hosting(void) { return TRUE; }
-static boolean network_standard_machine_is_openh1(long machine_index) { (void)machine_index; return TRUE; }
+/* (machine 3 an OpenCE one; the host's an OpenH1 game) */
+static boolean network_standard_machine_is_openh1(long machine_index) { return machine_index != 3; }
+static long network_standard_agreed_rate(void) { return 120; }
 static boolean network_standard_message_goes_to(long machine_index, byte type)
 {
 	(void)machine_index; (void)type; return TRUE;
@@ -205,7 +210,28 @@ static boolean network_distributed_server_send_to_machine(long machine_index, vo
 	return TRUE;
 }
 
+/* the messages a compact batch is read back as (network_distributed_handle_message) */
+static boolean distributed_handling_batch;
+static long sender_clock;
+static long distributed_sender_clock(long machine_index) { (void)machine_index; return sender_clock; }
+enum { MAXIMUM_HEARD = 64 };
+static struct { struct distributed_message_header header; word size; byte entries[DATAGRAM_MAXIMUM_SIZE]; } heard[MAXIMUM_HEARD];
+static short heard_count;
+void network_distributed_handle_message(long machine_index, word const *message, word size);
+
 #include "under_test.inc"
+
+void network_distributed_handle_message(long machine_index, word const *message, word size)
+{
+	(void)machine_index;
+	CHECK(distributed_handling_batch, "read as a batch's");
+	CHECK(heard_count < MAXIMUM_HEARD && size >= sizeof(struct distributed_message_header), "a message");
+	memcpy(&heard[heard_count].header, message, sizeof(struct distributed_message_header));
+	heard[heard_count].size = (word)(size - sizeof(struct distributed_message_header));
+	memcpy(heard[heard_count].entries, (byte const *)message + sizeof(struct distributed_message_header),
+		heard[heard_count].size);
+	heard_count++;
+}
 
 /* a datagram's messages: each one's type, count and entries */
 struct parsed { byte type; byte count; word size; byte const *entries; };
@@ -217,6 +243,29 @@ static short parse(long machine_index, short datagram_index, struct parsed *mess
 	word offset = sizeof(struct distributed_message_header);
 	short count = 0;
 
+	if (network_standard_machine_is_openh1(machine_index))
+	{
+		/* (compact: its messages' lengths, kinds and counts) */
+		CHECK(data[sizeof(message_header)] == _distributed_message_compact_batch, "a compact batch");
+		offset = COMPACT_BATCH_HEADER_SIZE;
+		while (offset < size)
+		{
+			word value = data[offset++];
+
+			if (value & 0x80)
+				value = (word)((value & 0x7F) | data[offset++] << 7);
+			CHECK(offset + 2 + (value >> 1) <= size, "a message within its datagram");
+			CHECK(count < maximum, "too many messages");
+			messages[count].type = data[offset];
+			messages[count].count = data[offset + 1];
+			messages[count].size = (word)(value >> 1);
+			messages[count].entries = data + offset + 2;
+			count++;
+			offset += (word)(2 + (value >> 1));
+		}
+		CHECK(offset == size, "the datagram's messages fill it");
+		return count;
+	}
 	CHECK(((struct distributed_message_header const *)data)->type == _distributed_message_batch, "a batch");
 	while (offset + sizeof(word) <= size)
 	{
@@ -429,7 +478,7 @@ static void split_case(void)
 		/* (split only where the next entry would not fit) */
 		if (datagram_index < datagram_count[1] - 1)
 		{
-			CHECK(datagrams[1][datagram_index].size + BATCH_MESSAGE_OVERHEAD + TICK_ENTRY_SIZE > DATAGRAM_MAXIMUM_SIZE,
+			CHECK(datagrams[1][datagram_index].size + COMPACT_BATCH_MESSAGE_OVERHEAD + TICK_ENTRY_SIZE > DATAGRAM_MAXIMUM_SIZE,
 				"datagram %d split with room for another entry (%d bytes)", datagram_index,
 				datagrams[1][datagram_index].size);
 		}
@@ -560,6 +609,126 @@ static void into_view_case(void)
 	CHECK(datagram_count[1] == 2 && has_press(1, 1, 5), "its next press at once too");
 }
 
+/* a message of the kind, count entries of size bytes (each its index, the
+seed after), of its tick and world, to the machine */
+static void send_message(long machine_index, byte type, short count, word size, long time, unsigned long epoch,
+	byte seed)
+{
+	static struct { struct distributed_message_header header; byte data[2048]; } message;
+	long saved_time = now_time;
+	unsigned long saved_epoch = distributed_checkpoint_epoch;
+	short index;
+	word byte_index;
+
+	for (index = 0; index < count; index++)
+		for (byte_index = 0; byte_index < size; byte_index++)
+			message.data[index * size + byte_index] = (byte)(index + seed + byte_index);
+	now_time = time;
+	distributed_checkpoint_epoch = epoch;
+	distributed_send_to_machine(machine_index, &message, type, count,
+		(word)(sizeof(message.header) + count * size));
+	now_time = saved_time;
+	distributed_checkpoint_epoch = saved_epoch;
+}
+
+/* every datagram to the machine read back */
+static void read_back(long machine_index)
+{
+	short index;
+
+	heard_count = 0;
+	for (index = 0; index < datagram_count[machine_index]; index++)
+	{
+		if (network_standard_machine_is_openh1(machine_index))
+			distributed_compact_batch_handle(1, (word const *)datagrams[machine_index][index].data,
+				datagrams[machine_index][index].size);
+	}
+}
+
+static void heard_is(short index, byte type, short count, word size, long time, unsigned long epoch, byte seed)
+{
+	short entry;
+	word byte_index;
+
+	CHECK(index < heard_count, "message %d read back (%d were)", index, heard_count);
+	CHECK(heard[index].header.type == type && heard[index].header.count == count, "message %d: kind %d count %d",
+		index, heard[index].header.type, heard[index].header.count);
+	CHECK(heard[index].header.game_time == time, "message %d: tick %ld, not %ld", index,
+		(long)heard[index].header.game_time, time);
+	CHECK(heard[index].header.checkpoint_epoch == epoch, "message %d: world %lx, not %lx", index,
+		(unsigned long)heard[index].header.checkpoint_epoch, epoch);
+	CHECK(heard[index].size == count * size, "message %d: %d bytes", index, heard[index].size);
+	for (entry = 0; entry < count; entry++)
+		for (byte_index = 0; byte_index < size; byte_index++)
+			CHECK(heard[index].entries[entry * size + byte_index] == (byte)(entry + seed + byte_index),
+				"message %d: its bytes", index);
+}
+
+/* a compact batch's messages read back with the headers they went with:
+the tick and the next in one datagram, each long and short message's
+length, a message of another world or a tick further in one of its own,
+and the ticks about a 16-bit wrap */
+static void compact_case(void)
+{
+	long base = 0x2FFFE;
+
+	reset();
+	sender_clock = base + 3;
+	send_message(1, _distributed_message_forwarded_live_controls, 1, 12, base, 0x1234, 1);
+	send_message(1, _distributed_message_unit_state_differences, 20, 30, base + 1, 0x1234, 2);
+	send_message(1, _distributed_message_pings, 2, 4, base + 1, 0x1234, 3);
+	CHECK(datagram_count[1] == 0, "nothing sent before the flush");
+	send_message(1, _distributed_message_pings, 1, 4, base + 2, 0x1234, 4);
+	CHECK(datagram_count[1] == 1, "a tick further: the batch sent first (%d)", datagram_count[1]);
+	send_message(1, _distributed_message_pings, 1, 4, base + 2, 0x1235, 5);
+	CHECK(datagram_count[1] == 2, "another world: the batch sent first");
+	distributed_batches_flush();
+	CHECK(datagram_count[1] == 3, "three datagrams, not %d", datagram_count[1]);
+	CHECK(datagrams[1][0].size == COMPACT_BATCH_HEADER_SIZE + (1 + 2 + 12) + (2 + 2 + 600) + (1 + 2 + 8),
+		"the first datagram's %d bytes", datagrams[1][0].size);
+	read_back(1);
+	CHECK(heard_count == 5, "five messages, not %d", heard_count);
+	heard_is(0, _distributed_message_forwarded_live_controls, 1, 12, base, 0x1234, 1);
+	heard_is(1, _distributed_message_unit_state_differences, 20, 30, base + 1, 0x1234, 2);
+	heard_is(2, _distributed_message_pings, 2, 4, base + 1, 0x1234, 3);
+	heard_is(3, _distributed_message_pings, 1, 4, base + 2, 0x1234, 4);
+	/* (a world this machine is not in: not its own) */
+	CHECK(heard[4].header.checkpoint_epoch != distributed_checkpoint_epoch, "another world read as this one");
+	/* (the sender's clock behind or ahead of the tick, within the window) */
+	sender_clock = base - 400;
+	read_back(1);
+	heard_is(1, _distributed_message_unit_state_differences, 20, 30, base + 1, 0x1234, 2);
+	sender_clock = base + 400;
+	read_back(1);
+	heard_is(3, _distributed_message_pings, 1, 4, base + 2, 0x1234, 4);
+}
+
+/* an OpenCE machine's batches as before (and a cut datagram read no
+further than its end) */
+static void opence_case(void)
+{
+	struct parsed messages[8];
+	short count;
+
+	reset();
+	send_message(3, _distributed_message_pings, 2, 4, now_time, distributed_checkpoint_epoch, 1);
+	distributed_batches_flush();
+	CHECK(datagram_count[3] == 1, "one datagram");
+	CHECK(datagrams[3][0].size == sizeof(struct distributed_message_header) + BATCH_MESSAGE_OVERHEAD + 8,
+		"the batch as before, %d bytes", datagrams[3][0].size);
+	count = parse(3, 0, messages, 8);
+	CHECK(count == 1 && messages[0].type == _distributed_message_pings && messages[0].count == 2, "its message");
+	/* (cut short) */
+	reset();
+	sender_clock = now_time;
+	send_message(1, _distributed_message_pings, 2, 4, now_time, distributed_checkpoint_epoch, 1);
+	send_message(1, _distributed_message_pings, 1, 4, now_time, distributed_checkpoint_epoch, 2);
+	distributed_batches_flush();
+	heard_count = 0;
+	distributed_compact_batch_handle(1, (word const *)datagrams[1][0].data, (word)(datagrams[1][0].size - 1));
+	CHECK(heard_count == 1, "a message past the end read");
+}
+
 int main(int argc, char **argv)
 {
 	char const *name = argc > 1 ? argv[1] : "";
@@ -580,6 +749,10 @@ int main(int argc, char **argv)
 		defer_case();
 	else if (!strcmp(name, "into-view"))
 		into_view_case();
+	else if (!strcmp(name, "compact"))
+		compact_case();
+	else if (!strcmp(name, "opence"))
+		opence_case();
 	else
 	{
 		fprintf(stderr, "no case %s\n", name);

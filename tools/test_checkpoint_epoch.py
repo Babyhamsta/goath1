@@ -124,6 +124,9 @@ static int world_kind(byte type);
     if "distributed_keyed_reset" in source:
         prefix += "#define KEYED 1\n"
     code = prefix + kinds + structure(header, "distributed_message_header")
+    compact = re.search(r"#define COMPACT_BATCH_HEADER_SIZE [^\n]*\n", source)
+    if compact:
+        code += "\n" + compact.group(0) + "void network_distributed_handle_message(long, word const *, word);\n"
     code += r'''
 static long distributed_sender_offsets[MAXIMUM_SENDERS];
 static long distributed_sender_times[MAXIMUM_SENDERS];
@@ -139,7 +142,7 @@ static int distributed_tick_stuck(long last,long tick,long now)
     for name in ("distributed_advance_checkpoint", "distributed_message_epoch_valid",
                  "distributed_sender_clock", "distributed_message_time_bounded", "distributed_keyed_kind",
                  "distributed_keyed_fresh", "distributed_message_stale", "distributed_world_side_kind",
-                 "distributed_world_gate"):
+                 "distributed_world_gate", "distributed_compact_batch_handle"):
         try:
             code += function(source, name)
         except LookupError:
@@ -163,6 +166,13 @@ static void batch(byte type,unsigned long epoch,long time){
  memcpy(message.bytes,&outer,sizeof(outer));memcpy(message.bytes+sizeof(outer),&length,sizeof(length));
  memcpy(message.bytes+sizeof(outer)+sizeof(length),(byte *)&inner+sizeof(message_header),length);
  network_distributed_handle_message(NONE,(word *)message.bytes,sizeof(outer)+sizeof(length)+length);
+}
+/* (a compact batch's: its world's low byte, its tick's low 16 bits) */
+static void compact(byte type,unsigned long epoch,long time){
+ byte message[16];memset(message,0,sizeof(message));
+ message[2]=_distributed_message_compact_batch;message[3]=(byte)epoch;message[4]=(byte)time;message[5]=(byte)(time>>8);
+ message[6]=0;message[7]=type;message[8]=0;
+ unreliable=1;network_distributed_handle_message(NONE,(word *)message,9);unreliable=0;
 }
 static void setup(void){
  memset(distributed_sender_times,255,sizeof(distributed_sender_times));
@@ -196,7 +206,8 @@ static int world_kind(byte type){
 
 
 @pytest.mark.parametrize("case", ["barrier", "late_packets", "ready", "batch", "clock", "rollover",
-                                  "first_datagram", "stream_snapshot", "keyed_reorder", "world_epoch", "legit_window"])
+                                  "first_datagram", "stream_snapshot", "keyed_reorder", "world_epoch", "legit_window",
+                                  "compact_batch"])
 def test_epoch_dispatch(tmp_path, case):
     cases = {
         "barrier": r'''
@@ -277,6 +288,20 @@ def test_epoch_dispatch(tmp_path, case):
  assert(delivered[_distributed_message_object_changes]==1);
  batch(_distributed_message_damage_events,2,101);assert(delivered[_distributed_message_damage_events]==1);
  batch(_distributed_message_checkpoint,3,102);assert(resets==1 && distributed_checkpoint_epoch==2);
+''',
+        "compact_batch": r'''
+ compact(_distributed_message_checkpoint,2,100);assert(!resets);
+ compact(_distributed_message_damage_events,2,100);assert(!delivered[_distributed_message_damage_events]);
+ send(NONE,_distributed_message_checkpoint,2,100,0,12);
+ send(NONE,_distributed_message_objects_synchronized,2,100,0,12);
+ compact(_distributed_message_damage_events,1,101);assert(!delivered[_distributed_message_damage_events]);
+ compact(_distributed_message_damage_events,2,101);assert(delivered[_distributed_message_damage_events]==1);
+ compact(_distributed_message_damage_events,3,102);assert(delivered[_distributed_message_damage_events]==1);
+ compact(_distributed_message_objects_synchronized,2,102);
+ compact(_distributed_message_checkpoint,3,102);assert(resets==1 && distributed_checkpoint_epoch==2);
+ /* (a tick past the window, by its low 16 bits too) */
+ compact(_distributed_message_damage_events,2,100+65536+1000);assert(delivered[_distributed_message_damage_events]==1);
+ compact(_distributed_message_damage_events,2,103);assert(delivered[_distributed_message_damage_events]==2);
 ''',
         "clock": r'''
  send(NONE,_distributed_message_damage_events,3,LONG_MAX,0,12);
@@ -514,6 +539,7 @@ static struct {long taken_time[2],taken_host_time[2],input_heard_time[2],input_t
 #define UNIT_SENT_TICKS 2
 static int distributed_predictions_heard[2],distributed_predictions_earlier[2];
 static int distributed_forwards[2],distributed_forward_periods[2],distributed_far_live[2],distributed_relayed_sent[2];
+static int distributed_forward_immediate[2],distributed_far_owed[2];
 static long distributed_forwarded_ticks[2],distributed_forwarded_times[2],distributed_host_run_times[2];
 static struct {long last_run[2];int count;} distributed_host_takes;
 static struct {long key,unit_index;} distributed_remote_positions[2][REMOTE_POSITION_TICKS],

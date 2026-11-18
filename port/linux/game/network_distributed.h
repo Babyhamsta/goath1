@@ -281,6 +281,11 @@ enum
 	asked where its copy of the player went wrong (a correction past
 	REMOTE_CORRECTION_TOLERANCE, or a forwarded input missed) */
 	_distributed_message_substep_state_requests = 147,
+	/* an OpenH1 machine's datagram of messages to an OpenH1 machine, in
+	place of _distributed_message_batch (network_distributed.c,
+	distributed_batch_flush): the batch's world and tick in 3 bytes, and
+	each message's length, kind and count in 3 or 4 bytes, not 12 */
+	_distributed_message_compact_batch = 148,
 
 	NUMBER_OF_DISTRIBUTED_MESSAGES
 };

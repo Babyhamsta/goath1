@@ -622,10 +622,23 @@ struct distributed_pings_message
 };
 
 /* a batch's datagram: its header, then each message's size and its bytes
-past its message header */
+past its message header. A compact one's (an OpenH1 machine's to an OpenH1
+machine: distributed_batch_compact, _distributed_message_compact_batch):
+its message header and kind, the low byte of its world (checkpoint epoch)
+and the low 16 bits of its tick (game_time, the first message's), which the
+receiver has whole within its window of the sender's clock
+(distributed_compact_batch_handle); then each message's length past its
+header, doubled and one more for a message of the tick after the batch's,
+in a byte (below 128) or two (the first's top bit set: its low 7 bits, then
+the rest), its kind, its count and its entries. A message of another world,
+or of a tick other than the batch's or the next, goes in a datagram of its
+own (the batch sent first) */
 struct distributed_batch
 {
 	word size;
+	boolean compact;
+	long game_time;
+	unsigned long checkpoint_epoch;
 	byte data[DATAGRAM_MAXIMUM_SIZE];
 };
 
@@ -633,6 +646,9 @@ struct distributed_batch
 its header but for its message header */
 #define BATCH_MESSAGE_OVERHEAD \
 	((word)(sizeof(word) + sizeof(struct distributed_message_header) - sizeof(message_header)))
+/* ... and in a compact batch (at most), and the compact batch's header */
+#define COMPACT_BATCH_MESSAGE_OVERHEAD ((word)(2 + 2 * sizeof(byte)))
+#define COMPACT_BATCH_HEADER_SIZE ((word)(sizeof(message_header) + 4))
 
 /* messages of entries of a size of their own, to one machine (or the host),
 each as long as the batch has room for (distributed_packer_add): nothing
@@ -1706,12 +1722,26 @@ static void distributed_batch_flush(
 
 	if (!batch->size)
 		return;
-	header->type = _distributed_message_batch;
-	header->count = 0;
-	header->game_time = game_time_get();
-	header->checkpoint_epoch = distributed_checkpoint_epoch;
-	header->header = 0;
-	build_message_header(&header->header, batch->size, 2, 0);
+	if (batch->compact)
+	{
+		message_header word_header = 0;
+
+		build_message_header(&word_header, batch->size, 2, 0);
+		csmemcpy(batch->data, &word_header, sizeof(word_header));
+		batch->data[sizeof(message_header)] = _distributed_message_compact_batch;
+		batch->data[sizeof(message_header) + 1] = (byte)(batch->checkpoint_epoch & 0xFF);
+		batch->data[sizeof(message_header) + 2] = (byte)(batch->game_time & 0xFF);
+		batch->data[sizeof(message_header) + 3] = (byte)((batch->game_time >> 8) & 0xFF);
+	}
+	else
+	{
+		header->type = _distributed_message_batch;
+		header->count = 0;
+		header->game_time = game_time_get();
+		header->checkpoint_epoch = distributed_checkpoint_epoch;
+		header->header = 0;
+		build_message_header(&header->header, batch->size, 2, 0);
+	}
 	if (sender == HOST_SENDER)
 		network_distributed_client_send(batch->data, batch->size);
 	else
@@ -1719,6 +1749,21 @@ static void distributed_batch_flush(
 	distributed_batch_bytes[sender] += batch->size;
 	distributed_batch_datagrams[sender]++;
 	batch->size = 0;
+}
+
+/* whether the machine's batches (or the host's, HOST_SENDER) are compact:
+an OpenH1 machine's to an OpenH1 machine (the host's to an OpenH1 client,
+a client's of an OpenH1 game to its host); never to an OpenCE machine, or
+of a Legacy game */
+static boolean distributed_batch_compact(
+	short sender)
+{
+	struct distributed_batch const *batch = &distributed_batches[sender];
+
+	if (batch->size)
+		return batch->compact;
+	return sender == HOST_SENDER ? network_standard_agreed_rate() != 0 :
+		network_standard_machine_is_openh1(sender);
 }
 
 /* the bytes a message's entries (past its header) have in the machine's
@@ -1729,14 +1774,17 @@ static word distributed_batch_room(
 	word minimum)
 {
 	struct distributed_batch *batch = &distributed_batches[sender];
-	word used = batch->size ? batch->size : (word)sizeof(struct distributed_message_header);
+	boolean compact = distributed_batch_compact(sender);
+	word empty = compact ? COMPACT_BATCH_HEADER_SIZE : (word)sizeof(struct distributed_message_header);
+	word overhead = compact ? COMPACT_BATCH_MESSAGE_OVERHEAD : BATCH_MESSAGE_OVERHEAD;
+	word used = batch->size ? batch->size : empty;
 
-	if (used + BATCH_MESSAGE_OVERHEAD + minimum > DATAGRAM_MAXIMUM_SIZE)
+	if (used + overhead + minimum > DATAGRAM_MAXIMUM_SIZE)
 	{
 		distributed_batch_flush(sender);
-		used = sizeof(struct distributed_message_header);
+		used = empty;
 	}
-	return (word)(DATAGRAM_MAXIMUM_SIZE - used - BATCH_MESSAGE_OVERHEAD);
+	return (word)(DATAGRAM_MAXIMUM_SIZE - used - overhead);
 }
 
 /* a message's header and entries into the machine's batch, which has room
@@ -1750,8 +1798,43 @@ static void distributed_batch_append(
 	struct distributed_batch *batch = &distributed_batches[sender];
 	word length = (word)(sizeof(*header) - sizeof(message_header) + entries_size);
 
+	if (distributed_batch_compact(sender))
+	{
+		word value;
+
+		/* (of another world, or neither the batch's tick nor the next: the
+		batch sent first, this the first of the next) */
+		if (batch->size && (header->checkpoint_epoch != batch->checkpoint_epoch ||
+			(unsigned long)(header->game_time - batch->game_time) > 1))
+		{
+			distributed_batch_flush(sender);
+		}
+		if (!batch->size)
+		{
+			batch->compact = TRUE;
+			batch->game_time = header->game_time;
+			batch->checkpoint_epoch = header->checkpoint_epoch;
+			batch->size = COMPACT_BATCH_HEADER_SIZE;
+		}
+		value = (word)(entries_size << 1 | (header->game_time != batch->game_time ? 1 : 0));
+		if (value < 0x80)
+			batch->data[batch->size++] = (byte)value;
+		else
+		{
+			batch->data[batch->size++] = (byte)(0x80 | (value & 0x7F));
+			batch->data[batch->size++] = (byte)(value >> 7);
+		}
+		batch->data[batch->size++] = header->type;
+		batch->data[batch->size++] = header->count;
+		csmemcpy(batch->data + batch->size, entries, entries_size);
+		batch->size += entries_size;
+		return;
+	}
 	if (!batch->size)
+	{
+		batch->compact = FALSE;
 		batch->size = sizeof(struct distributed_message_header);
+	}
 	csmemcpy(batch->data + batch->size, &length, sizeof(word));
 	csmemcpy(batch->data + batch->size + sizeof(word), (byte const *)header + sizeof(message_header),
 		sizeof(*header) - sizeof(message_header));
@@ -9396,6 +9479,67 @@ static boolean distributed_world_gate(
 	return TRUE;
 }
 
+/* a compact batch's messages (distributed_batch_append), each as if it came
+alone with the whole header: the batch's world as this machine's where its
+low byte is the same (else one this machine is not in, which no message of
+a datagram changes: distributed_message_epoch_valid), its tick the one of
+the sender's clock as this machine has it (distributed_sender_clock) that
+has the low 16 bits sent, within 32767 ticks of it (a datagram's tick is
+taken only within DISTRIBUTED_TIME_WINDOW_TICKS of the clock) */
+void network_distributed_handle_message(long machine_index, word const *message, word size);
+
+static void distributed_compact_batch_handle(
+	long machine_index,
+	word const *message,
+	word size)
+{
+	byte const *data = (byte const *)message;
+	long clock = distributed_sender_clock(machine_index);
+	word low_time = (word)(data[sizeof(message_header) + 2] | data[sizeof(message_header) + 3] << 8);
+	long game_time = clock + (short)(word)(low_time - (word)clock);
+	unsigned long epoch = (distributed_checkpoint_epoch & ~0xFFUL) | data[sizeof(message_header) + 1];
+	word offset = COMPACT_BATCH_HEADER_SIZE;
+
+	while (offset < size)
+	{
+		union
+		{
+			struct distributed_message_header header;
+			word words[(sizeof(struct distributed_message_header) + DATAGRAM_MAXIMUM_SIZE + 1) / sizeof(word)];
+		} buffer;
+		word value = data[offset++];
+		word length;
+
+		if (value & 0x80)
+		{
+			if (offset >= size)
+				break;
+			value = (word)((value & 0x7F) | data[offset++] << 7);
+		}
+		length = (word)(value >> 1);
+		if (size - offset < 2 || length > size - offset - 2 ||
+			sizeof(buffer.header) + length > sizeof(buffer))
+		{
+			break;
+		}
+		csmemcpy(&buffer.header.header, message, sizeof(message_header));
+		buffer.header.type = data[offset];
+		buffer.header.count = data[offset + 1];
+		buffer.header.game_time = game_time + (value & 1);
+		buffer.header.checkpoint_epoch = epoch;
+		csmemcpy((byte *)&buffer + sizeof(buffer.header), data + offset + 2, length);
+		offset += (word)(2 + length);
+		/* (no batch in a batch) */
+		if (buffer.header.type != _distributed_message_batch && buffer.header.type != _distributed_message_compact_batch)
+		{
+			distributed_handling_batch = TRUE;
+			network_distributed_handle_message(machine_index, buffer.words,
+				(word)(sizeof(buffer.header) + length));
+			distributed_handling_batch = FALSE;
+		}
+	}
+}
+
 /* a message of the distributed kind; machine_index is the sender's on the
 host, NONE on a client */
 void network_distributed_handle_message(
@@ -9504,6 +9648,15 @@ void network_distributed_handle_message(
 			distributed_handling_stream_message : !network_connection_last_read_was_unreliable());
 		return;
 	}
+	/* (a compact batch's messages each as if it came alone, of no game
+	between games: shorter than a message header may be) */
+	if (size >= COMPACT_BATCH_HEADER_SIZE &&
+		((byte const *)message)[sizeof(message_header)] == _distributed_message_compact_batch)
+	{
+		if (game_in_progress())
+			distributed_compact_batch_handle(machine_index, message, size);
+		return;
+	}
 	/* (none between games: loading, or in the menus) */
 	if (size < sizeof(header) || !game_in_progress())
 		return;
@@ -9537,7 +9690,8 @@ void network_distributed_handle_message(
 			csmemcpy((byte *)buffer + sizeof(message_header), (byte const *)message + offset, length);
 			offset += length;
 			/* (no batch in a batch) */
-			if (((struct distributed_message_header const *)buffer)->type != _distributed_message_batch)
+			if (((struct distributed_message_header const *)buffer)->type != _distributed_message_batch &&
+				((struct distributed_message_header const *)buffer)->type != _distributed_message_compact_batch)
 			{
 				distributed_handling_batch = TRUE;
 				network_distributed_handle_message(machine_index, buffer, (word)(sizeof(message_header) + length));

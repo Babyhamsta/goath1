@@ -2872,7 +2872,18 @@ Unity's Netcode for Entities, lightyear, netfox and the Ares source):
   one's headers (internet play's tunnel adds 36 bytes to every datagram: 15
   of its header, 16 of its tag and 5 of its own inside), each message split
   between two where one is full, so none goes out part empty; the machines'
-  datagrams go in a turn that starts one further each tick.
+  datagrams go in a turn that starts one further each tick. Between OpenH1
+  machines (the host to an OpenH1 client, a client to its OpenH1 host) the
+  batch is compact (`_distributed_message_compact_batch`,
+  `distributed_batch_append`): 6 bytes of its own, not 12 (the low byte of
+  its world and the low 16 bits of its tick, which the receiver has whole
+  from its own world and its window of the sender's clock), and 3 or 4
+  bytes a message, not 12 (its length, with a bit for a message of the
+  next tick, its kind and its count: its tick and world are the batch's).
+  A message of another world, or of a tick neither the batch's nor the
+  next, starts a datagram of its own; nothing waits. An OpenCE machine, or
+  a Legacy game, is sent the batch as before
+  (`tools/harness/tests/test_substep_datagrams.py`, `tools/test_checkpoint_epoch.py`).
 - **Stamped with their tick.** Every message carries the sender's tick
   (its header's game time); an unreliable one (the units, the input, the
   objects, the statistics, what units carry, the damage) that arrives after
