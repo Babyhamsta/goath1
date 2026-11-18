@@ -1563,6 +1563,46 @@ the host's datagrams 0.92 to 0.96 MB/s (the whole states the lost ones asked
 for). At 30 (16 players) the states go as differences too, with the clients'
 players where the host has them as before.
 
+### Packed states
+
+The host packs the tick states' differences and the objects' states into
+bits (`network_bits.h`), sent at the same moments as before.
+`debug.network_states_unpacked` sends both in their old encoding, and an
+OpenCE machine always gets the old encoding.
+
+- **Tick states.** A difference's first byte has its high bit set, a deck
+  bit, and the ticks since its base (5 bits). Then come the player and the
+  parts that differ: 8 bits, plus 8 more for the rare ones. Each part is
+  written in as few bits as it needs:
+  - Position: the grid steps beyond where the base's velocity carries the
+    player in those ticks (4 steps per velocity unit per tick).
+  - Velocity, shields, damage and the client's tick: their differences. The
+    client's tick is counted from the base's, advanced by the ticks between.
+  - Facing: a unit vector. Its largest part is not sent, only its sign and
+    a 2-bit offset from the length the other two parts leave.
+
+  Every part reads back exactly as the old forms gave it, so nothing a
+  client applies changes. A difference that would not be shorter than the
+  whole state goes whole. A client reads the old forms and the packed ones
+  alike.
+- **Objects' states** (`_distributed_message_object_states_packed`, to
+  OpenH1 clients in place of `_distributed_message_object_states`). The
+  position goes on the players' grid of 1/4096 of a world unit (an 8192th
+  off at most). It is absolute, so the error cannot add up from one state to
+  the next, and the host keeps full precision. The facing and up go as unit
+  vectors and the velocities in widths of their own. Everything but the
+  position is exact. A position outside the world, or not a number, goes
+  whole. The client turns the packed message back into the whole one before
+  any other step reads it (`network_objects_unpack_states`).
+
+At 120 Hz on crowded Blood Gulch (3 machines, 13 bots, the same match with
+the setting on and off), per client:
+- Tick states went from 6.2 to 3.5 KB/s (204 to 118 bytes a message).
+- Objects' states went from 119 to 95 bytes a message (3.1 to 2.8 KB/s; that
+  match sent 12% more object messages).
+- Corrections past the tolerance a client reported: 84 and 8 before, 87 and
+  17 after.
+
 ### Actors to far clients
 
 Only the host runs the AI. It sends each client its actors' units as it

@@ -90,6 +90,9 @@ static void error(int level,char const *fmt,...){(void)level;(void)fmt;}
 static boolean network_standard_message_goes_to(long machine,byte type){(void)machine;(void)type;return TRUE;}
 static void network_standard_message_heard(byte type){(void)type;}
 static int world_kind(byte type);
+/* (an OpenH1 host's packed objects' states: none read here, network_objects.c's) */
+#define NETWORK_OBJECT_STATE_SIZE 44
+static word network_objects_unpack_states(void const *m,word s,void *u,word mx){(void)m;(void)s;(void)u;(void)mx;return 0;}
 '''
     sizes = sorted(set(re.findall(r"\b(\w+_entry_size|\w+_minimum_size)\(", dispatch)) - {"network_objects_entry_size"})
     prefix += "\n".join(f"#define {name}(...) 1" for name in sizes) + "\n"

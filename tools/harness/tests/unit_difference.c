@@ -6,7 +6,9 @@ it took, else whole; the client reads it against the state it took of that
 tick. Read back, every state is exactly what the whole state would have
 been (the same bytes written again), through a chain of ticks whose acks
 lag; a difference from a state the client has not is passed over, the
-entries after it read as sent. Machine 1 is the client. */
+entries after it read as sent. Machine 1 is the client. Each case packed
+(distributed_unit_packed_write, as the host sends them) and, -unpacked, in
+the forms before (debug.network_states_unpacked). */
 #include "harness.h"
 #include <math.h>
 typedef unsigned short word;
@@ -24,6 +26,7 @@ static long distributed_unit_sent_times[HALO_PORT_MAXIMUM_NETWORK_MACHINES][MAXI
 static long distributed_unit_acked_times[HALO_PORT_MAXIMUM_NETWORK_MACHINES];
 static struct distributed_unit_state distributed_unit_bases[MAXIMUM_TRACKED_PLAYERS][UNIT_BASE_TICKS];
 static long distributed_unit_base_times[MAXIMUM_TRACKED_PLAYERS][UNIT_BASE_TICKS];
+static boolean distributed_tick_states_unpacked;
 
 static long now_time;
 /* the first byte of the last entry tick() wrote */
@@ -45,6 +48,19 @@ static boolean vehicle_riding_deck_valid(struct vehicle_riding_deck const *deck,
 	return deck->ticks >= 1 && deck->ticks <= 60 && deck->node_index >= NONE && deck->node_index < node_count;
 }
 #include "under_test.inc"
+
+/* a difference's first byte: with the deck part, and a difference at all
+(packed, or as before) */
+static boolean deck_form(byte form)
+{
+	return distributed_tick_states_unpacked ? form == _unit_difference_form_deck :
+		TEST_FLAG(form, UNIT_PACKED_FORM_BIT) && TEST_FLAG(form, UNIT_PACKED_DECK_BIT);
+}
+static boolean difference_form(byte form)
+{
+	return distributed_tick_states_unpacked ? form == _unit_difference_form_difference :
+		TEST_FLAG(form, UNIT_PACKED_FORM_BIT) && !TEST_FLAG(form, UNIT_PACKED_DECK_BIT);
+}
 
 static void reset(void)
 {
@@ -151,12 +167,21 @@ static word tick(struct distributed_unit_state const *host_state, long time, boo
 
 int main(int argc, char **argv)
 {
-	const char *which = argc > 1 ? argv[1] : "";
+	char which[64];
 	struct distributed_unit_state state;
 	boolean difference, known;
 	word size;
 	long time;
+	size_t length;
 
+	snprintf(which, sizeof(which), "%s", argc > 1 ? argv[1] : "");
+	length = strlen(which);
+	/* (the forms before packing: debug.network_states_unpacked) */
+	if (length > 9 && !strcmp(which + length - 9, "-unpacked"))
+	{
+		distributed_tick_states_unpacked = TRUE;
+		which[length - 9] = 0;
+	}
 	reset();
 	if (!strcmp(which, "chain"))
 	{
@@ -191,8 +216,12 @@ int main(int argc, char **argv)
 			}
 			size = tick(&state, time, TRUE, FALSE, &difference, &known);
 			CHECK(known, "tick %ld known", time);
-			if (time > 102 && time != 140)
+			/* (packed, a dead player's few bytes go whole where that is shorter) */
+			if (time > 102 && time != 140 &&
+				(distributed_tick_states_unpacked || TEST_FLAG(state.flags, _distributed_unit_alive_bit)))
+			{
 				CHECK(difference, "tick %ld a difference", time);
+			}
 			/* (from the tick before: the position, the velocity's and the
 			facing's changes in a byte a part, the client's tick) */
 			if (time > 102 && time < 120 && time % 3 == 0)
@@ -225,11 +254,13 @@ int main(int argc, char **argv)
 		distributed_unit_acked_times[1] = 19;
 		tick(&state, 22, TRUE, FALSE, &difference, &known);
 		CHECK(!difference, "nothing sent at or before the ack: whole");
-		/* (a teleport past 8 world units) */
+		/* (a teleport past 8 world units: whole in the forms before, a
+		difference packed) */
 		distributed_unit_acked_times[1] = 22;
 		state.position.y += 9.0f;
 		tick(&state, 23, TRUE, FALSE, &difference, &known);
-		CHECK(!difference && known, "too far: whole");
+		CHECK(difference == !distributed_tick_states_unpacked && known, "a teleport: %s",
+			difference ? "a difference" : "whole");
 		/* (the latest acked older than the client keeps) */
 		distributed_unit_acked_times[1] = 23;
 		tick(&state, 23 + UNIT_BASE_TICKS, TRUE, FALSE, &difference, &known);
@@ -338,11 +369,9 @@ int main(int argc, char **argv)
 			CHECK(known && difference, "tick %ld: a known difference", time);
 			/* (the deck part goes where it changed, and only there) */
 			if (time == 405 || (time > 405 && time <= 420) || (time >= 425 && time <= 430))
-				CHECK(last_form == _unit_difference_form_deck, "tick %ld: the deck part not sent (form %u)", time,
-					last_form);
+				CHECK(deck_form(last_form), "tick %ld: the deck part not sent (form %u)", time, last_form);
 			else
-				CHECK(last_form == _unit_difference_form_difference,
-					"tick %ld: the deck part sent unchanged (form %u)", time, last_form);
+				CHECK(difference_form(last_form), "tick %ld: the deck part sent unchanged (form %u)", time, last_form);
 		}
 		/* (a presence byte not 0 or 1 from another machine: no state) */
 		{
@@ -358,12 +387,121 @@ int main(int argc, char **argv)
 			distributed_tick_state_times[1][440 & (UNIT_BASE_TICKS - 1)] = 440;
 			size = distributed_unit_difference_write(1, 1, &distributed_tick_states[1][440 & (UNIT_BASE_TICKS - 1)],
 				TRUE, buffer);
-			CHECK(buffer[0] == _unit_difference_form_deck && buffer[size - 1 - DISTRIBUTED_DECK_SIZE] == 1,
-				"a deck part written");
+			CHECK(deck_form(buffer[0]) && buffer[size - 1 - DISTRIBUTED_DECK_SIZE] == 1, "a deck part written");
 			buffer[size - 1 - DISTRIBUTED_DECK_SIZE] = 2;
 			CHECK(!distributed_unit_difference_read(buffer, buffer + size, 440, &read, &known),
 				"a deck part's presence of 2 taken");
 		}
+		return 0;
+	}
+	if (!strcmp(which, "extremes"))
+	{
+		struct distributed_unit_state off;
+		byte buffer[1 + DISTRIBUTED_UNIT_STATE_MAXIMUM_SIZE];
+		struct distributed_unit_state read;
+
+		/* (the map's corner to its other, at the fastest speeds) */
+		state = on_foot(1, -32767.75f, -32767.75f, -32767.75f, 30000);
+		state.velocity.i = state.velocity.j = state.velocity.k = -32768;
+		tick(&state, 500, TRUE, FALSE, &difference, &known);
+		distributed_unit_acked_times[1] = 500;
+		state.position.x = state.position.y = state.position.z = 32767.75f;
+		state.velocity.i = state.velocity.j = state.velocity.k = 32767;
+		state.predicted_time = (short)(state.predicted_time + 1);
+		tick(&state, 501, TRUE, FALSE, &difference, &known);
+		CHECK(known && difference == !distributed_tick_states_unpacked, "corner to corner known");
+		/* (every part changed: flags, killer, unit, vehicle, position,
+		velocity, a facing whose largest part is negative, up, the client's
+		tick, shields, damage, powerups, camouflage) */
+		distributed_unit_acked_times[1] = 501;
+		state.flags ^= FLAG(_distributed_unit_shield_charging_bit) | FLAG(_distributed_unit_shield_depleted_bit);
+		state.killing_player_index = 3;
+		state.unit_index = 0x7FFE0001;
+		state.vehicle_index = 0x00200030;
+		state.seat_index = 2;
+		state.position.x = 12.5f;
+		state.position.y = -0.25f;
+		state.position.z = 2.0f;
+		state.velocity.i = -1;
+		state.velocity.j = 0;
+		state.velocity.k = 1;
+		state.forward.i = -3000;
+		state.forward.j = -32630;
+		state.forward.k = 0;
+		state.up.i = 32767;
+		state.up.j = 3000;
+		state.up.k = 0;
+		state.predicted_time = (short)(state.predicted_time + 9999);
+		state.body_vitality = 1;
+		state.shield_vitality = 65535;
+		state.current_body_damage = 65535;
+		state.recent_body_damage = 0;
+		state.current_shield_damage = 12345;
+		state.recent_shield_damage = 54321;
+		state.powerup_durations[0] = -1;
+		state.powerup_durations[1] = 32767;
+		state.unit_flags = 0xFF;
+		state.active_camouflage = 200;
+		tick(&state, 502, TRUE, FALSE, &difference, &known);
+		CHECK(known, "every part changed known");
+		/* (a facing far from a unit vector, every way) */
+		distributed_unit_acked_times[1] = 502;
+		state.forward.i = 32767;
+		state.forward.j = 3000;
+		state.forward.k = 0;
+		state.predicted_time = (short)(state.predicted_time + 1);
+		tick(&state, 503, TRUE, FALSE, &difference, &known);
+		distributed_unit_acked_times[1] = 503;
+		state.forward.i = -32768;
+		state.forward.j = -32768;
+		state.forward.k = 0;
+		state.predicted_time = (short)(state.predicted_time + 1);
+		tick(&state, 504, TRUE, FALSE, &difference, &known);
+		CHECK(known && difference, "far from a unit vector: a difference");
+		/* (each part alone, as a difference: its largest part negative, the
+		facing; then the rest) */
+		for (time = 0; time < 11; time++)
+		{
+			distributed_unit_acked_times[1] = 504 + time * 2;
+			now_time = 505 + time * 2;
+			state.predicted_time = (short)(state.predicted_time + 2);
+			switch (time)
+			{
+			case 0: state.forward.i = -3000; state.forward.j = -32630; break;
+			case 1: state.flags ^= FLAG(_distributed_unit_shield_over_charging_bit); break;
+			case 2: state.killing_player_index = 0; break;
+			case 3: state.unit_index = 0x7FFE0002; break;
+			case 4: state.vehicle_index = NONE; state.seat_index = NONE; break;
+			case 5: state.up.i = 0; state.up.j = 0; state.up.k = 32767; break;
+			case 6: state.powerup_durations[0] = 5; break;
+			case 7: state.active_camouflage = 0; break;
+			case 8: state.body_vitality = 16000; state.shield_vitality = 0; break;
+			case 9: state.current_body_damage = 0; state.recent_shield_damage = 100; break;
+			default: state.predicted_time = (short)(state.predicted_time - 700); break;
+			}
+			/* (the tick between, unsent: the next goes two ticks on) */
+			size = tick(&state, 505 + time * 2, TRUE, FALSE, &difference, &known);
+			CHECK(known && difference, "part %ld alone: a difference", time);
+		}
+		/* (nothing changed but the client's tick, a tick on: the player and
+		an empty part byte, packed) */
+		distributed_unit_acked_times[1] = 525;
+		state.predicted_time = (short)(state.predicted_time + 1);
+		size = tick(&state, 526, TRUE, FALSE, &difference, &known);
+		CHECK(known && difference, "unchanged: a difference");
+		if (!distributed_tick_states_unpacked)
+			CHECK(size == 3, "unchanged: %u bytes", size);
+		/* (off the grid, as no host keeps a state: whole, read back as it) */
+		off = state;
+		off.position.x += 1.0f / 65536.0f;
+		distributed_unit_acked_times[1] = 526;
+		now_time = 527;
+		distributed_tick_states[1][527 & (UNIT_BASE_TICKS - 1)] = off;
+		distributed_tick_state_times[1][527 & (UNIT_BASE_TICKS - 1)] = 527;
+		size = distributed_unit_difference_write(1, 1, &off, TRUE, buffer);
+		CHECK(buffer[0] == _unit_difference_form_whole, "off the grid: whole (form %u)", buffer[0]);
+		CHECK(distributed_unit_difference_read(buffer, buffer + size, 527, &read, &known) == size && known &&
+			read.position.x == off.position.x, "off the grid: read as it is");
 		return 0;
 	}
 	fprintf(stderr, "no such case: %s\n", which);

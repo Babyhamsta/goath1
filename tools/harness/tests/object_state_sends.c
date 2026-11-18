@@ -89,6 +89,13 @@ static void distributed_send_to_machine(long machine_index, void *message, byte 
 	for (index = 0; index < count; index++)
 		sent[machine_index][states->states[index].object_index]++;
 }
+/* (a message's encoding, packed or whole, is object_state_packing's) */
+static void distributed_host_send_state_message(long machine_index, struct distributed_object_state_message *message,
+	short count)
+{
+	distributed_send_to_machine(machine_index, message, _distributed_message_object_states, count,
+		(word)(sizeof(message->header) + count * sizeof(message->states[0])));
+}
 #include "under_test.inc"
 
 static void tick(void)

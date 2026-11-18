@@ -286,6 +286,11 @@ enum
 	distributed_batch_flush): the batch's world and tick in 3 bytes, and
 	each message's length, kind and count in 3 or 4 bytes, not 12 */
 	_distributed_message_compact_batch = 148,
+	/* an OpenH1 game's objects' states (network_objects.c, unreliable, to each
+	OpenH1 client, in place of _distributed_message_object_states unless
+	debug.network_states_unpacked): each in bits (network_objects_pack_state),
+	read as the whole one would be (network_objects_unpack_states) */
+	_distributed_message_object_states_packed = 149,
 
 	NUMBER_OF_DISTRIBUTED_MESSAGES
 };
@@ -733,6 +738,15 @@ the tick ends, or (at_tick_start) as it begins, of the drivers
 distributed_prediction_at_tick_start names */
 void network_objects_apply_vehicle_predictions(boolean at_tick_start);
 word network_objects_entry_size(byte type);
+/* (a client) a packed message of the objects' states
+(_distributed_message_object_states_packed) as the whole one, into unpacked
+(maximum bytes): its size, 0 for none; the whole one's entries of
+NETWORK_OBJECT_STATE_SIZE */
+enum
+{
+	NETWORK_OBJECT_STATE_SIZE = 44,
+};
+word network_objects_unpack_states(void const *message, word size, void *unpacked, word maximum);
 /* whether this client has the host's object at this index */
 boolean network_objects_client_has(long object_index);
 /* Host says alive: recover a dead client copy after a co-op restore. */
