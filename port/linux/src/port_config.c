@@ -2759,6 +2759,12 @@ static const struct config_setting config_settings[] =
 	{ "debug.voice_test", _config_boolean, "false", "HALO_VOICE_TEST", _environment_set_is_true, _platform_all,
 		"Voice chat's automated tests: a tone instead of the microphone, and\n"
 		"each voice heard logged once a second." },
+	{ "debug.network_latency_trace", _config_string, "\"\"", "HALO_NETWORK_LATENCY_TRACE", _environment_value,
+		_platform_all,
+		"A file to write, in a network game, when each of the players' control\n"
+		"changes was sampled, sent, received, read, applied and shown on this\n"
+		"machine (the network tests' latency by hop: tools/net_latency.py joins\n"
+		"the machines' files); empty, none." },
 	{ "debug.latency_log", _config_string, "\"\"", "HALO_LATENCY_LOG", _environment_value, _platform_all,
 		"A file to write a line to for each press of the fire control and each\n"
 		"move from standing of the first player, on the controller and the mouse,\n"

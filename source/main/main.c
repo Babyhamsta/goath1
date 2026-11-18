@@ -743,6 +743,7 @@ void vr_death_test_update(void);
 #include "speedrun_state.h" /* port: port/linux/game/speedrun_state.c */
 #include "stream_state.h" /* port: port/linux/game/stream_state.c */
 #include "practice.h" /* port: port/linux/game/practice.c */
+#include "network_latency_trace.h" /* port: port/linux/game/network_latency_trace.c */
 
 /* ---------- prototypes */
 
@@ -4175,6 +4176,8 @@ void main_loop(
 		profile_scope_enter(main_input_section)
 		input_frame_begin();
 		input_update();
+		/* port: the frame's input read, for debug.network_latency_trace */
+		network_latency_trace_frame_input();
 		input_abstraction_update();
 		profile_scope_exit(main_input_section)
 		profile_scope_enter(main_platform_events_section)
@@ -4474,6 +4477,9 @@ void main_loop(
 			{
 				profile_scope(main_present_section, main_present_frame();)
 				LATENCY_LOG(latency_log_frame_presented()); /* port: debug.latency_log */
+				/* port: debug.network_latency_trace (a frame seen) */
+				if (!frames_unseen)
+					NETWORK_LATENCY_TRACE(network_latency_trace_presented());
 				if (loading_game_frame)
 					halo_loading_end(); /* port: return presentation after the first complete game picture */
 				/* port: submission returned; host traces measure presentation */

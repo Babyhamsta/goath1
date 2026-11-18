@@ -97,6 +97,7 @@ machine (their datum identifiers need not be).
 #include "network_markers.h"
 #include "network_shield_effects.h"
 #include "network_substeps.h"
+#include "network_latency_trace.h"
 #include "sim_rate.h"
 #include "network_standard.h"
 #include "network_bits.h"
@@ -1520,6 +1521,25 @@ void network_distributed_tick_begun(
 	/* (the host: when its tick of each number began, which its OpenH1
 	clients' inputs are timed against: network_clock.c) */
 	network_clock_tick_begun();
+	/* (debug.network_latency_trace: the tick, and the input each remote
+	player's unit takes in it) */
+	if (network_latency_trace_on)
+	{
+		boolean client = game_connection() == _game_connection_network_client;
+
+		network_latency_trace_tick_begun(game_time_get(), client, distributed_host_time);
+		for (player_index = 0; player_index < MAXIMUM_TRACKED_PLAYERS; player_index++)
+		{
+			struct player_datum *player = distributed_player(player_index);
+			long key = update_queues_distributed_input_key(player_index);
+
+			if (player && player->local_player_index == NONE && key != NONE &&
+				(!client || update_client_input_forwarded(player_index)))
+			{
+				network_latency_trace_applied('I', player_index, key, 0, game_time_get(), 0);
+			}
+		}
+	}
 }
 
 boolean distributed_prediction_at_tick_start(
@@ -1828,6 +1848,7 @@ static void distributed_batch_flush(
 {
 	struct distributed_batch *batch = &distributed_batches[sender];
 	struct distributed_message_header *header = (struct distributed_message_header *)batch->data;
+	unsigned long long handed;
 
 	if (!batch->size)
 		return;
@@ -1851,6 +1872,9 @@ static void distributed_batch_flush(
 		header->header = 0;
 		build_message_header(&header->header, batch->size, 2, 0);
 	}
+	/* (when it was handed to the socket, which on one computer has it at the
+	other end before the send returns: debug.network_latency_trace) */
+	handed = network_latency_trace_on ? network_latency_trace_clock() : 0;
 	if (sender == HOST_SENDER)
 		network_distributed_client_send(batch->data, batch->size);
 	else
@@ -1858,6 +1882,7 @@ static void distributed_batch_flush(
 		network_distributed_server_send_to_machine(sender, batch->data, batch->size);
 		distributed_budget_balances[sender] -= batch->size + DATAGRAM_IP_UDP_BYTES;
 	}
+	NETWORK_LATENCY_TRACE(network_latency_trace_sent(sender == HOST_SENDER ? -1 : sender, handed));
 	distributed_batch_bytes[sender] += batch->size;
 	distributed_batch_datagrams[sender]++;
 	batch->size = 0;
@@ -6339,6 +6364,9 @@ static void distributed_client_send_inputs(
 				continue;
 			}
 		}
+		NETWORK_LATENCY_TRACE(
+			network_latency_trace_sample('I', input->player_index, input->tick, 0);
+			network_latency_trace_queued('I', input->player_index, input->tick, 0, -1));
 		count++;
 	}
 	if (count)
@@ -6457,6 +6485,7 @@ static void distributed_handle_inputs(
 			distributed_input_echo(machine_index, input, &host_time, &heard_tick);
 			continue;
 		}
+		NETWORK_LATENCY_TRACE(network_latency_trace_received('I', input->player_index, input->tick, 0, game_time_get()));
 		/* (what a held one repeats: distributed_handle_held) */
 		distributed_held_inputs[input->player_index].valid = TRUE;
 		distributed_held_inputs[input->player_index].checksum = distributed_input_checksum(input);
@@ -7268,6 +7297,7 @@ static void distributed_forward_flush(
 
 		if (!network_standard_machine_is_openh1(machine_index))
 			continue;
+		NETWORK_LATENCY_TRACE(network_latency_trace_destination((short)machine_index));
 		if (inputs)
 		{
 			distributed_packer_begin(&distributed_packer, (short)machine_index, _distributed_message_forwarded_inputs,
@@ -7286,6 +7316,7 @@ static void distributed_forward_flush(
 					continue;
 				}
 				size = distributed_relayed_action_write(&distributed_forwards[player_index].action, entry);
+				NETWORK_LATENCY_TRACE(network_latency_trace_queued('I', player_index, tick, 0, (short)machine_index));
 				csmemcpy(entry + size, &tick, sizeof(tick));
 				size += sizeof(tick);
 				size += network_substeps_forward_write(player_index, tick, entry + size);
@@ -7881,6 +7912,8 @@ static void distributed_handle_forwards(
 		{
 			continue;
 		}
+		NETWORK_LATENCY_TRACE(network_latency_trace_received('I', relayed.player_index, tick, 0,
+			game_time_initialized() ? game_time_get() : NONE));
 		csmemset(&action, 0, sizeof(action));
 		action.control_flags = relayed.control_flags[0];
 		action.desired_facing.yaw = distributed_angle_unpack(relayed.yaw, FALSE);

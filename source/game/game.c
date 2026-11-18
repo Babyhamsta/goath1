@@ -198,6 +198,7 @@ struct game_options;
 #include "demo.h" /* port: port/linux/game/demo.c */
 #include "speedrun_state.h" /* port: port/linux/game/speedrun_state.c */
 #include "practice.h" /* port: port/linux/game/practice.c */
+#include "network_latency_trace.h" /* port: port/linux/game/network_latency_trace.c */
 
 /* network_game_globals.c's */
 boolean network_game_distributed_client(void);
@@ -482,6 +483,8 @@ boolean game_tick_substep(
 	collision_log_begin_period(0);
 	real_math_reset_precision();
 	profile_enter(game_update_section);
+	/* port: when the step began, for debug.network_latency_trace */
+	NETWORK_LATENCY_TRACE(network_latency_trace_step_begun());
 
 	if (substep_index == 0)
 		game_tick_macro_step();

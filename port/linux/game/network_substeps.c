@@ -56,6 +56,7 @@ within a controller's reach.
 #include "networking/network_game_globals.h"
 #include "network_distributed.h"
 #include "network_substeps.h"
+#include "network_latency_trace.h"
 #include "sim_rate.h"
 
 #include <math.h>
@@ -1027,6 +1028,8 @@ static boolean live_control_apply(
 	if (!player || player->local_player_index != NONE || distributed_living_unit(player) == NONE)
 		return FALSE;
 	live_control_give(player_index, player, live, substep_index);
+	NETWORK_LATENCY_TRACE(network_latency_trace_applied(live->host_update ? 'H' : 'L', player_index, live->key,
+		live->substep, game_time_get(), substep_index));
 	return TRUE;
 }
 
@@ -1107,6 +1110,8 @@ static boolean host_live_apply(
 		struct substep_record *ran = &network_substeps_globals.ran[player_index];
 
 		live_control_give(player_index, player, live, substep_index);
+		NETWORK_LATENCY_TRACE(network_latency_trace_applied('L', player_index, live->key, live->substep,
+			game_time_get(), substep_index));
 		/* (what the tick ran, for the host to relay: the facing of an aim
 		turned on foot, where the aim is the facing's) */
 		if (substep_index >= 1 && substep_index < ran->count && ran->unit_index == player->unit_index)
@@ -1177,6 +1182,8 @@ static void network_substeps_handle_live(
 		}
 		live.pending = TRUE;
 		live_control_heard(entry.player_index, &live, now);
+		NETWORK_LATENCY_TRACE(network_latency_trace_received('L', entry.player_index, live.key, live.substep,
+			game_time_get()));
 	}
 }
 
@@ -1301,6 +1308,8 @@ static void network_substeps_handle_forwarded_live(
 		}
 		live_control_heard(player_index, &live,
 			live.host_update || !game_time_initialized() ? NONE : game_time_get());
+		NETWORK_LATENCY_TRACE(network_latency_trace_received(live.host_update ? 'H' : 'L', player_index, live.key,
+			live.substep, game_time_initialized() ? game_time_get() : NONE));
 	}
 }
 
@@ -1334,6 +1343,8 @@ void network_substeps_new_game(
 			network_substeps_globals.host_live[player_index][tick].key = NONE;
 	}
 	sim_substep_register(_sim_substep_network, network_substeps_substep_end);
+	if (network_latency_trace_check())
+		network_latency_trace_header(sim_rate_get(), game_connection() == _game_connection_network_server);
 }
 
 void network_substeps_reverted(
@@ -1908,10 +1919,15 @@ static void network_substeps_substep_end(
 		{
 			now.pending = TRUE;
 			live_control_heard(absolute_index, &now, NONE);
+			NETWORK_LATENCY_TRACE(network_latency_trace_sample('H', absolute_index, now.key, now.substep));
 		}
 		else
 		{
 			struct distributed_live_control *entry = &message.entries[count++];
+
+			NETWORK_LATENCY_TRACE(
+				network_latency_trace_sample('L', absolute_index, now.key, now.substep);
+				network_latency_trace_queued('L', absolute_index, now.key, now.substep, -1));
 
 			csmemset(entry, 0, sizeof(*entry));
 			entry->player_index = (byte)absolute_index;
@@ -2018,6 +2034,8 @@ static word live_control_forward_write(
 {
 	if (!live->valid || !live->pending)
 		return 0;
+	NETWORK_LATENCY_TRACE(network_latency_trace_queued(live->host_update ? 'H' : 'L', player_index, live->key,
+		live->substep, NETWORK_LATENCY_TRACE_DESTINATION));
 	return live_control_forward_pack(player_index, live, game_time_get(), buffer);
 }
 

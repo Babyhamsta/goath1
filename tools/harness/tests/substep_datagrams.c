@@ -90,6 +90,16 @@ static boolean network_standard_message_goes_to(long machine_index, byte type)
 static boolean halo_server_mode(void) { return FALSE; }
 static unsigned long long platform_shared_clock_microseconds(void) { return now_microseconds; }
 static void network_clock_frame_read(void) {}
+/* (debug.network_latency_trace, off) */
+#define NETWORK_LATENCY_TRACE(call) do { if (network_latency_trace_on) { call; } } while (0)
+static int network_latency_trace_on;
+static unsigned long long network_latency_trace_clock(void) { return 0; }
+static void network_latency_trace_sent(short to, unsigned long long handed) { (void)to; (void)handed; }
+static void network_latency_trace_destination(short to) { (void)to; }
+static void network_latency_trace_queued(char kind, short player, long key, short substep, short to)
+{
+	(void)kind; (void)player; (void)key; (void)substep; (void)to;
+}
 static boolean network_substeps_active(void) { return TRUE; }
 static void error(int kind, char const *format, ...) { (void)kind; (void)format; }
 static void build_message_header(message_header *header, word size, int a, int b) { (void)a; (void)b; *header = size; }
