@@ -159,6 +159,7 @@ void network_damage_demo_hit_begin(struct damage_data const *damage, long object
 /* network_distributed.c's */
 void network_distributed_statistics(long *sent, long *received, long *corrections);
 void network_distributed_remote_statistics(long *corrections, long *history_corrections, long *history_kept);
+void network_distributed_substep_request_statistics(long *asked, long *corrected, long *missed, long *taken);
 void network_distributed_batch_bytes(long *to_host, long *to_clients, short *clients);
 void network_distributed_batch_datagrams(long *to_host, long *to_clients);
 void network_distributed_divergence(long *samples, long *apart, real *mean, real *largest);
@@ -780,6 +781,17 @@ static void network_test_log_players(
 			network_distributed_remote_statistics(&remote_corrections, &history_corrections, &history_kept);
 			platform_log("network test: remote corrected %ld history %ld kept %ld", remote_corrections,
 				history_corrections, history_kept);
+		}
+		/* (an OpenH1 game of several sub-steps a tick: a client's asks for
+		the host's states at its sub-steps, and its copies found wrong by a
+		correction past the tolerance or a missed input; the host's asks
+		taken: since the game began) */
+		{
+			long asked, corrected, missed, taken;
+
+			network_distributed_substep_request_statistics(&asked, &corrected, &missed, &taken);
+			platform_log("network test: substep asks %ld (wrong corrected %ld missed %ld) taken %ld", asked,
+				corrected, missed, taken);
 		}
 		/* (the host: its ticks of each take of its OpenH1 clients' players'
 		predictions as its ticks began, and the drift samples of the ticks

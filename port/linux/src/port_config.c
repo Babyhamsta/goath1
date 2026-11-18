@@ -2565,6 +2565,11 @@ static const struct config_setting config_settings[] =
 		"machines of twice it), to test the netcode as over the internet; 0 none." },
 	{ "debug.network_loss", _config_real, "0.0", "HALO_NETWORK_LOSS", _environment_value, _platform_all,
 		"Percent of datagrams received that are dropped, for the same; 0 none." },
+	{ "debug.network_substep_states_always", _config_boolean, "false", "HALO_NETWORK_SUBSTEP_STATES_ALWAYS",
+		_environment_set_is_true, _platform_all,
+		"Host: send each client the players near it at every sub-step (60 and\n"
+		"120 Hz), as before, not only those whose copy the client says went\n"
+		"wrong; to compare the two, and as a fallback." },
 	{ "debug.network_relay_only", _config_boolean, "false", "HALO_NETWORK_RELAY_ONLY", _environment_set_is_true,
 		_platform_all,
 		"Send internet play's tunnel packets to other players only through a\n"
