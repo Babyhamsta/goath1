@@ -249,6 +249,54 @@ int main(int argc, char **argv)
 			!read.active_camouflage && !read.body_vitality, "the parts the host reads not left out");
 		return 0;
 	}
+	if (!strcmp(which, "prediction-rest"))
+	{
+		/* (a unit standing still: its velocity, its physics' leftover,
+		another each tick and never none, goes as none, so the ticks'
+		predictions are the same bytes, held; a velocity that moves it,
+		however slowly, goes exactly as it is) */
+		byte first[DISTRIBUTED_UNIT_STATE_MAXIMUM_SIZE + 12];
+		byte second[DISTRIBUTED_UNIT_STATE_MAXIMUM_SIZE + 12];
+		byte still[DISTRIBUTED_UNIT_STATE_MAXIMUM_SIZE + 12];
+		struct distributed_unit_state rest, next, moving, read;
+		word first_size, second_size, still_size, size;
+
+		rest = on_foot(1, 12.5f, -3.25f, 0.5f, 0);
+		SET_FLAG(rest.flags, _distributed_unit_predicted_bit, FALSE);
+		rest.fine = TRUE;
+		rest.fine_velocity.i = -4.40514778e-28f;
+		rest.fine_velocity.j = -9.66490318e-26f;
+		rest.fine_velocity.k = 3.89606383e-27f;
+		next = rest;
+		next.fine_velocity.i *= -0.75f;
+		next.fine_velocity.j *= -0.75f;
+		next.fine_velocity.k *= -0.75f;
+		distributed_prediction_trim(&rest);
+		distributed_prediction_trim(&next);
+		first_size = distributed_unit_state_write(&rest, TRUE, first);
+		second_size = distributed_unit_state_write(&next, TRUE, second);
+		CHECK(first_size == second_size && !memcmp(first, second, first_size),
+			"a unit at rest's predictions of two ticks the same bytes");
+		rest.fine_velocity.i = rest.fine_velocity.j = rest.fine_velocity.k = 0.0f;
+		still_size = distributed_unit_state_write(&rest, TRUE, still);
+		CHECK(still_size == first_size && !memcmp(still, first, first_size), "as a unit with no velocity at all");
+		/* (the slowest that moves it a step of the grid in a minute, and a
+		walk's, kept) */
+		moving = on_foot(1, 12.5f, -3.25f, 0.5f, 0);
+		SET_FLAG(moving.flags, _distributed_unit_predicted_bit, FALSE);
+		moving.fine = TRUE;
+		moving.fine_velocity.i = 0.293f;
+		moving.fine_velocity.j = -PREDICTION_REST_SPEED;
+		moving.fine_velocity.k = 2.0f * PREDICTION_REST_SPEED;
+		next = moving;
+		distributed_prediction_trim(&next);
+		size = distributed_unit_state_write(&next, TRUE, first);
+		CHECK(distributed_unit_state_read(first, first + size, &read) == size && read.fine &&
+			!memcmp(&read.fine_velocity, &moving.fine_velocity, sizeof(read.fine_velocity)),
+			"a moving unit's velocity kept exactly (%g %g %g)", read.fine_velocity.i, read.fine_velocity.j,
+			read.fine_velocity.k);
+		return 0;
+	}
 	if (!strcmp(which, "joined"))
 	{
 		/* (three players a tick, one after another and one apart, as a

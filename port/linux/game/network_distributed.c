@@ -366,6 +366,14 @@ enum
 	SUBSTEP_STATE_REFRESH_TICKS = 6,
 };
 #define SUBSTEP_POSITION_SCALE 4096.0f
+/* (an OpenH1 client's prediction) a part of its velocity slower than this
+(world units a tick) goes as none: slower than a step of the grid the host
+sends positions on (1/SUBSTEP_POSITION_SCALE) in a minute, which the host's
+copy cannot tell from rest. A biped standing still keeps a velocity its
+physics takes a part of each tick and never brings to nothing (1e-26 one
+tick, -0.75 of that the next), which made every prediction a change: none
+went held (distributed_input_held) */
+#define PREDICTION_REST_SPEED 1e-7f
 /* a client's copy of another player is moved by the same physics and the
 same forwarded controls as the host's, and corrected against each tick's
 state (distributed_correct_remote_unit), so the states of the sub-steps
@@ -4755,7 +4763,7 @@ static boolean distributed_client_holds(
 }
 
 /* (a client of an OpenH1 game) its prediction without the parts the host
-does not read */
+does not read, and its velocity's parts at rest as none (PREDICTION_REST_SPEED) */
 static void distributed_prediction_trim(
 	struct distributed_unit_state *state)
 {
@@ -4771,6 +4779,13 @@ static void distributed_prediction_trim(
 	state->recent_shield_damage = 0;
 	csmemset(state->powerup_durations, 0, sizeof(state->powerup_durations));
 	csmemset(&state->velocity, 0, sizeof(state->velocity));
+	/* (a part of the whole velocity at rest, as none) */
+	if (fabs(state->fine_velocity.i) < PREDICTION_REST_SPEED)
+		state->fine_velocity.i = 0.0f;
+	if (fabs(state->fine_velocity.j) < PREDICTION_REST_SPEED)
+		state->fine_velocity.j = 0.0f;
+	if (fabs(state->fine_velocity.k) < PREDICTION_REST_SPEED)
+		state->fine_velocity.k = 0.0f;
 }
 
 /* (a client) its own players' units, to the host: one the same as the last
@@ -4812,7 +4827,8 @@ static void distributed_client_send_predictions(
 		vitality, damage, powerups and camouflage, and the velocity of 16
 		bits a part in place of the whole one; the parts left at their
 		defaults are left out, and a prediction changed only in them goes
-		held. The suspension and the whole velocity's flag it reads) */
+		held. The suspension and the whole velocity's flag it reads; a unit
+		at rest's velocity goes as none, so a player standing still goes held) */
 		if (state.fine && !config_boolean("debug.network_forms_before"))
 			distributed_prediction_trim(&state);
 		{

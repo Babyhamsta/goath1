@@ -1632,7 +1632,12 @@ before; the client makes the message of 141 back, byte for byte
 (`distributed_unit_differences_unjoin`), and takes it as before. An
 OpenH1 client's prediction leaves out what its host has its own word on
 and reads not (the vitality, damage, powerups, camouflage and shield
-flags; the 16-bit velocity beside the whole one goes as zeros).
+flags; the 16-bit velocity beside the whole one goes as zeros), and a part
+of its velocity slower than `PREDICTION_REST_SPEED` (a step of the grid in a
+minute) as none: a biped standing still keeps a speck its physics never
+brings to nothing (1e-26 one tick, -0.75 of that the next), which made each
+tick's prediction a change, and none went held (146). Held, an idle
+client's prediction went from 1.45 to 0.52 KB/s (to the host, 120 Hz).
 `debug.network_forms_before` (`HALO_NETWORK_FORMS_BEFORE`) sends both as
 before (`tools/harness/tests/test_unit_difference.py`).
 
