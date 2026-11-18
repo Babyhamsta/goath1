@@ -99,6 +99,7 @@ machine (their datum identifiers need not be).
 #include "network_substeps.h"
 #include "sim_rate.h"
 #include "network_standard.h"
+#include "network_bits.h"
 #include "network_riding_map.h"
 #include "map_share.h"
 #include "mcc_share.h"
@@ -457,6 +458,47 @@ enum
 	_unit_difference_powerups_bit,
 	_unit_difference_camouflage_bit,
 };
+/* a packed difference (unless debug.network_states_unpacked, which sends the
+forms above): its first byte its high bit, the deck bit (the deck part
+follows, as a deck form's) and the host's ticks since the state it is a
+difference from (5 bits: UNIT_BASE_TICKS); the player's byte; then in bits
+(network_bits.h) the parts that differ, the first 8 and (more) the next 8,
+and each part that differs, in this order: the flags, the killer, the unit,
+the riding (as the state has them), the position (its grid's steps less
+where the state's velocity takes the one it is from in its ticks, a width
+for the three), the velocity (its parts' differences, a width for the
+three), the facing (a unit vector, network_bits_put_unit_vector, its parts'
+differences), the up (as the state has it), the client's tick (its
+difference from the one it is from, moved on by the ticks between where
+both are predicted), the vitality and the damage (their differences, a
+width for each), the powerups and the camouflage (as the state has them).
+Every part is the state's exactly, as a difference of the forms above */
+enum
+{
+	UNIT_PACKED_FORM_BIT = 7,
+	UNIT_PACKED_DECK_BIT = 6,
+	UNIT_PACKED_AGE_MASK = 0x1F,
+};
+enum
+{
+	_unit_packed_position_bit = 0,
+	_unit_packed_velocity_bit,
+	_unit_packed_forward_bit,
+	_unit_packed_predicted_bit,
+	_unit_packed_vitality_bit,
+	_unit_packed_damage_bit,
+	_unit_packed_flags_bit,
+	_unit_packed_more_bit,
+	_unit_packed_killer_bit,
+	_unit_packed_unit_bit,
+	_unit_packed_riding_bit,
+	_unit_packed_up_bit,
+	_unit_packed_powerups_bit,
+	_unit_packed_camouflage_bit,
+};
+/* (the grid's steps a velocity's step moves a state in a tick) */
+#define UNIT_PACKED_VELOCITY_STEPS ((long)(SUBSTEP_POSITION_SCALE / DISTRIBUTED_VELOCITY_SCALE))
+typedef char unit_packed_age_assert[UNIT_BASE_TICKS - 1 <= UNIT_PACKED_AGE_MASK ? 1 : -1];
 
 /* a client's player's input at one of its ticks, with the buttons of the
 ticks before it */
@@ -930,6 +972,10 @@ static struct distributed_unit_state distributed_tick_states[MAXIMUM_TRACKED_PLA
 static long distributed_tick_state_times[MAXIMUM_TRACKED_PLAYERS][UNIT_BASE_TICKS];
 static long distributed_unit_sent_times[HALO_PORT_MAXIMUM_NETWORK_MACHINES][MAXIMUM_TRACKED_PLAYERS][UNIT_SENT_TICKS];
 static long distributed_unit_acked_times[HALO_PORT_MAXIMUM_NETWORK_MACHINES];
+/* (the host) whether the client being sent its tick states
+(distributed_tick_states_begin) takes them in the forms before packing
+(debug.network_states_unpacked) */
+static boolean distributed_tick_states_unpacked;
 /* a client: the host's states of each player it took of the host's last
 UNIT_BASE_TICKS ticks, as written to it, by the host's tick (NONE: none);
 the host's latest tick it took states of; and whether a difference came
@@ -2673,6 +2719,349 @@ static void distributed_unit_state_as_written(
 		*written = *state;
 }
 
+/* (a client) the state of the player it took of the host's tick age ticks
+before time (a difference's, of its message's tick), NULL for none: lost,
+or older than it keeps */
+static struct distributed_unit_state const *distributed_unit_base_of(
+	byte player_index,
+	byte age,
+	long time)
+{
+	return player_index < MAXIMUM_TRACKED_PLAYERS && age > 0 && age < UNIT_BASE_TICKS &&
+		distributed_unit_base_times[player_index][(time - age) & (UNIT_BASE_TICKS - 1)] == time - age ?
+		&distributed_unit_bases[player_index][(time - age) & (UNIT_BASE_TICKS - 1)] : NULL;
+}
+
+/* (a client) a difference's deck part from its bytes, no further than end:
+present, whole and of a vehicle this machine has, or none (from protocol
+31); FALSE for none that make one */
+static boolean distributed_unit_deck_take(
+	byte const **cursor,
+	byte const *end,
+	struct distributed_unit_state *read)
+{
+	byte deck_present;
+
+	if (!distributed_take(cursor, end, &deck_present, sizeof(deck_present)) || deck_present > 1)
+		return FALSE;
+	read->deck_present = FALSE;
+	return !deck_present || distributed_deck_take(cursor, end, &read->deck_present, &read->deck);
+}
+
+/* the client's tick a packed difference's part leaves out stands for: the
+one of the state it is from, moved on by the host's ticks since where both
+states are predicted (a player's client's tick runs with the host's) */
+static short distributed_unit_packed_time(
+	byte flags,
+	struct distributed_unit_state const *base,
+	byte age)
+{
+	return TEST_FLAG(flags, _distributed_unit_predicted_bit) && TEST_FLAG(base->flags, _distributed_unit_predicted_bit) ?
+		(short)(word)((word)base->predicted_time + age) : base->predicted_time;
+}
+
+/* (the host) a tick state (written) as its packed difference from base, of
+age ticks before it, no longer than limit bytes (the whole state's): the
+bytes, 0 where it would not be shorter or a part does not fit (the whole
+state goes then). Both states as written, on the grid */
+static word distributed_unit_packed_write(
+	struct distributed_unit_state const *written,
+	struct distributed_unit_state const *base,
+	byte age,
+	boolean placed,
+	byte *buffer,
+	word limit)
+{
+	struct network_bits bits;
+	word parts = 0;
+	long values[4];
+	short axis;
+	boolean deck = FALSE;
+	byte *cursor;
+	byte written_deck[DISTRIBUTED_DECK_SIZE];
+	byte base_deck[DISTRIBUTED_DECK_SIZE];
+	long deck_size;
+
+	if (written->flags != base->flags)
+		SET_FLAG(parts, _unit_packed_flags_bit, TRUE);
+	if (written->killing_player_index != base->killing_player_index)
+		SET_FLAG(parts, _unit_packed_killer_bit, TRUE);
+	if (written->unit_index != base->unit_index)
+		SET_FLAG(parts, _unit_packed_unit_bit, TRUE);
+	if (written->vehicle_index != base->vehicle_index || written->seat_index != base->seat_index)
+		SET_FLAG(parts, _unit_packed_riding_bit, TRUE);
+	/* (the parts of a unit on foot, as the forms before) */
+	if (placed && (written->position.x != base->position.x || written->position.y != base->position.y ||
+		written->position.z != base->position.z))
+	{
+		for (axis = 0; axis < 3; axis++)
+		{
+			/* (on the grid, both: else whole) */
+			if ((real)distributed_grid_steps((&written->position.x)[axis]) / SUBSTEP_POSITION_SCALE !=
+					(&written->position.x)[axis] ||
+				(real)distributed_grid_steps((&base->position.x)[axis]) / SUBSTEP_POSITION_SCALE !=
+					(&base->position.x)[axis])
+			{
+				return 0;
+			}
+		}
+		SET_FLAG(parts, _unit_packed_position_bit, TRUE);
+	}
+	if (placed && (written->velocity.i != base->velocity.i || written->velocity.j != base->velocity.j ||
+		written->velocity.k != base->velocity.k))
+	{
+		SET_FLAG(parts, _unit_packed_velocity_bit, TRUE);
+	}
+	if (placed && (written->forward.i != base->forward.i || written->forward.j != base->forward.j ||
+		written->forward.k != base->forward.k))
+	{
+		SET_FLAG(parts, _unit_packed_forward_bit, TRUE);
+	}
+	if (placed && (written->up.i != base->up.i || written->up.j != base->up.j || written->up.k != base->up.k))
+		SET_FLAG(parts, _unit_packed_up_bit, TRUE);
+	if (written->predicted_time != distributed_unit_packed_time(written->flags, base, age))
+		SET_FLAG(parts, _unit_packed_predicted_bit, TRUE);
+	if (written->body_vitality != base->body_vitality || written->shield_vitality != base->shield_vitality)
+		SET_FLAG(parts, _unit_packed_vitality_bit, TRUE);
+	if (written->current_body_damage != base->current_body_damage ||
+		written->recent_body_damage != base->recent_body_damage ||
+		written->current_shield_damage != base->current_shield_damage ||
+		written->recent_shield_damage != base->recent_shield_damage)
+	{
+		SET_FLAG(parts, _unit_packed_damage_bit, TRUE);
+	}
+	if (csmemcmp(written->powerup_durations, base->powerup_durations, sizeof(written->powerup_durations)))
+		SET_FLAG(parts, _unit_packed_powerups_bit, TRUE);
+	if (written->unit_flags != base->unit_flags || written->active_camouflage != base->active_camouflage)
+		SET_FLAG(parts, _unit_packed_camouflage_bit, TRUE);
+	if (parts >> 8)
+		SET_FLAG(parts, _unit_packed_more_bit, TRUE);
+	/* (the deck part, where it is not the state's it is from) */
+	if (written->deck_present || base->deck_present)
+	{
+		if (written->deck_present)
+			distributed_deck_put(written_deck, &written->deck);
+		if (base->deck_present)
+			distributed_deck_put(base_deck, &base->deck);
+		deck = written->deck_present != base->deck_present ||
+			csmemcmp(written_deck, base_deck, DISTRIBUTED_DECK_SIZE);
+	}
+	deck_size = deck ? 1 + (written->deck_present ? DISTRIBUTED_DECK_SIZE : 0) : 0;
+	if ((long)limit <= 2 + deck_size)
+		return 0;
+	buffer[0] = (byte)(FLAG(UNIT_PACKED_FORM_BIT) | (deck ? FLAG(UNIT_PACKED_DECK_BIT) : 0) | age);
+	buffer[1] = written->player_index;
+	/* (no more bytes than leave it shorter than the whole state) */
+	network_bits_begin_write(&bits, buffer + 2, (long)limit - 1 - 2 - deck_size);
+	network_bits_put(&bits, parts & 0xFF, 8);
+	if (TEST_FLAG(parts, _unit_packed_more_bit))
+		network_bits_put(&bits, parts >> 8, 8);
+	if (TEST_FLAG(parts, _unit_packed_flags_bit))
+		network_bits_put(&bits, written->flags, 8);
+	if (TEST_FLAG(parts, _unit_packed_killer_bit))
+		network_bits_put(&bits, written->killing_player_index, 8);
+	if (TEST_FLAG(parts, _unit_packed_unit_bit))
+		network_bits_put(&bits, (unsigned long)written->unit_index, 32);
+	if (TEST_FLAG(parts, _unit_packed_riding_bit))
+	{
+		network_bits_put(&bits, (unsigned long)written->vehicle_index, 32);
+		network_bits_put(&bits, (word)written->seat_index, 16);
+	}
+	if (TEST_FLAG(parts, _unit_packed_position_bit))
+	{
+		for (axis = 0; axis < 3; axis++)
+		{
+			values[axis] = distributed_grid_steps((&written->position.x)[axis]) -
+				distributed_grid_steps((&base->position.x)[axis]) -
+				UNIT_PACKED_VELOCITY_STEPS * (long)(&base->velocity.i)[axis] * age;
+		}
+		network_bits_put_group(&bits, values, 3);
+	}
+	if (TEST_FLAG(parts, _unit_packed_velocity_bit))
+	{
+		for (axis = 0; axis < 3; axis++)
+			values[axis] = (long)(&written->velocity.i)[axis] - (long)(&base->velocity.i)[axis];
+		network_bits_put_group(&bits, values, 3);
+	}
+	if (TEST_FLAG(parts, _unit_packed_forward_bit))
+		network_bits_put_unit_vector(&bits, &written->forward.i, &base->forward.i, TRUE);
+	if (TEST_FLAG(parts, _unit_packed_up_bit))
+	{
+		for (axis = 0; axis < 3; axis++)
+			network_bits_put(&bits, (word)(&written->up.i)[axis], 16);
+	}
+	if (TEST_FLAG(parts, _unit_packed_predicted_bit))
+	{
+		values[0] = (short)(word)((word)written->predicted_time -
+			(word)distributed_unit_packed_time(written->flags, base, age));
+		network_bits_put_group(&bits, values, 1);
+	}
+	if (TEST_FLAG(parts, _unit_packed_vitality_bit))
+	{
+		values[0] = (short)(word)(written->body_vitality - base->body_vitality);
+		values[1] = (short)(word)(written->shield_vitality - base->shield_vitality);
+		network_bits_put_group(&bits, values, 2);
+	}
+	if (TEST_FLAG(parts, _unit_packed_damage_bit))
+	{
+		values[0] = (short)(word)(written->current_body_damage - base->current_body_damage);
+		values[1] = (short)(word)(written->recent_body_damage - base->recent_body_damage);
+		values[2] = (short)(word)(written->current_shield_damage - base->current_shield_damage);
+		values[3] = (short)(word)(written->recent_shield_damage - base->recent_shield_damage);
+		network_bits_put_group(&bits, values, 4);
+	}
+	if (TEST_FLAG(parts, _unit_packed_powerups_bit))
+	{
+		for (axis = 0; axis < NUMBER_OF_PLAYER_POWERUPS; axis++)
+			network_bits_put(&bits, (word)written->powerup_durations[axis], 16);
+	}
+	if (TEST_FLAG(parts, _unit_packed_camouflage_bit))
+	{
+		network_bits_put(&bits, written->unit_flags, 8);
+		network_bits_put(&bits, written->active_camouflage, 8);
+	}
+	if (bits.failed)
+		return 0;
+	cursor = buffer + 2 + network_bits_bytes(&bits);
+	if (deck)
+	{
+		*cursor++ = written->deck_present ? 1 : 0;
+		if (written->deck_present)
+			cursor = distributed_deck_put(cursor, &written->deck);
+	}
+	return (word)(cursor - buffer);
+}
+
+/* (a client) a packed difference (distributed_unit_packed_write) from its
+bytes, no further than end, of the host's tick time, its first byte form:
+the bytes it took, 0 for none that make one; *known FALSE for one from a
+state this machine has not, which is passed over */
+static word distributed_unit_packed_read(
+	byte const *buffer,
+	byte const *end,
+	long time,
+	struct distributed_unit_state *state,
+	boolean *known)
+{
+	struct network_bits bits;
+	struct distributed_unit_state const *base;
+	struct distributed_unit_state from;
+	struct distributed_unit_state read;
+	byte form = buffer[0];
+	byte age = (byte)(form & UNIT_PACKED_AGE_MASK);
+	byte player_index;
+	byte const *cursor;
+	word parts;
+	long values[4];
+	short axis;
+
+	*known = TRUE;
+	if (end - buffer < 3 || (form & ~(FLAG(UNIT_PACKED_FORM_BIT) | FLAG(UNIT_PACKED_DECK_BIT) | UNIT_PACKED_AGE_MASK)) ||
+		age == 0)
+	{
+		return 0;
+	}
+	player_index = buffer[1];
+	base = distributed_unit_base_of(player_index, age, time);
+	if (base)
+		from = *base;
+	else
+		csmemset(&from, 0, sizeof(from));
+	read = from;
+	read.player_index = player_index;
+	network_bits_begin_read(&bits, buffer + 2, end - buffer - 2);
+	parts = (word)network_bits_take(&bits, 8);
+	if (TEST_FLAG(parts, _unit_packed_more_bit))
+		parts |= (word)(network_bits_take(&bits, 8) << 8);
+	if (TEST_FLAG(parts, _unit_packed_flags_bit))
+		read.flags = (byte)network_bits_take(&bits, 8);
+	if (TEST_FLAG(parts, _unit_packed_killer_bit))
+		read.killing_player_index = (byte)network_bits_take(&bits, 8);
+	if (TEST_FLAG(parts, _unit_packed_unit_bit))
+		read.unit_index = (long)(int)network_bits_take(&bits, 32);
+	if (TEST_FLAG(parts, _unit_packed_riding_bit))
+	{
+		read.vehicle_index = (long)(int)network_bits_take(&bits, 32);
+		read.seat_index = (short)(word)network_bits_take(&bits, 16);
+	}
+	if (TEST_FLAG(parts, _unit_packed_position_bit))
+	{
+		network_bits_take_group(&bits, values, 3);
+		for (axis = 0; axis < 3; axis++)
+		{
+			(&read.position.x)[axis] = (real)(distributed_grid_steps((&from.position.x)[axis]) +
+				UNIT_PACKED_VELOCITY_STEPS * (long)(&from.velocity.i)[axis] * age + values[axis]) /
+				SUBSTEP_POSITION_SCALE;
+		}
+	}
+	if (TEST_FLAG(parts, _unit_packed_velocity_bit))
+	{
+		network_bits_take_group(&bits, values, 3);
+		for (axis = 0; axis < 3; axis++)
+		{
+			values[axis] += (&from.velocity.i)[axis];
+			if (values[axis] < -32768 || values[axis] > 32767)
+				return 0;
+			(&read.velocity.i)[axis] = (short)values[axis];
+		}
+	}
+	if (TEST_FLAG(parts, _unit_packed_forward_bit) &&
+		!network_bits_take_unit_vector(&bits, &read.forward.i, &from.forward.i, TRUE))
+	{
+		return 0;
+	}
+	if (TEST_FLAG(parts, _unit_packed_up_bit))
+	{
+		for (axis = 0; axis < 3; axis++)
+			(&read.up.i)[axis] = (short)(word)network_bits_take(&bits, 16);
+	}
+	read.predicted_time = distributed_unit_packed_time(read.flags, &from, age);
+	if (TEST_FLAG(parts, _unit_packed_predicted_bit))
+	{
+		network_bits_take_group(&bits, values, 1);
+		read.predicted_time = (short)(word)((word)read.predicted_time + (word)values[0]);
+	}
+	if (TEST_FLAG(parts, _unit_packed_vitality_bit))
+	{
+		network_bits_take_group(&bits, values, 2);
+		read.body_vitality = (word)(from.body_vitality + (word)values[0]);
+		read.shield_vitality = (word)(from.shield_vitality + (word)values[1]);
+	}
+	if (TEST_FLAG(parts, _unit_packed_damage_bit))
+	{
+		network_bits_take_group(&bits, values, 4);
+		read.current_body_damage = (word)(from.current_body_damage + (word)values[0]);
+		read.recent_body_damage = (word)(from.recent_body_damage + (word)values[1]);
+		read.current_shield_damage = (word)(from.current_shield_damage + (word)values[2]);
+		read.recent_shield_damage = (word)(from.recent_shield_damage + (word)values[3]);
+	}
+	if (TEST_FLAG(parts, _unit_packed_powerups_bit))
+	{
+		for (axis = 0; axis < NUMBER_OF_PLAYER_POWERUPS; axis++)
+			read.powerup_durations[axis] = (short)(word)network_bits_take(&bits, 16);
+	}
+	if (TEST_FLAG(parts, _unit_packed_camouflage_bit))
+	{
+		read.unit_flags = (byte)network_bits_take(&bits, 8);
+		read.active_camouflage = (byte)network_bits_take(&bits, 8);
+	}
+	if (bits.failed)
+		return 0;
+	cursor = buffer + 2 + network_bits_bytes(&bits);
+	/* (the deck part: present, whole and of a vehicle this machine has, or
+	none; else no state) */
+	if (TEST_FLAG(form, UNIT_PACKED_DECK_BIT) && !distributed_unit_deck_take(&cursor, end, &read))
+		return 0;
+	if (!base)
+	{
+		*known = FALSE;
+		return (word)(cursor - buffer);
+	}
+	/* (as the whole state would have come) */
+	distributed_unit_state_as_written(&read, TEST_FLAG(read.flags, _distributed_unit_predicted_bit), state);
+	return (word)(cursor - buffer);
+}
+
 /* (the host) a player's tick state to an OpenH1 client (at most
 1 + DISTRIBUTED_UNIT_STATE_MAXIMUM_SIZE bytes): its difference from the
 latest state of the player sent the client at a tick no later than the one
@@ -2715,6 +3104,18 @@ static word distributed_unit_difference_write(
 	{
 		distributed_unit_state_as_written(&distributed_tick_states[player_index][base_time & (UNIT_BASE_TICKS - 1)],
 			predicted, &base);
+		/* (packed, where it comes to fewer bytes than the whole state) */
+		if (!distributed_tick_states_unpacked)
+		{
+			byte whole[DISTRIBUTED_UNIT_STATE_MAXIMUM_SIZE];
+			word size = distributed_unit_packed_write(&written, &base, (byte)(now - base_time), placed, buffer,
+				(word)(1 + distributed_unit_state_write(state, predicted, whole)));
+
+			if (size)
+				return size;
+			buffer[0] = _unit_difference_form_whole;
+			return (word)(1 + distributed_unit_state_write(state, predicted, buffer + 1));
+		}
 		if (written.flags != base.flags)
 		{
 			SET_FLAG(parts, _unit_difference_flags_bit, TRUE);
@@ -2896,6 +3297,8 @@ static word distributed_unit_difference_read(
 	*known = TRUE;
 	if (!distributed_take(&cursor, end, &form, sizeof(form)))
 		return 0;
+	if (TEST_FLAG(form, UNIT_PACKED_FORM_BIT))
+		return distributed_unit_packed_read(buffer, end, time, state, known);
 	if (form == _unit_difference_form_whole)
 	{
 		word size = distributed_unit_state_read(cursor, end, state);
@@ -2908,9 +3311,7 @@ static word distributed_unit_difference_read(
 	{
 		return 0;
 	}
-	base = player_index < MAXIMUM_TRACKED_PLAYERS && age > 0 && age < UNIT_BASE_TICKS &&
-		distributed_unit_base_times[player_index][(time - age) & (UNIT_BASE_TICKS - 1)] == time - age ?
-		&distributed_unit_bases[player_index][(time - age) & (UNIT_BASE_TICKS - 1)] : NULL;
+	base = distributed_unit_base_of(player_index, age, time);
 	if (base)
 		read = *base;
 	else
@@ -3007,16 +3408,8 @@ static word distributed_unit_difference_read(
 	}
 	/* (the deck part: present, whole and of a vehicle this machine has, or
 	none; else no state) */
-	if (form == _unit_difference_form_deck)
-	{
-		byte deck_present;
-
-		if (!distributed_take(&cursor, end, &deck_present, sizeof(deck_present)) || deck_present > 1)
-			return 0;
-		read.deck_present = FALSE;
-		if (deck_present && !distributed_deck_take(&cursor, end, &read.deck_present, &read.deck))
-			return 0;
-	}
+	if (form == _unit_difference_form_deck && !distributed_unit_deck_take(&cursor, end, &read))
+		return 0;
 	if (!base)
 	{
 		*known = FALSE;
@@ -6922,6 +7315,7 @@ static void distributed_tick_states_begin(
 	long machine_index)
 {
 	distributed_tick_states_legacy = network_legacy_machine(machine_index);
+	distributed_tick_states_unpacked = config_boolean("debug.network_states_unpacked") != 0;
 	distributed_packer_begin(&distributed_packer, (short)machine_index, distributed_tick_states_legacy ?
 		_distributed_message_unit_states : _distributed_message_unit_state_differences, NULL, 0);
 }
@@ -9439,6 +9833,21 @@ void network_distributed_handle_message(
 				distributed_handling_batch = FALSE;
 			}
 		}
+		return;
+	}
+	/* (an OpenH1 host's objects' states in bits: taken as the whole message
+	they make) */
+	if (header.type == _distributed_message_object_states_packed)
+	{
+		static union
+		{
+			long alignment;
+			byte bytes[sizeof(struct distributed_message_header) + 255 * NETWORK_OBJECT_STATE_SIZE];
+		} unpacked;
+		word unpacked_size = network_objects_unpack_states(message, size, unpacked.bytes, sizeof(unpacked.bytes));
+
+		if (unpacked_size)
+			network_distributed_handle_message(machine_index, (word const *)unpacked.bytes, unpacked_size);
 		return;
 	}
 	world_side = distributed_world_side_kind(header.type);

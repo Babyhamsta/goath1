@@ -2570,6 +2570,11 @@ static const struct config_setting config_settings[] =
 		"Host: send each client the players near it at every sub-step (60 and\n"
 		"120 Hz), as before, not only those whose copy the client says went\n"
 		"wrong; to compare the two, and as a fallback." },
+	{ "debug.network_states_unpacked", _config_boolean, "false", "HALO_NETWORK_STATES_UNPACKED",
+		_environment_set_is_true, _platform_all,
+		"Host: send each client the players' tick states and the objects' states\n"
+		"in the encoding before they were packed into fewer bits; to compare the\n"
+		"two, and as a fallback." },
 	{ "debug.network_relay_only", _config_boolean, "false", "HALO_NETWORK_RELAY_ONLY", _environment_set_is_true,
 		_platform_all,
 		"Send internet play's tunnel packets to other players only through a\n"

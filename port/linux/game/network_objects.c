@@ -72,6 +72,8 @@ same datum index (identifier and all), so that any message can name one:
 #include "profile_sections.h"
 #include "vehicle_hijack.h"
 #include "network_standard.h"
+#include "network_legacy.h"
+#include "network_bits.h"
 
 #include <math.h>
 
@@ -79,6 +81,8 @@ same datum index (identifier and all), so that any message can name one:
 extern real global_gravity;
 /* player_queues_new.c's */
 long update_queues_distributed_input_key(long absolute_player_index);
+/* port_config.c's */
+int config_boolean(char const *name);
 
 /* units.c's */
 void unit_network_add_weapon(long unit_index, long weapon_index, short slot);
@@ -1043,6 +1047,168 @@ static void distributed_object_state_unpack(
 	distributed_vector_unpack(&state->angular_velocity, DISTRIBUTED_ANGULAR_VELOCITY_SCALE, angular_velocity);
 }
 
+/* an object's state in bits (_distributed_message_object_states_packed):
+its object, its flags and (whole) whether the rest is as the whole entry
+has it; else the client's tick where predicted, the position on a grid of
+1/OBJECT_PACKED_POSITION_SCALE of a world unit (rounded: an 8192th off at
+most, far inside REMOTE_OBJECT_TOLERANCE), a width for the three, the
+facing and the up as unit vectors (network_bits_put_unit_vector), and the
+velocities, a width for each's three parts; each part but the position as
+the whole entry has it. A position outside OBJECT_WORLD_BOUND, or not a
+number, goes whole */
+#define OBJECT_PACKED_POSITION_SCALE 4096.0f
+enum
+{
+	/* (the bytes of an entry whole: its object, flags and whole bit, then the
+	rest of the 44 bytes but the pad) */
+	OBJECT_PACKED_MAXIMUM_SIZE = (32 + 8 + 1 + 8 * (sizeof(struct distributed_object_state) - 6) + 7) / 8,
+};
+typedef char distributed_object_state_size_assert[
+	sizeof(struct distributed_object_state) == NETWORK_OBJECT_STATE_SIZE ? 1 : -1];
+
+static void network_objects_pack_state(
+	struct network_bits *bits,
+	struct distributed_object_state const *state)
+{
+	struct distributed_vector const *vectors[2];
+	long values[3];
+	short axis;
+	short vector;
+	boolean whole = !distributed_point_valid(&state->position, OBJECT_WORLD_BOUND);
+
+	network_bits_put(bits, (unsigned long)state->object_index, 32);
+	network_bits_put(bits, state->flags, 8);
+	network_bits_put(bits, whole ? 1 : 0, 1);
+	if (whole || TEST_FLAG(state->flags, _distributed_object_predicted_bit))
+		network_bits_put(bits, (word)state->time, 16);
+	if (whole)
+	{
+		for (axis = 0; axis < 3; axis++)
+		{
+			unsigned int value;
+
+			csmemcpy(&value, &(&state->position.x)[axis], sizeof(value));
+			network_bits_put(bits, (unsigned long)value, 32);
+		}
+		for (axis = 0; axis < 3; axis++)
+		{
+			network_bits_put(bits, (word)(&state->forward.i)[axis], 16);
+			network_bits_put(bits, (word)(&state->up.i)[axis], 16);
+			network_bits_put(bits, (word)(&state->translational_velocity.i)[axis], 16);
+			network_bits_put(bits, (word)(&state->angular_velocity.i)[axis], 16);
+		}
+		return;
+	}
+	for (axis = 0; axis < 3; axis++)
+	{
+		real steps = (&state->position.x)[axis] * OBJECT_PACKED_POSITION_SCALE;
+
+		values[axis] = (long)(steps >= 0.0f ? steps + 0.5f : steps - 0.5f);
+	}
+	network_bits_put_group(bits, values, 3);
+	network_bits_put_unit_vector(bits, &state->forward.i, NULL, FALSE);
+	network_bits_put_unit_vector(bits, &state->up.i, NULL, FALSE);
+	vectors[0] = &state->translational_velocity;
+	vectors[1] = &state->angular_velocity;
+	for (vector = 0; vector < 2; vector++)
+	{
+		for (axis = 0; axis < 3; axis++)
+			values[axis] = (&vectors[vector]->i)[axis];
+		network_bits_put_group(bits, values, 3);
+	}
+}
+
+/* ... read: FALSE for bits that make none */
+static boolean network_objects_unpack_state(
+	struct network_bits *bits,
+	struct distributed_object_state *state)
+{
+	struct distributed_vector *vectors[2];
+	long values[3];
+	short axis;
+	short vector;
+	boolean whole;
+
+	csmemset(state, 0, sizeof(*state));
+	state->object_index = (long)(int)network_bits_take(bits, 32);
+	state->flags = (byte)network_bits_take(bits, 8);
+	whole = network_bits_take(bits, 1) != 0;
+	if (whole || TEST_FLAG(state->flags, _distributed_object_predicted_bit))
+		state->time = (short)(word)network_bits_take(bits, 16);
+	if (whole)
+	{
+		for (axis = 0; axis < 3; axis++)
+		{
+			unsigned int value = (unsigned int)network_bits_take(bits, 32);
+
+			csmemcpy(&(&state->position.x)[axis], &value, sizeof(value));
+		}
+		for (axis = 0; axis < 3; axis++)
+		{
+			(&state->forward.i)[axis] = (short)(word)network_bits_take(bits, 16);
+			(&state->up.i)[axis] = (short)(word)network_bits_take(bits, 16);
+			(&state->translational_velocity.i)[axis] = (short)(word)network_bits_take(bits, 16);
+			(&state->angular_velocity.i)[axis] = (short)(word)network_bits_take(bits, 16);
+		}
+		return !bits->failed;
+	}
+	network_bits_take_group(bits, values, 3);
+	for (axis = 0; axis < 3; axis++)
+		(&state->position.x)[axis] = (real)values[axis] / OBJECT_PACKED_POSITION_SCALE;
+	if (!network_bits_take_unit_vector(bits, &state->forward.i, NULL, FALSE) ||
+		!network_bits_take_unit_vector(bits, &state->up.i, NULL, FALSE))
+	{
+		return FALSE;
+	}
+	vectors[0] = &state->translational_velocity;
+	vectors[1] = &state->angular_velocity;
+	for (vector = 0; vector < 2; vector++)
+	{
+		network_bits_take_group(bits, values, 3);
+		for (axis = 0; axis < 3; axis++)
+		{
+			if (values[axis] < -32768 || values[axis] > 32767)
+				return FALSE;
+			(&vectors[vector]->i)[axis] = (short)values[axis];
+		}
+	}
+	return !bits->failed;
+}
+
+/* (a client) a packed message of the objects' states (its header the
+distributed one, then each state's bits, network_objects_pack_state) as the
+whole one would have come (_distributed_message_object_states, into
+unpacked, maximum bytes): its size, 0 for one whose entries are not all
+there */
+word network_objects_unpack_states(
+	void const *message,
+	word size,
+	void *unpacked,
+	word maximum)
+{
+	struct distributed_message_header header;
+	struct network_bits bits;
+	short index;
+
+	if (size < sizeof(header))
+		return 0;
+	csmemcpy(&header, message, sizeof(header));
+	if ((long)sizeof(header) + (long)header.count * (long)sizeof(struct distributed_object_state) > (long)maximum)
+		return 0;
+	network_bits_begin_read(&bits, (byte const *)message + sizeof(header), size - sizeof(header));
+	for (index = 0; index < header.count; index++)
+	{
+		struct distributed_object_state state;
+
+		if (!network_objects_unpack_state(&bits, &state))
+			return 0;
+		csmemcpy((byte *)unpacked + sizeof(header) + index * sizeof(state), &state, sizeof(state));
+	}
+	header.type = _distributed_message_object_states;
+	csmemcpy(unpacked, &header, sizeof(header));
+	return (word)(sizeof(header) + header.count * sizeof(struct distributed_object_state));
+}
+
 static void distributed_state_from_object(
 	long object_index,
 	struct distributed_object_state *state)
@@ -1772,6 +1938,39 @@ static boolean distributed_host_moving_state_due(
 	return started || came_into_sight || (game_time_get() + absolute_index) % period == 0;
 }
 
+/* (the host) a message of the objects' states to a client: to an OpenH1
+client of an OpenH1 game packed (network_objects_pack_state) where that is
+fewer bytes, unless debug.network_states_unpacked; else whole */
+static void distributed_host_send_state_message(
+	long machine_index,
+	struct distributed_object_state_message *message,
+	short count)
+{
+	word whole_size = (word)(sizeof(message->header) + count * sizeof(struct distributed_object_state));
+
+	if (!network_legacy_machine(machine_index) && !config_boolean("debug.network_states_unpacked"))
+	{
+		static struct
+		{
+			struct distributed_message_header header;
+			byte data[MAXIMUM_ENTRIES_PER_MESSAGE * OBJECT_PACKED_MAXIMUM_SIZE];
+		} packed;
+		struct network_bits bits;
+		short index;
+
+		network_bits_begin_write(&bits, packed.data, whole_size - sizeof(message->header) - 1);
+		for (index = 0; index < count && !bits.failed; index++)
+			network_objects_pack_state(&bits, &message->states[index]);
+		if (!bits.failed)
+		{
+			distributed_send_to_machine(machine_index, &packed, _distributed_message_object_states_packed, count,
+				(word)(sizeof(packed.header) + network_bits_bytes(&bits)));
+			return;
+		}
+	}
+	distributed_send_to_machine(machine_index, message, _distributed_message_object_states, count, whole_size);
+}
+
 /* where the moving objects are, to each client those near its players
 every tick, those further less often, those its players cannot see less
 often still, and the vehicle it drives itself (which it has already)
@@ -1907,16 +2106,12 @@ static void distributed_host_send_states(
 			}
 			if (++count == limit)
 			{
-				distributed_send_to_machine(machine_index, &message, _distributed_message_object_states, count,
-					(word)(sizeof(message.header) + count * sizeof(struct distributed_object_state)));
+				distributed_host_send_state_message(machine_index, &message, count);
 				count = 0;
 			}
 		}
 		if (count)
-		{
-			distributed_send_to_machine(machine_index, &message, _distributed_message_object_states, count,
-				(word)(sizeof(message.header) + count * sizeof(struct distributed_object_state)));
-		}
+			distributed_host_send_state_message(machine_index, &message, count);
 	}
 }
 
