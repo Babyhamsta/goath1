@@ -1132,6 +1132,10 @@ static boolean network_game_server_machine_event(
 	case _machine_event_drop:
 		machine->flags = 0;
 		machine->last_heard_time = 0;
+		/* (what is the machine's for as long as it is here, in any state,
+		ends with it: its party's held room) */
+		if (VALID_INDEX(machine->machine_index, MAXIMUM_NETWORK_MACHINE_COUNT))
+			network_party_machine_dropped(machine->machine_index);
 		break;
 	default:
 		/* (its time in the new state starts now: the start, its load, a
@@ -3879,6 +3883,31 @@ static boolean network_game_server_player_among(
 	return FALSE;
 }
 
+/* port: whether a machine that loaded the game in progress was told the
+player as the player is now (told: the players its start had): by the whole
+record (name, colors, team, machine, controller, slot), not by the machine,
+controller and slot alone, which a player who left while it loaded and one
+added there since may share (the lowest free machine index, the lowest free
+slot; a bot back on another team). The machine's own players by those three:
+none of them is replaced while it is here */
+static boolean network_game_server_player_told(
+	struct network_player const *player,
+	struct network_player *told,
+	long count,
+	long machine_index)
+{
+	long index;
+
+	if (player->machine_index == machine_index)
+		return network_game_server_player_among(player, told, count);
+	for (index = 0; index < count; index++)
+	{
+		if (network_player_is_valid(&told[index]) && !csmemcmp(&told[index], player, sizeof(*player)))
+			return TRUE;
+	}
+	return FALSE;
+}
+
 /* the settings (with the machine's players) and the start, to the machine
 alone, the start with the host's game time */
 static void network_game_server_start_late_joiner(
@@ -4142,17 +4171,21 @@ void network_game_server_late_joiner_loaded(
 		long count = (long)NUMBEROF(server->game.players);
 		long index;
 
-		/* the players gone while it loaded (first: a player's machine index
-		may be a new machine's, which a player added is told apart from by
-		that only) */
+		/* the players gone while it loaded, or no longer as it was told
+		(first: a player added may be at a gone one's machine index,
+		controller and slot, whose datum on this machine gives way to it,
+		network_game_spawn_player) */
 		for (index = 0; index < count; index++)
 		{
 			struct network_player *player = &started[index];
 			struct message_server_remove_player_ingame remove_player;
 			void *message;
 
-			if (!network_player_is_valid(player) || network_game_server_player_among(player, server->game.players, count))
+			if (!network_player_is_valid(player) ||
+				network_game_server_player_told(player, server->game.players, count, machine->machine_index))
+			{
 				continue;
+			}
 			remove_player.player = *player;
 			remove_player.reason = game_time_get();
 			message = create_network_game_message(_message_server_remove_player_ingame, &remove_player,
@@ -4162,15 +4195,18 @@ void network_game_server_late_joiner_loaded(
 			network_event("told machine #%d of a player gone while it loaded (machine #%d / controller #%d)",
 				machine->machine_index, player->machine_index, player->controller_index);
 		}
-		/* and those added */
+		/* and those added, or changed */
 		for (index = 0; index < count; index++)
 		{
 			struct network_player *player = &server->game.players[index];
 			struct network_player message_packet;
 			void *message;
 
-			if (!network_player_is_valid(player) || network_game_server_player_among(player, started, count))
+			if (!network_player_is_valid(player) ||
+				network_game_server_player_told(player, started, count, machine->machine_index))
+			{
 				continue;
+			}
 			message_packet = *player;
 			message = create_network_game_message(_message_server_add_player_ingame, &message_packet,
 				sizeof(message_packet));

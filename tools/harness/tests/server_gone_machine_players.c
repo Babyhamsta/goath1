@@ -89,6 +89,9 @@ static boolean map_share_machine_needs_map(long machine_index)
 	return VALID_INDEX(machine_index, MAXIMUM_NETWORK_MACHINE_COUNT) && downloading[machine_index];
 }
 
+/* (a machine's party's held room, let go with it: network_party.c) */
+static void network_party_machine_dropped(long machine_index) { (void)machine_index; }
+
 static boolean splitscreen;
 static boolean network_game_is_splitscreen_local(void) { return splitscreen; }
 static struct network_game_server *global_network_game_server_get(void) { return server_pointer; }

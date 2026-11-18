@@ -12,7 +12,8 @@ from harness import CHECK_FAILED, build, constant, enum_with, function, mutated,
 
 CASES = ['table', 'timeouts', 'loading-wait', 'mcc-loading', 'downloading', 'local', 'lobby-silent', 'lobby-heard',
          'dead-machine-countdown', 'postgame-silent', 'round-reset-grace', 'loaded-wrong-game', 'loaded-unnamed',
-         'loaded-twice-in-game', 'loaded-late', 'version-old', 'version-new', 'version-same', 'phase']
+         'loaded-twice-in-game', 'loaded-late', 'version-old', 'version-new', 'version-same', 'phase',
+         'drop-ends-party', 'late-replaced', 'late-changed']
 
 SERVER = 'source/networking/network_server_manager.c'
 HANDLER = 'source/networking/network_server_message_handler.c'
@@ -23,6 +24,7 @@ SERVER_FUNCTIONS = ('network_game_server_client_machine_is_joined_to_game',
                     'network_game_server_client_machine_timed_out', 'network_game_server_client_machine_is_precached',
                     'network_game_server_have_all_machines_have_precached',
                     'network_game_server_same_player', 'network_game_server_player_among',
+                    'network_game_server_player_told',
                     'network_game_server_client_machine_game_loading_complete',
                     'network_game_server_late_joiner_loaded', 'network_game_server_client_machine_loaded')
 HANDLER_FUNCTIONS = ('network_game_server_handle_message_client_loaded', 'network_game_server_refuse_other_version')
@@ -67,6 +69,17 @@ NEGATIVE_CONTROLS = {
                      'table'),
     'phase-loading-as-loaded': ((SERVER, '\tcase _machine_state_loading:\n\t\treturn _network_machine_phase_loading;',
                                  '\tcase _machine_state_loading:\n\t\treturn _network_machine_phase_loaded;'), 'phase'),
+    # the code before: a late joiner's players compared by machine, controller and slot alone
+    'replaced-unseen': ((SERVER, '!csmemcmp(&told[index], player, sizeof(*player))',
+                         'network_game_server_same_player(&told[index], player)'), 'late-replaced'),
+    'changed-unseen': ((SERVER, '!csmemcmp(&told[index], player, sizeof(*player))',
+                        'network_game_server_same_player(&told[index], player)'), 'late-changed'),
+    'own-player-removed': ((SERVER, '\tif (player->machine_index == machine_index)\n'
+                                    '\t\treturn network_game_server_player_among(player, told, count);\n', ''),
+                           'late-changed'),
+    # the code before: nothing told of a drop (the party module guessed it from the machines loaded)
+    'drop-party-kept': ((SERVER, '\t\t\tnetwork_party_machine_dropped(machine->machine_index);', '\t\t\t;'),
+                        'drop-ends-party'),
 }
 
 

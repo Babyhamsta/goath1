@@ -3167,16 +3167,29 @@ static boolean host_machine_valid(
 	return machine_index >= 0 && machine_index < MAP_SHARE_MACHINES;
 }
 
-/* whether a machine says it is downloading, lately, and what it says it
-has grew lately (once offered the files): one that only says so, its
-download going nowhere, holds its slot no longer than an honest one's
+/* whether a machine's transfer is of the game's map: a transfer is of the
+map its request named, and once the game is on another map it is over (the
+client ends its own at the change and says nothing), whatever the machine
+said of it last */
+static boolean host_machine_transfer_current(
+	struct host_machine const *machine)
+{
+	struct network_game *game = map_share_network_game();
+
+	return game && !csstrcmp(game->map.name, machine->request.level_name);
+}
+
+/* whether a machine says it is downloading the game's map, lately, and what
+it says it has grew lately (once offered the files): one that only says so,
+its download going nowhere, holds its slot no longer than an honest one's
 download would last before it failed */
 static boolean host_machine_downloading(
 	struct host_machine const *machine)
 {
 	unsigned long now = system_milliseconds();
 
-	return machine->downloading && !elapsed(machine->heard_at, now, DOWNLOADING_TIMEOUT) &&
+	return machine->downloading && host_machine_transfer_current(machine) &&
+		!elapsed(machine->heard_at, now, DOWNLOADING_TIMEOUT) &&
 		(!machine->offered || !elapsed(machine->advanced_at, now, DOWNLOADING_STALL_TIMEOUT)) &&
 		(!machine->deadline || (long)(now - machine->deadline) < 0);
 }
@@ -3465,6 +3478,17 @@ static void host_update(
 		{
 			csmemset(machine, 0, sizeof(*machine));
 			continue;
+		}
+		/* (the game on another map: the transfer of the last one over at
+		once, not once the machine has been silent long enough; what it
+		counted for that map is kept, host_request) */
+		if ((machine->asked || machine->downloading) && !host_machine_transfer_current(machine))
+		{
+			error(_error_silent, "map sharing: the game left %s: machine #%ld's transfer of it is over",
+				machine->request.level_name, index);
+			machine->asked = FALSE;
+			machine->downloading = FALSE;
+			machine->downloaded = FALSE;
 		}
 		/* (a request that came too soon after the last, its turn come) */
 		if (machine->request_waiting && elapsed(machine->requested_at, now, MAP_REQUEST_INTERVAL))

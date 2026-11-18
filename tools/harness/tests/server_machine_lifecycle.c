@@ -16,6 +16,8 @@ the constants (config.inc), the structures (structures.inc) and the code
 
 #include "harness.h"
 
+#include <wchar.h>
+
 typedef unsigned short word;
 #define NETWORK_SERVER_MANAGER_FILE "server"
 #define VALID_INDEX(index, count) ((index) >= 0 && (index) < (count))
@@ -32,10 +34,17 @@ typedef unsigned short word;
 struct network_connection { int unused; };
 struct network_message { word header; };
 
+#define csmemcmp memcmp
+
+/* (source/game/players.h's) */
 struct network_player
 {
+	wchar_t name[12];
+	short primary_color_index;
+	short icon_index;
 	signed char machine_index;
 	signed char controller_index;
+	signed char team_index;
 	signed char player_list_index;
 };
 
@@ -91,6 +100,9 @@ static int mcc_load_network_host_waiting(long machine_index)
 	return VALID_INDEX(machine_index, MAXIMUM_NETWORK_MACHINE_COUNT) && mcc_waiting[machine_index];
 }
 static void mcc_load_network_peer_left(long machine_index) { (void)machine_index; }
+/* the machine whose party's held room the drop let go (network_party.c) */
+static long party_dropped = NONE;
+static void network_party_machine_dropped(long machine_index) { party_dropped = machine_index; }
 static unsigned long network_client_timeout_milliseconds(void) { return 15000; }
 static boolean halo_server_mode(void) { return FALSE; }
 static boolean cache_files_precache_map_loaded(char const *name) { (void)name; return TRUE; }
@@ -132,9 +144,16 @@ static unsigned long network_game_server_client_machine_join_times[MAXIMUM_NETWO
 static struct network_message message = { 4 };
 static short sent_type = NONE, sent_reason = NONE;
 static int writes;
+/* the players a late joiner was told were removed and added, in order */
+static struct network_player removed[8], added[8];
+static int removed_count, added_count;
 static void *create_network_game_message(short type, void const *packet, long size)
 {
 	sent_type = type;
+	if (type == _message_server_remove_player_ingame && removed_count < 8)
+		removed[removed_count++] = ((struct message_server_remove_player_ingame const *)packet)->player;
+	if (type == _message_server_add_player_ingame && added_count < 8)
+		added[added_count++] = *(struct network_player const *)packet;
 	if (type == _message_server_machine_rejected && size == sizeof(struct message_server_machine_rejected))
 		sent_reason = ((struct message_server_machine_rejected const *)packet)->reason;
 	return &message;
@@ -236,6 +255,7 @@ static void reset(word server_state)
 	server.game.number_of_games_played = 7;
 	has_players[MACHINE] = has_players[OTHER] = TRUE;
 	all_loaded = writes = 0;
+	removed_count = added_count = 0;
 	sent_type = sent_reason = NONE;
 	network_game_server_client_machine_join_times[MACHINE] = now;
 }
@@ -263,6 +283,39 @@ static void times_out_after(short state, word server_state, unsigned long limit,
 	{
 		CHECK(!silent_for(machine, 3600000), "%s: timed out, where it must not be", what);
 	}
+}
+
+/* a player's record, as the settings have it */
+static struct network_player player_of(wchar_t const *name, long machine_index, long team, long slot)
+{
+	struct network_player player;
+
+	memset(&player, 0, sizeof(player));
+	wcsncpy(player.name, name, 11);
+	player.machine_index = (signed char)machine_index;
+	player.controller_index = 0;
+	player.team_index = (signed char)team;
+	player.player_list_index = (signed char)slot;
+	return player;
+}
+
+/* the late joiner (MACHINE) started with the host's player (slot 0), its
+own (slot 5) and another machine's Ann (slot 3); the game now has those of
+`now` instead; it loads */
+static void late_joiner_loads(struct network_player const *own_now, struct network_player const *slot3_now)
+{
+	struct network_game_server_client_machine *machine;
+
+	reset(_network_game_server_state_ingame);
+	late_joiner_players[MACHINE][0] = player_of(L"Hosty", HOST, 0, 0);
+	late_joiner_players[MACHINE][3] = player_of(L"Ann", OTHER, 0, 3);
+	late_joiner_players[MACHINE][5] = player_of(L"Joiner", MACHINE, 1, 5);
+	server.game.players[0] = late_joiner_players[MACHINE][0];
+	server.game.players[3] = *slot3_now;
+	server.game.players[5] = *own_now;
+	machine = machine_in(_machine_state_loading);
+	network_game_server_late_joiner_loaded(&server, machine);
+	CHECK(machine->state == _machine_state_in_game, "the late joiner's load was not taken");
 }
 
 static boolean handle_loaded(struct network_game_server_client_machine *machine, long sent)
@@ -498,6 +551,66 @@ int main(int argc, char **argv)
 		machine_in(_machine_state_lobby);
 		CHECK(network_game_server_machine_phase(&server, MACHINE) == _network_machine_phase_downloading,
 			"a machine downloading in the lobby was not");
+	}
+	/* a player gone while a machine loaded the game in progress, and another
+	added at his machine index, controller and slot (a new machine at the
+	lowest free index, the lowest free slot): the late joiner is told both,
+	the gone one first */
+	CASE("late-replaced")
+	{
+		struct network_player own = player_of(L"Joiner", MACHINE, 1, 5);
+		struct network_player newcomer = player_of(L"Newcomer", OTHER, 1, 3);
+
+		late_joiner_loads(&own, &newcomer);
+		CHECK(removed_count == 1 && !wcscmp(removed[0].name, L"Ann"),
+			"the player gone while it loaded was not removed (%d removed)", removed_count);
+		CHECK(added_count == 1 && !wcscmp(added[0].name, L"Newcomer") && added[0].team_index == 1,
+			"the player who took his place was not added (%d added)", added_count);
+	}
+	/* the same player no longer as the machine was told (a bot back on the
+	other team, a name): told again; nothing changed, nothing told; and the
+	machine's own players are never removed from it */
+	CASE("late-changed")
+	{
+		struct network_player own = player_of(L"Joiner", MACHINE, 1, 5);
+		struct network_player ann = player_of(L"Ann", OTHER, 0, 3);
+		struct network_player ann_other_team = player_of(L"Ann", OTHER, 1, 3);
+		struct network_player renamed = player_of(L"Anna", OTHER, 0, 3);
+		struct network_player own_other_team = player_of(L"Joiner", MACHINE, 0, 5);
+
+		late_joiner_loads(&own, &ann_other_team);
+		CHECK(removed_count == 1 && added_count == 1 && added[0].team_index == 1,
+			"a player on another team than the machine was told was not told again");
+		late_joiner_loads(&own, &renamed);
+		CHECK(removed_count == 1 && added_count == 1 && !wcscmp(added[0].name, L"Anna"),
+			"a player of another name than the machine was told was not told again");
+		late_joiner_loads(&own, &ann);
+		CHECK(removed_count == 0 && added_count == 0, "players as the machine was told were told again");
+		late_joiner_loads(&own_other_team, &ann);
+		CHECK(removed_count == 0 && added_count == 0, "the machine's own player was removed from it");
+	}
+	/* what is a machine's in every state (its party's held room) ends with
+	its drop, from any state, and with nothing else */
+	CASE("drop-ends-party")
+	{
+		short state, event;
+
+		for (state = _machine_state_connected; state < NUMBER_OF_MACHINE_STATES; state++)
+		{
+			for (event = 0; event < NUMBER_OF_MACHINE_EVENTS; event++)
+			{
+				if (event == _machine_event_drop)
+					continue;
+				party_dropped = NONE;
+				network_game_server_machine_event(machine_in(state), event);
+				CHECK(party_dropped == NONE, "event %s in state %s let the machine's party go",
+					network_game_server_machine_event_names[event], network_game_server_machine_state_names[state]);
+			}
+			party_dropped = NONE;
+			network_game_server_machine_event(machine_in(state), _machine_event_drop);
+			CHECK(party_dropped == MACHINE, "a drop in state %s kept the machine's party",
+				network_game_server_machine_state_names[state]);
+		}
 	}
 	return 0;
 }
