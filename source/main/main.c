@@ -1633,6 +1633,7 @@ boolean main_menu_is_loaded(
 }
 
 static void main_map_change_failed(char const *map_name); /* port: (below) */
+static void main_coop_failure_reverts_reset(void); /* port: (below) */
 
 static void main_new_map(
 	struct game_options *options)
@@ -1642,6 +1643,7 @@ static void main_new_map(
 	if (game_load(options))
 	{
 		game_initialize_for_new_map();
+		main_coop_failure_reverts_reset(); /* port */
 	}
 	/* port: a map that does not load (its tags damaged: tag_validate.c)
 	leaves the game at the main menu, with its error, where the Xbox's
@@ -2290,26 +2292,61 @@ on the host alone. */
 static boolean main_coop_host_revert(
 	void)
 {
-	/* (the last reverts' times: a script whose failure holds again at once
-	after the revert would pull everyone back to the save over and over; a
-	third in a minute respawns the players at the checkpoint instead) */
-	static unsigned long revert_times[2];
-	unsigned long milliseconds = system_milliseconds();
 	long now = game_time_get();
 
 	if (!game_state_port_saved_game_valid())
 		return FALSE;
-	if (revert_times[0] && milliseconds - revert_times[0] < 60000)
-	{
-		error(_error_log, "co-op: a third revert in a minute: the players respawn at the checkpoint instead");
-		revert_times[0] = revert_times[1] = 0;
-		return FALSE;
-	}
-	revert_times[0] = revert_times[1];
-	revert_times[1] = milliseconds;
 	game_state_revert();
 	network_coop_reverted(now);
 	ui_widgets_disable_pause_game(30);
+	return TRUE;
+}
+
+/* port: the co-op host's last two failure reverts on this map (a team wipe,
+the scripts' game_lost), by game time, NONE for none. A script whose failure
+holds again at once after the revert would pull everyone back to the save
+over and over: a third failure within a minute of play respawns the players
+at the checkpoint instead. The host's clock only goes forward through its
+reverts (network_coop_reverted). A skip (voted, with its own cooldown:
+network_coop.c) or a revert a player chose is no failure and not counted;
+a new map, or the level restarted, starts the count again. */
+enum
+{
+	MAIN_COOP_FAILURE_REVERT_WINDOW_TICKS = 60 * TICKS_PER_SECOND,
+};
+
+static long main_coop_failure_reverts[2] = { NONE, NONE };
+
+static void main_coop_failure_reverts_reset(
+	void)
+{
+	main_coop_failure_reverts[0] = main_coop_failure_reverts[1] = NONE;
+	return;
+}
+
+static boolean main_coop_host_failure_revert(
+	void)
+{
+	long now = game_time_get();
+	short index;
+
+	/* (a time ahead of the clock is another game's) */
+	for (index = 0; index < 2; index++)
+	{
+		if (main_coop_failure_reverts[index] > now)
+			main_coop_failure_reverts[index] = NONE;
+	}
+	if (main_coop_failure_reverts[0] != NONE &&
+		now - main_coop_failure_reverts[0] < MAIN_COOP_FAILURE_REVERT_WINDOW_TICKS)
+	{
+		error(_error_log, "co-op: a third failure revert in a minute: the players respawn at the checkpoint instead");
+		main_coop_failure_reverts_reset();
+		return FALSE;
+	}
+	if (!main_coop_host_revert())
+		return FALSE;
+	main_coop_failure_reverts[0] = main_coop_failure_reverts[1];
+	main_coop_failure_reverts[1] = now;
 	return TRUE;
 }
 
@@ -2343,11 +2380,7 @@ static void main_skip_cinematic_private(
 	boolean skipped = FALSE;
 
 	if (skippable && main_coop_host())
-	{
 		skipped = main_coop_host_revert();
-		if (skipped)
-			network_coop_skip_done();
-	}
 	else if (skippable && game_connection() == _game_connection_local)
 	{
 		game_state_revert();
@@ -2361,6 +2394,9 @@ static void main_skip_cinematic_private(
 		error(_error_silent, "co-op: cutscene not skipped (skippable %d, saved state %d)",
 			skippable, game_state_port_saved_game_valid());
 	}
+	/* (the vote's answer, either way: a refusal must leave it votable) */
+	if (main_coop_host())
+		network_coop_skip_answered(skipped);
 	main_globals.skip_cinematic = FALSE;
 	return;
 }
@@ -2525,7 +2561,7 @@ static void main_lost_map_private(
 		never end. A missing save falls back to checkpoint positions. */
 		if (game_connection() != _game_connection_network_server)
 			game_state_revert();
-		else if ((players_are_all_dead() && !network_coop_wipe_reverts()) || !main_coop_host_revert())
+		else if ((players_are_all_dead() && !network_coop_wipe_reverts()) || !main_coop_host_failure_revert())
 			players_respawn_at_checkpoint();
 	}
 	return;
@@ -3421,6 +3457,7 @@ static void main_reset_map_private(
 		game_dispose_from_old_map();
 		input_flush();
 		game_initialize_for_new_map();
+		main_coop_failure_reverts_reset(); /* port */
 		create_local_players();
 		game_time_start();
 		game_initial_pulse();
