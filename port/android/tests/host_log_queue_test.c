@@ -17,6 +17,7 @@ the caller is held up as long as the writer is.
 #include "host_log_queue.h"
 
 #include <pthread.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
