@@ -142,16 +142,24 @@ enum
 	RESERVED_KILL_EVENTS = 64,
 	/* tags within tags followed looking for a damage effect */
 	MAXIMUM_TAG_DEPTH = 4,
-	/* the ticks of where players' units and vehicles were, a power of two
-	(about a second) */
-	TARGET_HISTORY_TICKS = 32,
-	/* ... looked back over beyond the host's tick a report was made at (the
-	frame drawn a tick behind, the report's own tick) */
+	/* how far before the host's tick a report was made at the shooter may
+	have seen the target (the frame drawn a tick behind, the report's own
+	tick) */
 	TARGET_HISTORY_SLACK_TICKS = 3,
-	/* ... and how old a report may be (a slow link's round trip, a report
-	sent again): older, it is refused, as a burst after the network was lost
-	is; one older than the history is looked back over as far as it goes */
-	REPORT_MAXIMUM_AGE_TICKS = 3 * TICKS_PER_SECOND,
+	/* how much older than its machine's round trip a report may be (a report
+	sent again after a loss, the stream behind the datagrams the round trip
+	is timed by) ... */
+	REPORT_DELAY_SLACK_TICKS = TICKS_PER_SECOND,
+	/* ... and how old any may be: the longest round trip the host measures
+	(network_distributed.c's MAXIMUM_ROUND_TRIP_TICKS) and that slack. Older,
+	it is refused, as a burst after the network was lost is
+	(distributed_report_earliest). Ticks are the game's, 30 a second at
+	every rate (sim_rate.c: a 60 or 120 game's sub-steps are within them) */
+	REPORT_MAXIMUM_AGE_TICKS = 2 * TICKS_PER_SECOND + REPORT_DELAY_SLACK_TICKS,
+	/* the ticks of where players' units and vehicles were: every tick a
+	report the host takes can be about, so that the oldest is checked against
+	where the target was then, not where it has been since */
+	TARGET_HISTORY_TICKS = REPORT_MAXIMUM_AGE_TICKS + TARGET_HISTORY_SLACK_TICKS + 1,
 	/* the players whose machines a unit's damage goes to, told (the unit's,
 	its riders', its owner's): with more, it goes to every machine */
 	MAXIMUM_EVENT_PLAYERS = 8,
@@ -159,11 +167,6 @@ enum
 	those are kept (a power of two: about thirteen seconds; what they fire
 	outlives the history: a rocket's flight, a grenade its thrower) */
 	PLAYER_TRAIL_INTERVAL_TICKS = 3,
-	/* ... looked over from no earlier than the report's machine's round
-	trip and this before now (a report made longer ago, sent again after a
-	loss, has its shooter where they were then; one that says it was made
-	long ago does not look further back than that) */
-	PLAYER_TRAIL_REPORT_SLACK_TICKS = TICKS_PER_SECOND,
 	PLAYER_TRAIL_POINTS = 128,
 	PLAYER_TRAIL_TICKS = PLAYER_TRAIL_INTERVAL_TICKS * PLAYER_TRAIL_POINTS,
 	REPORT_LINE_OF_SIGHT_TICKS = 2 * TICKS_PER_SECOND,
@@ -465,6 +468,9 @@ static struct
 	long unarmed_time;
 	real hit_seconds;
 	long hit_seconds_time;
+	/* (the player at the slot these are of: its datum's identifier, 0 for
+	none; another there starts afresh, distributed_note_player_slot) */
+	long identifier;
 } damage_players[MAXIMUM_TRACKED_PLAYERS];
 /* ... the explosions whose hits came this tick, each paid for once, and
 the objects each hit (each once), each player's */
@@ -492,6 +498,16 @@ static struct damage_history_tick
 		boolean driving;
 	} objects[MAXIMUM_TRACKED_PLAYERS][2];
 } damage_history[TARGET_HISTORY_TICKS];
+
+/* the history's tick of the time (its slot: a tick's time, NONE if it holds
+another tick) */
+static struct damage_history_tick *damage_history_at(
+	long time)
+{
+	long slot = time % TARGET_HISTORY_TICKS;
+
+	return &damage_history[slot < 0 ? slot + TARGET_HISTORY_TICKS : slot];
+}
 /* ... and where each player's living unit was every few ticks, longer (NONE
 for no time: none), how fast it or its vehicle went, and the size of the
 vehicle it rode */
@@ -1975,7 +1991,7 @@ drive it), noted; and every few ticks where their unit is */
 static void distributed_note_targets(
 	void)
 {
-	struct damage_history_tick *tick = &damage_history[game_time_get() & (TARGET_HISTORY_TICKS - 1)];
+	struct damage_history_tick *tick = damage_history_at(game_time_get());
 	short player_index;
 
 	tick->time = game_time_get();
@@ -2011,7 +2027,7 @@ static void distributed_note_targets(
 		}
 		{
 			struct damage_history_tick const *last =
-				&damage_history[(game_time_get() - 1) & (TARGET_HISTORY_TICKS - 1)];
+				damage_history_at(game_time_get() - 1);
 			boolean appeared = unit_index != NONE &&
 				(last->time != game_time_get() - 1 || last->objects[player_index][0].object_index == NONE);
 
@@ -2179,7 +2195,7 @@ static short distributed_target_seen(
 	for (back = 0; back <= ticks && back < TARGET_HISTORY_TICKS; back++)
 	{
 		long time = game_time_get() - back;
-		struct damage_history_tick const *tick = &damage_history[time & (TARGET_HISTORY_TICKS - 1)];
+		struct damage_history_tick const *tick = damage_history_at(time);
 		real reach;
 		real distance;
 
@@ -2239,7 +2255,7 @@ static boolean distributed_player_was_near(
 	for (back = 0; back <= ticks && back < TARGET_HISTORY_TICKS; back++)
 	{
 		long time = game_time_get() - back;
-		struct damage_history_tick const *tick = &damage_history[time & (TARGET_HISTORY_TICKS - 1)];
+		struct damage_history_tick const *tick = damage_history_at(time);
 
 		if (tick->time != time)
 			break;
@@ -2270,7 +2286,7 @@ static boolean distributed_player_drove_into(
 	for (back = 0; back <= ticks && back < TARGET_HISTORY_TICKS; back++)
 	{
 		long time = game_time_get() - back;
-		struct damage_history_tick const *tick = &damage_history[time & (TARGET_HISTORY_TICKS - 1)];
+		struct damage_history_tick const *tick = damage_history_at(time);
 		struct object_datum *vehicle;
 		real reach;
 
@@ -2293,6 +2309,21 @@ static boolean distributed_player_drove_into(
 	return FALSE;
 }
 
+/* the earliest of the host's ticks a machine's report may say it was made
+at: as long ago as the host measures that machine's round trip, and
+REPORT_DELAY_SLACK_TICKS more, but no more than REPORT_MAXIMUM_AGE_TICKS
+(which the history holds). The report's time is the client's word, so it is
+believed only within what the host knows of the machine's delay: a report
+that says it is older (to be checked against where its target was at a
+moment of its choosing) is refused */
+static long distributed_report_earliest(
+	long machine_index)
+{
+	real age = distributed_machine_round_trip_ticks(machine_index) + (real)REPORT_DELAY_SLACK_TICKS;
+
+	return game_time_get() - (age < (real)REPORT_MAXIMUM_AGE_TICKS ? (long)age : REPORT_MAXIMUM_AGE_TICKS);
+}
+
 /* whether the host had the player (their living unit, or the vehicle it
 rode) within reach of the point since what they fired could have been:
 the reach's ticks before the host's tick the report was made at, and a
@@ -2308,8 +2339,7 @@ static boolean distributed_player_could_fire(
 {
 	real ticks = reach->ticks;
 	long earliest;
-	long latest_made = game_time_get() - (long)distributed_machine_round_trip_ticks(machine_index) -
-		PLAYER_TRAIL_REPORT_SLACK_TICKS;
+	long latest_made = distributed_report_earliest(machine_index);
 	short index;
 
 	if (host_time < latest_made)
@@ -2330,6 +2360,52 @@ static boolean distributed_player_could_fire(
 			return TRUE;
 	}
 	return FALSE;
+}
+
+/* the host's word on a player slot's player, forgotten: what they carried,
+threw, fired from and paid for, and where they were */
+static void distributed_reset_player_slot(
+	short player_index)
+{
+	short index;
+
+	csmemset(&damage_players[player_index], 0, sizeof(damage_players[player_index]));
+	for (index = 0; index < MAXIMUM_RECENT_WEAPONS; index++)
+		damage_players[player_index].definition_indices[index] = NONE;
+	damage_players[player_index].unarmed_melee_damage_index = NONE;
+	for (index = 0; index < MAXIMUM_GRENADE_THROWS; index++)
+		damage_players[player_index].throw_times[index] = NONE;
+	for (index = 0; index < MAXIMUM_STUCK_PROJECTILES; index++)
+		damage_players[player_index].stuck[index].time = NONE;
+	damage_players[player_index].driven_time = -RECENT_WEAPON_TICKS - 1;
+	damage_players[player_index].hit_seconds = HIT_REPORT_BURST_SECONDS;
+	damage_explosions[player_index].time = NONE;
+	damage_explosions[player_index].count = 0;
+	for (index = 0; index < PLAYER_TRAIL_POINTS; index++)
+		damage_trails[player_index][index].time = NONE;
+	damage_fire_origins[player_index].time = NONE;
+	for (index = 0; index < TARGET_HISTORY_TICKS; index++)
+	{
+		damage_history[index].objects[player_index][0].object_index = NONE;
+		damage_history[index].objects[player_index][1].object_index = NONE;
+	}
+}
+
+/* (the host) the player at a slot noted: one gone, or another in their
+place (a joiner in a quitter's slot), starts afresh, so that nothing the one
+before did (a rocket carried a moment ago) counts for them; one in an empty
+slot finds it so already */
+static void distributed_note_player_slot(
+	short player_index)
+{
+	struct player_datum *player = distributed_player(player_index);
+	long identifier = player ? (long)(word)player->identifier : 0;
+
+	if (identifier == damage_players[player_index].identifier)
+		return;
+	if (damage_players[player_index].identifier != 0)
+		distributed_reset_player_slot(player_index);
+	damage_players[player_index].identifier = identifier;
 }
 
 /* the weapons each player carries, and whether they drive, noted */
@@ -2597,8 +2673,7 @@ static boolean distributed_report_line_of_sight(
 		FLAG(_collision_test_ignore_invisible_surfaces_bit) | FLAG(_collision_test_ignore_breakable_surfaces_bit) |
 		FLAG(_collision_test_ignore_two_sided_surfaces_bit);
 	real ticks = reach->ticks > 0.0f ? MIN(reach->ticks, (real)PLAYER_TRAIL_TICKS) : (real)REPORT_LINE_OF_SIGHT_TICKS;
-	long latest_made = game_time_get() - (long)distributed_machine_round_trip_ticks(machine_index) -
-		PLAYER_TRAIL_REPORT_SLACK_TICKS;
+	long latest_made = distributed_report_earliest(machine_index);
 	long newest = game_time_get() / PLAYER_TRAIL_INTERVAL_TICKS;
 	long earliest;
 	long bucket;
@@ -2760,6 +2835,8 @@ static boolean distributed_report_valid(
 	{
 		REFUSE(_report_refused_player);
 	}
+	/* (theirs, not the slot's last player's) */
+	distributed_note_player_slot(player_index);
 	/* one of the host's objects (the index whole: identifier 0 is any
 	object at the index) */
 	if (!distributed_object_index_valid(report->object_index))
@@ -2779,13 +2856,17 @@ static boolean distributed_report_valid(
 	{
 		REFUSE(_report_refused_numbers);
 	}
-	/* made at a tick of the host's not later than now nor long before (one
-	held back is refused, as a burst after the network was lost is), and
-	looked back over from then: however long it took to come (sent again,
-	reliably), where the shooter saw the target */
-	if (report->host_time == NONE || report->host_time > now || now - report->host_time > REPORT_MAXIMUM_AGE_TICKS)
+	/* made at a tick of the host's not later than now nor before its
+	machine's delay lets it be (one held back is refused, as a burst after
+	the network was lost is), and looked back over from then: however long it
+	took to come (sent again, reliably), where the shooter saw the target. The
+	history holds every tick that leaves to look back over */
+	if (report->host_time == NONE || report->host_time > now ||
+		report->host_time < distributed_report_earliest(machine_index))
+	{
 		REFUSE(_report_refused_age);
-	ticks = MIN(now - report->host_time + TARGET_HISTORY_SLACK_TICKS, TARGET_HISTORY_TICKS - 1);
+	}
+	ticks = now - report->host_time + TARGET_HISTORY_SLACK_TICKS;
 	/* damage that player could deal, and how they deal it */
 	rate = distributed_player_deals(player_index, report->damage.definition_index, &kinds, &fired_reach,
 		&grenade_type);
@@ -3089,7 +3170,7 @@ blow to all (NONE) */
 static void distributed_note_event_destinations(
 	void)
 {
-	struct damage_history_tick const *tick = &damage_history[game_time_get() & (TARGET_HISTORY_TICKS - 1)];
+	struct damage_history_tick const *tick = damage_history_at(game_time_get());
 	short index;
 
 	for (index = 0; index < damage_event_count; index++)
@@ -3278,8 +3359,11 @@ void network_damage_host_tick(
 	short machine_count = damage_event_count ?
 		distributed_client_machines(machine_indices, HALO_PORT_MAXIMUM_NETWORK_MACHINES) : 0;
 	short machine_number;
+	short player_index;
 
 	distributed_log_reports();
+	for (player_index = 0; player_index < MAXIMUM_TRACKED_PLAYERS; player_index++)
+		distributed_note_player_slot(player_index);
 	distributed_note_weapons();
 	distributed_note_targets();
 	distributed_note_stuck_projectiles();
@@ -3605,24 +3689,7 @@ void network_damage_new_game(
 	for (player_index = 0; player_index < TARGET_HISTORY_TICKS; player_index++)
 		damage_history[player_index].time = NONE;
 	for (player_index = 0; player_index < MAXIMUM_TRACKED_PLAYERS; player_index++)
-	{
-		short index;
-
-		for (index = 0; index < MAXIMUM_RECENT_WEAPONS; index++)
-			damage_players[player_index].definition_indices[index] = NONE;
-		damage_players[player_index].unarmed_melee_damage_index = NONE;
-		for (index = 0; index < MAXIMUM_GRENADE_THROWS; index++)
-			damage_players[player_index].throw_times[index] = NONE;
-		for (index = 0; index < MAXIMUM_STUCK_PROJECTILES; index++)
-			damage_players[player_index].stuck[index].time = NONE;
-		damage_players[player_index].driven_time = -RECENT_WEAPON_TICKS - 1;
-		damage_players[player_index].hit_seconds = HIT_REPORT_BURST_SECONDS;
-		damage_explosions[player_index].time = NONE;
-		damage_explosions[player_index].count = 0;
-		for (index = 0; index < PLAYER_TRAIL_POINTS; index++)
-			damage_trails[player_index][index].time = NONE;
-		damage_fire_origins[player_index].time = NONE;
-	}
+		distributed_reset_player_slot(player_index);
 	for (player_index = 0; player_index < DAMAGE_RATE_CACHE_SIZE; player_index++)
 		damage_rate_cache[player_index].source_index = NONE;
 }
