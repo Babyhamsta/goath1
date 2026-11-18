@@ -1360,6 +1360,32 @@ it, where the near ones have it as it comes (two network trips and a frame);
 the host's bytes a second to each client were unchanged within the spread
 the players' places give (9.8 to 12.1 KB/s in either build).
 
+A press goes at once only to a client that can react to the player: one
+whose players can see them (the plan's potentially visible set) or are
+within `MIDDLE_PLAYER_DISTANCE` of them, as the plan last had it
+(`distributed_forward_immediate`), or, since, where the player now is
+(`distributed_reacts_at`, the same two tests, made at each sub-step for a
+player with a press owed: one who comes into sight has it in that
+sub-step's datagram). To one further and unseen the latest press is owed
+(`distributed_far_owed`) and rides the tick's last datagram, with the
+tick's own messages, so a sub-step that has nothing else for that client
+sends it no datagram. Everything the near and the seen are sent goes when
+it went before (`tools/harness/tests/test_substep_datagrams.py`).
+
+Each client has a byte budget (`network.client_budget`, 256 KB a second by
+default, about ten times what a crowded 16-player game at 120 sends one):
+each tick adds its share of the second (up to a quarter second's), and each
+datagram to the client takes its bytes and its IP and UDP headers'
+(`distributed_budget_tick`). Where the last tick took a client past it, the
+plan sends it the players it cannot react to (far and unseen, as above)
+twice as seldom, up to four times (every 24 ticks for one out of sight),
+and the moving objects far and out of its sight the same
+(`distributed_budget_stretch`, `network_objects.c`); twice as often again
+once half its balance is back. A change of a player's life or seat, one
+coming into sight and a press go as before, and nothing near the client's
+players or in their sight is sent less often
+(`tools/harness/tests/test_plan_aim.py`, `test_object_state_sends.py`).
+
 ### States at the sub-steps
 
 A client drives the players near its own by their forwarded input and live
@@ -2860,7 +2886,18 @@ Unity's Netcode for Entities, lightyear, netfox and the Ares source):
   one's headers (internet play's tunnel adds 36 bytes to every datagram: 15
   of its header, 16 of its tag and 5 of its own inside), each message split
   between two where one is full, so none goes out part empty; the machines'
-  datagrams go in a turn that starts one further each tick.
+  datagrams go in a turn that starts one further each tick. Between OpenH1
+  machines (the host to an OpenH1 client, a client to its OpenH1 host) the
+  batch is compact (`_distributed_message_compact_batch`,
+  `distributed_batch_append`): 6 bytes of its own, not 12 (the low byte of
+  its world and the low 16 bits of its tick, which the receiver has whole
+  from its own world and its window of the sender's clock), and 3 or 4
+  bytes a message, not 12 (its length, with a bit for a message of the
+  next tick, its kind and its count: its tick and world are the batch's).
+  A message of another world, or of a tick neither the batch's nor the
+  next, starts a datagram of its own; nothing waits. An OpenCE machine, or
+  a Legacy game, is sent the batch as before
+  (`tools/harness/tests/test_substep_datagrams.py`, `tools/test_checkpoint_epoch.py`).
 - **Stamped with their tick.** Every message carries the sender's tick
   (its header's game time); an unreliable one (the units, the input, the
   objects, the statistics, what units carry, the damage) that arrives after

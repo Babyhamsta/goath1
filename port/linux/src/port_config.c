@@ -1810,6 +1810,12 @@ static const struct config_setting config_settings[] =
 		"Hosting a GOAT H1 game: its tick rate, 30, 60 or 120 (game.sim_rate's\n"
 		"steps), which every machine of it takes as the game starts. A Legacy game\n"
 		"plays at 30." },
+	{ "network.client_budget", _config_integer, "256", "HALO_NET_CLIENT_BUDGET", _environment_value, _platform_all,
+		"Hosting: the most KB a second the game's datagrams send each client\n"
+		"before what that client cannot react to (players and moving objects\n"
+		"far from its players and out of their sight) goes to it less often, at\n"
+		"most four times less (under a second apart). What is near its players\n"
+		"or in their sight is never held back. 0: no budget." },
 	{ "network.allow_opence", _config_boolean, "false", "HALO_NET_ALLOW_OPENCE", _environment_value, _platform_all,
 		"Hosting a GOAT H1 game: true lets OpenCE players join it too. They play\n"
 		"at 30 ticks a second, as on their own machine, and GOAT H1 players at\n"

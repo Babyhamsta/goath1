@@ -74,7 +74,8 @@ word network_substeps_live_forward_write(short player_index, byte *buffer);
 latest press (the held controls changed, or a stick or the trigger moved
 far), for a client its plan does not send the player's every control to
 (NETCODE.md, "Presses to far clients"): last, what was last sent that
-client; whether this is to go (then last is it), and its bytes */
+client; whether this is to go (then last is it), and the latest press's
+bytes (sent on already or not: 0 for none) */
 struct live_control_far
 {
 	boolean valid;

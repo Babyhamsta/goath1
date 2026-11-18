@@ -1755,7 +1755,9 @@ static boolean distributed_host_rest_changed(
 tick: as often as its distance from the client's players says (period), as
 often as the player plan sends a player none of them can see where none of
 them can see its cluster (the plan's own test: distributed_machine_sees_cluster),
-and at once as it starts moving or comes into their sight */
+the far ones of those less often still while the client is over its byte
+budget (distributed_budget_stretch), and at once as it starts moving or
+comes into their sight */
 static boolean distributed_host_moving_state_due(
 	long machine_index,
 	long absolute_index,
@@ -1767,8 +1769,8 @@ static boolean distributed_host_moving_state_due(
 	boolean came_into_sight = seen && !BIT_VECTOR_TEST_FLAG(objects_host_seen[machine_index], absolute_index);
 
 	BIT_VECTOR_SET_FLAG(objects_host_seen[machine_index], absolute_index, seen);
-	if (!seen && period < HIDDEN_PLAYER_PERIOD_TICKS)
-		period = HIDDEN_PLAYER_PERIOD_TICKS;
+	if (!seen)
+		period = (short)(HIDDEN_PLAYER_PERIOD_TICKS * (period > 2 ? distributed_budget_stretch(machine_index) : 1));
 	return started || came_into_sight || (game_time_get() + absolute_index) % period == 0;
 }
 

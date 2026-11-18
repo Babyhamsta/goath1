@@ -165,6 +165,7 @@ int port_mods_list(char *text, unsigned long size);
 void console_warning(const char *format, ...);
 /* port_config.c's */
 int config_boolean(char const *name);
+long config_integer(char const *name);
 
 /* the host: a client's game run faster than its clock (a speed hack, which
 speeds up the machine's own clock: nothing on it can tell), found by its
@@ -622,10 +623,23 @@ struct distributed_pings_message
 };
 
 /* a batch's datagram: its header, then each message's size and its bytes
-past its message header */
+past its message header. A compact one's (an OpenH1 machine's to an OpenH1
+machine: distributed_batch_compact, _distributed_message_compact_batch):
+its message header and kind, the low byte of its world (checkpoint epoch)
+and the low 16 bits of its tick (game_time, the first message's), which the
+receiver has whole within its window of the sender's clock
+(distributed_compact_batch_handle); then each message's length past its
+header, doubled and one more for a message of the tick after the batch's,
+in a byte (below 128) or two (the first's top bit set: its low 7 bits, then
+the rest), its kind, its count and its entries. A message of another world,
+or of a tick other than the batch's or the next, goes in a datagram of its
+own (the batch sent first) */
 struct distributed_batch
 {
 	word size;
+	boolean compact;
+	long game_time;
+	unsigned long checkpoint_epoch;
 	byte data[DATAGRAM_MAXIMUM_SIZE];
 };
 
@@ -633,6 +647,12 @@ struct distributed_batch
 its header but for its message header */
 #define BATCH_MESSAGE_OVERHEAD \
 	((word)(sizeof(word) + sizeof(struct distributed_message_header) - sizeof(message_header)))
+/* ... and in a compact batch (at most), and the compact batch's header */
+#define COMPACT_BATCH_MESSAGE_OVERHEAD ((word)(2 + 2 * sizeof(byte)))
+#define COMPACT_BATCH_HEADER_SIZE ((word)(sizeof(message_header) + 4))
+/* a datagram's IPv4 and UDP headers, which a client's byte budget counts
+(distributed_budget_tick) */
+#define DATAGRAM_IP_UDP_BYTES 28
 
 /* messages of entries of a size of their own, to one machine (or the host),
 each as long as the batch has room for (distributed_packer_add): nothing
@@ -1005,6 +1025,20 @@ static long distributed_forwarded_times[HALO_PORT_MAXIMUM_NETWORK_MACHINES][MAXI
 to each client its plan does not forward the player to (NETCODE.md,
 "Presses to far clients") */
 static struct live_control_far distributed_far_live[HALO_PORT_MAXIMUM_NETWORK_MACHINES][MAXIMUM_TRACKED_PLAYERS];
+/* the host: whether each client can react to each player (in sight of its
+players, or near them: distributed_reacts_at), as the last plan found or
+since (distributed_forward_reacts): their presses go at once. One it cannot
+react to, its latest press owed (far_owed), rides the tick's last
+datagram, with the tick's own messages */
+static boolean distributed_forward_immediate[HALO_PORT_MAXIMUM_NETWORK_MACHINES][MAXIMUM_TRACKED_PLAYERS];
+static boolean distributed_far_owed[HALO_PORT_MAXIMUM_NETWORK_MACHINES][MAXIMUM_TRACKED_PLAYERS];
+/* the host: each client's byte budget (network.client_budget, KB a second):
+its balance, the bytes it may yet be sent (each tick adds its share of the
+second, up to a quarter second's; each datagram sent it takes its bytes
+and its IP and UDP headers'), and how many times over its period what it
+cannot react to goes to it (distributed_budget_stretch) */
+static long distributed_budget_balances[HALO_PORT_MAXIMUM_NETWORK_MACHINES];
+static short distributed_budget_stretches[HALO_PORT_MAXIMUM_NETWORK_MACHINES];
 /* the host: each player's input as last relayed to each OpenH1 client
 (distributed_relayed_action_due): whether any was, what, when, whether it
 is to go again on the player's next tick of the plan (a change's second
@@ -1699,19 +1733,51 @@ static void distributed_batch_flush(
 
 	if (!batch->size)
 		return;
-	header->type = _distributed_message_batch;
-	header->count = 0;
-	header->game_time = game_time_get();
-	header->checkpoint_epoch = distributed_checkpoint_epoch;
-	header->header = 0;
-	build_message_header(&header->header, batch->size, 2, 0);
+	if (batch->compact)
+	{
+		message_header word_header = 0;
+
+		build_message_header(&word_header, batch->size, 2, 0);
+		csmemcpy(batch->data, &word_header, sizeof(word_header));
+		batch->data[sizeof(message_header)] = _distributed_message_compact_batch;
+		batch->data[sizeof(message_header) + 1] = (byte)(batch->checkpoint_epoch & 0xFF);
+		batch->data[sizeof(message_header) + 2] = (byte)(batch->game_time & 0xFF);
+		batch->data[sizeof(message_header) + 3] = (byte)((batch->game_time >> 8) & 0xFF);
+	}
+	else
+	{
+		header->type = _distributed_message_batch;
+		header->count = 0;
+		header->game_time = game_time_get();
+		header->checkpoint_epoch = distributed_checkpoint_epoch;
+		header->header = 0;
+		build_message_header(&header->header, batch->size, 2, 0);
+	}
 	if (sender == HOST_SENDER)
 		network_distributed_client_send(batch->data, batch->size);
 	else
+	{
 		network_distributed_server_send_to_machine(sender, batch->data, batch->size);
+		distributed_budget_balances[sender] -= batch->size + DATAGRAM_IP_UDP_BYTES;
+	}
 	distributed_batch_bytes[sender] += batch->size;
 	distributed_batch_datagrams[sender]++;
 	batch->size = 0;
+}
+
+/* whether the machine's batches (or the host's, HOST_SENDER) are compact:
+an OpenH1 machine's to an OpenH1 machine (the host's to an OpenH1 client,
+a client's of an OpenH1 game to its host); never to an OpenCE machine, or
+of a Legacy game */
+static boolean distributed_batch_compact(
+	short sender)
+{
+	struct distributed_batch const *batch = &distributed_batches[sender];
+
+	if (batch->size)
+		return batch->compact;
+	return sender == HOST_SENDER ? network_standard_agreed_rate() != 0 :
+		network_standard_machine_is_openh1(sender);
 }
 
 /* the bytes a message's entries (past its header) have in the machine's
@@ -1722,14 +1788,17 @@ static word distributed_batch_room(
 	word minimum)
 {
 	struct distributed_batch *batch = &distributed_batches[sender];
-	word used = batch->size ? batch->size : (word)sizeof(struct distributed_message_header);
+	boolean compact = distributed_batch_compact(sender);
+	word empty = compact ? COMPACT_BATCH_HEADER_SIZE : (word)sizeof(struct distributed_message_header);
+	word overhead = compact ? COMPACT_BATCH_MESSAGE_OVERHEAD : BATCH_MESSAGE_OVERHEAD;
+	word used = batch->size ? batch->size : empty;
 
-	if (used + BATCH_MESSAGE_OVERHEAD + minimum > DATAGRAM_MAXIMUM_SIZE)
+	if (used + overhead + minimum > DATAGRAM_MAXIMUM_SIZE)
 	{
 		distributed_batch_flush(sender);
-		used = sizeof(struct distributed_message_header);
+		used = empty;
 	}
-	return (word)(DATAGRAM_MAXIMUM_SIZE - used - BATCH_MESSAGE_OVERHEAD);
+	return (word)(DATAGRAM_MAXIMUM_SIZE - used - overhead);
 }
 
 /* a message's header and entries into the machine's batch, which has room
@@ -1743,8 +1812,43 @@ static void distributed_batch_append(
 	struct distributed_batch *batch = &distributed_batches[sender];
 	word length = (word)(sizeof(*header) - sizeof(message_header) + entries_size);
 
+	if (distributed_batch_compact(sender))
+	{
+		word value;
+
+		/* (of another world, or neither the batch's tick nor the next: the
+		batch sent first, this the first of the next) */
+		if (batch->size && (header->checkpoint_epoch != batch->checkpoint_epoch ||
+			(unsigned long)(header->game_time - batch->game_time) > 1))
+		{
+			distributed_batch_flush(sender);
+		}
+		if (!batch->size)
+		{
+			batch->compact = TRUE;
+			batch->game_time = header->game_time;
+			batch->checkpoint_epoch = header->checkpoint_epoch;
+			batch->size = COMPACT_BATCH_HEADER_SIZE;
+		}
+		value = (word)(entries_size << 1 | (header->game_time != batch->game_time ? 1 : 0));
+		if (value < 0x80)
+			batch->data[batch->size++] = (byte)value;
+		else
+		{
+			batch->data[batch->size++] = (byte)(0x80 | (value & 0x7F));
+			batch->data[batch->size++] = (byte)(value >> 7);
+		}
+		batch->data[batch->size++] = header->type;
+		batch->data[batch->size++] = header->count;
+		csmemcpy(batch->data + batch->size, entries, entries_size);
+		batch->size += entries_size;
+		return;
+	}
 	if (!batch->size)
+	{
+		batch->compact = FALSE;
 		batch->size = sizeof(struct distributed_message_header);
+	}
 	csmemcpy(batch->data + batch->size, &length, sizeof(word));
 	csmemcpy(batch->data + batch->size + sizeof(word), (byte const *)header + sizeof(message_header),
 		sizeof(*header) - sizeof(message_header));
@@ -5730,6 +5834,61 @@ boolean distributed_machine_sees_cluster(
 	return !viewers;
 }
 
+/* whether a client can react to a player where they are: in sight of its
+players (the plan's potentially visible set), or within
+MIDDLE_PLAYER_DISTANCE of one of them, as the plan last had them, or with
+none of them yet (it watches anyone). What the plan forwards a client at
+once is of these (distributed_forward_immediate) */
+static boolean distributed_reacts_at(
+	long machine_index,
+	real_point3d const *origin,
+	short cluster_index)
+{
+	short index;
+
+	if (distributed_machine_sees_cluster(machine_index, cluster_index))
+		return TRUE;
+	for (index = 0; index < MAXIMUM_LOCAL_PLAYERS; index++)
+	{
+		struct distributed_viewer const *viewer = &distributed_viewers[machine_index][index];
+		real dx, dy, dz;
+
+		if (!viewer->valid)
+			continue;
+		dx = origin->x - viewer->position.x;
+		dy = origin->y - viewer->position.y;
+		dz = origin->z - viewer->position.z;
+		if (dx * dx + dy * dy + dz * dz < MIDDLE_PLAYER_DISTANCE * MIDDLE_PLAYER_DISTANCE)
+			return TRUE;
+	}
+	return FALSE;
+}
+
+/* (the host) whether what a player's sub-steps ran goes to a client at
+once: as the last plan found (distributed_forward_immediate), or, since it,
+come where the client can react to them (distributed_reacts_at, now: at
+once, from this sub-step on) */
+static boolean distributed_forward_reacts(
+	long machine_index,
+	short player_index)
+{
+	struct player_datum *player;
+	long unit_index;
+	real_point3d origin;
+
+	if (distributed_forward_immediate[machine_index][player_index])
+		return TRUE;
+	player = distributed_player(player_index);
+	unit_index = player ? distributed_living_unit(player) : NONE;
+	if (unit_index == NONE)
+		return FALSE;
+	object_get_origin(unit_index, &origin);
+	if (!distributed_reacts_at(machine_index, &origin, distributed_object_cluster(unit_index)))
+		return FALSE;
+	distributed_forward_immediate[machine_index][player_index] = TRUE;
+	return TRUE;
+}
+
 /* the player's input as the host's tick ran it, in fewer bytes; whether
 their buttons or choices changed in the ticks it carries */
 static boolean distributed_relayed_action_from(
@@ -5966,6 +6125,65 @@ static boolean distributed_relayed_action_due(
 	return TRUE;
 }
 
+/* (the host) whether any client is owed a press (distributed_far_owed) */
+static boolean distributed_far_owed_any(
+	void)
+{
+	long machine_index;
+	short player_index;
+
+	for (machine_index = 0; machine_index < HALO_PORT_MAXIMUM_NETWORK_MACHINES; machine_index++)
+	{
+		for (player_index = 0; player_index < MAXIMUM_TRACKED_PLAYERS; player_index++)
+		{
+			if (distributed_far_owed[machine_index][player_index])
+				return TRUE;
+		}
+	}
+	return FALSE;
+}
+
+/* (the host, as its plan begins for the client) the client's byte budget
+refilled with the tick's share, and what it cannot react to sent it twice
+as seldom where the last tick took it past its balance (up to
+CLIENT_BUDGET_MAXIMUM_STRETCH), twice as often again once half its balance
+is back. Nothing it can react to is ever sent it less often
+(distributed_host_plan_players, network_objects.c's moving objects) */
+static void distributed_budget_tick(
+	long machine_index)
+{
+	long budget = config_integer("network.client_budget") * 1024;
+	long *balance = &distributed_budget_balances[machine_index];
+	short *stretch = &distributed_budget_stretches[machine_index];
+	long capacity;
+
+	if (budget <= 0)
+	{
+		*balance = 0;
+		*stretch = 1;
+		return;
+	}
+	capacity = budget / 4;
+	if (*stretch < 1)
+		*stretch = 1;
+	if (*balance < 0 && *stretch < CLIENT_BUDGET_MAXIMUM_STRETCH)
+		*stretch = (short)(*stretch * 2);
+	else if (*balance > capacity / 2 && *stretch > 1)
+		*stretch = (short)(*stretch / 2);
+	*balance = MIN(*balance + budget / TICKS_PER_SECOND, capacity);
+}
+
+short distributed_budget_stretch(
+	long machine_index)
+{
+	if (machine_index < 0 || machine_index >= HALO_PORT_MAXIMUM_NETWORK_MACHINES ||
+		distributed_budget_stretches[machine_index] < 1)
+	{
+		return 1;
+	}
+	return distributed_budget_stretches[machine_index];
+}
+
 /* when the host sends on what it heard (distributed_forward_flush) */
 enum
 {
@@ -5993,7 +6211,7 @@ static void distributed_forward_flush(
 	short machine_number;
 	short player_index;
 	boolean inputs = FALSE;
-	boolean live = network_substeps_live_pending();
+	boolean live = network_substeps_live_pending() || distributed_far_owed_any();
 	static unsigned long long last_sent;
 	/* (not system_milliseconds, which the determinism log notes in a tick:
 	the host's own players' controls are sent on from a sub-step) */
@@ -6061,15 +6279,30 @@ static void distributed_forward_flush(
 				word size;
 
 				if (!period || distributed_machine_has_player(machine_index, player_index))
+				{
+					distributed_far_owed[machine_index][player_index] = FALSE;
 					continue;
+				}
 				/* (a player near of no controls sent of their own, a bot: their
 				presses as the host's sub-steps ran them, as a far one's) */
 				if (period <= 2 && network_substeps_live_own(player_index))
 					size = network_substeps_live_forward_write(player_index, entry);
-				else if (network_substeps_live_far_due(player_index, &distributed_far_live[machine_index][player_index]))
-					size = network_substeps_live_far_write(player_index, entry);
 				else
+				{
+					boolean *owed = &distributed_far_owed[machine_index][player_index];
+
 					size = 0;
+					if (network_substeps_live_far_due(player_index, &distributed_far_live[machine_index][player_index]))
+						*owed = TRUE;
+					/* (at once where the client can react to the player; else
+					the latest with the tick's own messages, at its end) */
+					if (*owed && (occasion == _forward_at_tick_end ||
+						distributed_forward_reacts(machine_index, player_index)))
+					{
+						size = network_substeps_live_far_write(player_index, entry);
+						*owed = FALSE;
+					}
+				}
 				if (size)
 				{
 					distributed_packer_add(&distributed_packer, entry, size);
@@ -6777,6 +7010,10 @@ static void distributed_host_plan_players(
 		boolean viewer_scoped[MAXIMUM_LOCAL_PLAYERS];
 		short viewer_count = 0;
 		short index;
+		short stretch;
+
+		distributed_budget_tick(machine_index);
+		stretch = distributed_budget_stretch(machine_index);
 
 		/* its players where they are, or were when last alive (each viewer's
 		row of the map's potentially visible set) */
@@ -6816,8 +7053,12 @@ static void distributed_host_plan_players(
 			boolean seen = TRUE;
 			short period = 1;
 			short aimed_period = NONE;
+			/* (whether the client can react to the player: distributed_reacts_at's
+			tests, by the same viewers) */
+			boolean reacts = TRUE;
 
 			distributed_forward_periods[machine_index][player_index] = 0;
+			distributed_forward_immediate[machine_index][player_index] = FALSE;
 			if (!present[player_index] || (quit[player_index] && !own && !changed[player_index]))
 				continue;
 			if (!own && !placed[player_index])
@@ -6847,6 +7088,7 @@ static void distributed_host_plan_players(
 					sees[index] = distributed_pvs_sees(viewer_pvs[index], to, cluster_count);
 					visible |= sees[index];
 				}
+				reacts = visible || nearest < MIDDLE_PLAYER_DISTANCE * MIDDLE_PLAYER_DISTANCE;
 				period = !visible ? HIDDEN_PLAYER_PERIOD_TICKS :
 					nearest < NEAR_PLAYER_DISTANCE * NEAR_PLAYER_DISTANCE ? 1 :
 					nearest < MIDDLE_PLAYER_DISTANCE * MIDDLE_PLAYER_DISTANCE ? 2 :
@@ -6873,6 +7115,14 @@ static void distributed_host_plan_players(
 			}
 			if (aimed_period == NONE)
 				aimed_period = period;
+			/* (far and unseen, over the client's budget: less often, as its
+			plan's period times the stretch; none of its players aim at one
+			they cannot see) */
+			if (!own && placed[player_index] && !reacts && stretch > 1)
+			{
+				period = (short)(period * stretch);
+				aimed_period = period;
+			}
 			send |= changed[player_index] || (now + player_index) % period == 0 ||
 				(now + player_index) % aimed_period == 0;
 			if (seen || own)
@@ -6884,7 +7134,10 @@ static void distributed_host_plan_players(
 			sub-steps ran them; what the tick ran of it relayed only when not
 			forwarded lately) */
 			if (!own && placed[player_index])
+			{
 				distributed_forward_periods[machine_index][player_index] = (byte)aimed_period;
+				distributed_forward_immediate[machine_index][player_index] = reacts;
+			}
 			if (own || !has_action[player_index])
 				continue;
 			if (distributed_forward_covers(machine_index, player_index))
@@ -7737,6 +7990,10 @@ static void distributed_reset_checkpoint_state(boolean reset_received_times)
 	csmemset(distributed_forwards, 0, sizeof(distributed_forwards));
 	csmemset(distributed_forward_periods, 0, sizeof(distributed_forward_periods));
 	csmemset(distributed_far_live, 0, sizeof(distributed_far_live));
+	csmemset(distributed_forward_immediate, 0, sizeof(distributed_forward_immediate));
+	csmemset(distributed_far_owed, 0, sizeof(distributed_far_owed));
+	csmemset(distributed_budget_balances, 0, sizeof(distributed_budget_balances));
+	csmemset(distributed_budget_stretches, 0, sizeof(distributed_budget_stretches));
 	csmemset(distributed_relayed_sent, 0, sizeof(distributed_relayed_sent));
 	csmemset(distributed_forwarded_ticks, 0xFF, sizeof(distributed_forwarded_ticks));
 	csmemset(distributed_forwarded_times, 0xFF, sizeof(distributed_forwarded_times));
@@ -9291,6 +9548,67 @@ static boolean distributed_world_gate(
 	return TRUE;
 }
 
+/* a compact batch's messages (distributed_batch_append), each as if it came
+alone with the whole header: the batch's world as this machine's where its
+low byte is the same (else one this machine is not in, which no message of
+a datagram changes: distributed_message_epoch_valid), its tick the one of
+the sender's clock as this machine has it (distributed_sender_clock) that
+has the low 16 bits sent, within 32767 ticks of it (a datagram's tick is
+taken only within DISTRIBUTED_TIME_WINDOW_TICKS of the clock) */
+void network_distributed_handle_message(long machine_index, word const *message, word size);
+
+static void distributed_compact_batch_handle(
+	long machine_index,
+	word const *message,
+	word size)
+{
+	byte const *data = (byte const *)message;
+	long clock = distributed_sender_clock(machine_index);
+	word low_time = (word)(data[sizeof(message_header) + 2] | data[sizeof(message_header) + 3] << 8);
+	long game_time = clock + (short)(word)(low_time - (word)clock);
+	unsigned long epoch = (distributed_checkpoint_epoch & ~0xFFUL) | data[sizeof(message_header) + 1];
+	word offset = COMPACT_BATCH_HEADER_SIZE;
+
+	while (offset < size)
+	{
+		union
+		{
+			struct distributed_message_header header;
+			word words[(sizeof(struct distributed_message_header) + DATAGRAM_MAXIMUM_SIZE + 1) / sizeof(word)];
+		} buffer;
+		word value = data[offset++];
+		word length;
+
+		if (value & 0x80)
+		{
+			if (offset >= size)
+				break;
+			value = (word)((value & 0x7F) | data[offset++] << 7);
+		}
+		length = (word)(value >> 1);
+		if (size - offset < 2 || length > size - offset - 2 ||
+			sizeof(buffer.header) + length > sizeof(buffer))
+		{
+			break;
+		}
+		csmemcpy(&buffer.header.header, message, sizeof(message_header));
+		buffer.header.type = data[offset];
+		buffer.header.count = data[offset + 1];
+		buffer.header.game_time = game_time + (value & 1);
+		buffer.header.checkpoint_epoch = epoch;
+		csmemcpy((byte *)&buffer + sizeof(buffer.header), data + offset + 2, length);
+		offset += (word)(2 + length);
+		/* (no batch in a batch) */
+		if (buffer.header.type != _distributed_message_batch && buffer.header.type != _distributed_message_compact_batch)
+		{
+			distributed_handling_batch = TRUE;
+			network_distributed_handle_message(machine_index, buffer.words,
+				(word)(sizeof(buffer.header) + length));
+			distributed_handling_batch = FALSE;
+		}
+	}
+}
+
 /* a message of the distributed kind; machine_index is the sender's on the
 host, NONE on a client */
 void network_distributed_handle_message(
@@ -9399,6 +9717,15 @@ void network_distributed_handle_message(
 			distributed_handling_stream_message : !network_connection_last_read_was_unreliable());
 		return;
 	}
+	/* (a compact batch's messages each as if it came alone, of no game
+	between games: shorter than a message header may be) */
+	if (size >= COMPACT_BATCH_HEADER_SIZE &&
+		((byte const *)message)[sizeof(message_header)] == _distributed_message_compact_batch)
+	{
+		if (game_in_progress())
+			distributed_compact_batch_handle(machine_index, message, size);
+		return;
+	}
 	/* (none between games: loading, or in the menus) */
 	if (size < sizeof(header) || !game_in_progress())
 		return;
@@ -9432,7 +9759,8 @@ void network_distributed_handle_message(
 			csmemcpy((byte *)buffer + sizeof(message_header), (byte const *)message + offset, length);
 			offset += length;
 			/* (no batch in a batch) */
-			if (((struct distributed_message_header const *)buffer)->type != _distributed_message_batch)
+			if (((struct distributed_message_header const *)buffer)->type != _distributed_message_batch &&
+				((struct distributed_message_header const *)buffer)->type != _distributed_message_compact_batch)
 			{
 				distributed_handling_batch = TRUE;
 				network_distributed_handle_message(machine_index, buffer, (word)(sizeof(message_header) + length));

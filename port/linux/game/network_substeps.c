@@ -1607,9 +1607,16 @@ word network_substeps_live_far_write(
 	short player_index,
 	byte *buffer)
 {
+	struct live_control const *ran;
+
 	if (player_index < 0 || player_index >= MAXIMUM_TRACKED_PLAYERS)
 		return 0;
-	return live_control_forward_write(player_index, &network_substeps_globals.ran_live[player_index], buffer);
+	/* (the latest press, sent on since or not: one owed a client goes later
+	in the tick than its sub-step, network_distributed.c's distributed_far_owed) */
+	ran = &network_substeps_globals.ran_live[player_index];
+	if (!ran->valid)
+		return 0;
+	return live_control_forward_pack(player_index, ran, game_time_get(), buffer);
 }
 
 boolean network_substeps_live_far_due(

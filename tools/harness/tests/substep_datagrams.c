@@ -4,7 +4,13 @@ sub-step ends leaves in one datagram, the forwarded controls with the
 sub-step's states whatever the interval since the frame's own forward, and
 a tick's last sub-step's with the tick's messages; a datagram is split only
 where the next message (or its next entry) does not fit, and the messages
-and entries keep their order. */
+and entries keep their order. A player the client can react to (near its
+players or in their sight, distributed_forward_immediate) has its presses
+sent in the sub-step's datagram; one it cannot, in the tick's last, unless
+it comes where the client can react to it first (distributed_reacts_at).
+An OpenH1 machine's batches are compact (distributed_batch_compact): each
+message read back (distributed_compact_batch_handle) with the header it was
+sent with; an OpenCE machine's are as before. */
 #include "harness.h"
 typedef unsigned short word;
 typedef word message_header;
@@ -44,7 +50,7 @@ static byte distributed_forward_periods[HALO_PORT_MAXIMUM_NETWORK_MACHINES][MAXI
 static long distributed_forwarded_ticks[HALO_PORT_MAXIMUM_NETWORK_MACHINES][MAXIMUM_TRACKED_PLAYERS];
 static long distributed_forwarded_times[HALO_PORT_MAXIMUM_NETWORK_MACHINES][MAXIMUM_TRACKED_PLAYERS];
 static struct live_control_far distributed_far_live[HALO_PORT_MAXIMUM_NETWORK_MACHINES][MAXIMUM_TRACKED_PLAYERS];
-static unsigned long distributed_checkpoint_epoch;
+static unsigned long distributed_checkpoint_epoch = 0x1234;
 static boolean distributed_checkpoint_synchronized = TRUE;
 static long distributed_batch_bytes[MAXIMUM_SENDERS];
 static long distributed_batch_datagrams[MAXIMUM_SENDERS];
@@ -52,6 +58,9 @@ static struct { long sent; } distributed_statistics;
 static struct distributed_batch distributed_batches[MAXIMUM_SENDERS];
 static struct distributed_packer distributed_packer;
 static boolean distributed_forward_held;
+static boolean distributed_forward_immediate[HALO_PORT_MAXIMUM_NETWORK_MACHINES][MAXIMUM_TRACKED_PLAYERS];
+static boolean distributed_far_owed[HALO_PORT_MAXIMUM_NETWORK_MACHINES][MAXIMUM_TRACKED_PLAYERS];
+static long distributed_budget_balances[HALO_PORT_MAXIMUM_NETWORK_MACHINES];
 
 /* the world: machines 1 and 2, OpenH1 clients; players near both (period 1)
 of states at the sub-steps, and players whose live controls are pending */
@@ -60,12 +69,20 @@ static unsigned long long now_microseconds = 1000000;
 static boolean near[MAXIMUM_TRACKED_PLAYERS];
 static boolean live_pending[MAXIMUM_TRACKED_PLAYERS];
 static struct player_datum players[MAXIMUM_TRACKED_PLAYERS];
+/* players further (alive, their states not sent at the sub-steps), their
+presses as the host's sub-steps ran them (pending: made this sub-step), and
+where each client can react to them now (the plan's tests, as they move) */
+static boolean far[MAXIMUM_TRACKED_PLAYERS];
+static boolean far_pressed[MAXIMUM_TRACKED_PLAYERS];
+static boolean reacts_now[HALO_PORT_MAXIMUM_NETWORK_MACHINES][MAXIMUM_TRACKED_PLAYERS];
 
 static long game_time_get(void) { return now_time; }
 static short game_connection(void) { return _game_connection_network_server; }
 static boolean game_in_progress(void) { return TRUE; }
 static boolean network_standard_hosting(void) { return TRUE; }
-static boolean network_standard_machine_is_openh1(long machine_index) { (void)machine_index; return TRUE; }
+/* (machine 3 an OpenCE one; the host's an OpenH1 game) */
+static boolean network_standard_machine_is_openh1(long machine_index) { return machine_index != 3; }
+static long network_standard_agreed_rate(void) { return 120; }
 static boolean network_standard_message_goes_to(long machine_index, byte type)
 {
 	(void)machine_index; (void)type; return TRUE;
@@ -107,25 +124,45 @@ static word network_substeps_live_forward_write(short player_index, byte *buffer
 }
 static boolean network_substeps_live_far_due(short player_index, struct live_control_far *last)
 {
-	(void)player_index; (void)last; return FALSE;
+	(void)last; return far_pressed[player_index];
 }
+/* (the latest press, 0x40 + its player first) */
 static word network_substeps_live_far_write(short player_index, byte *buffer)
 {
-	(void)player_index; (void)buffer; return 0;
+	if (!far[player_index])
+		return 0;
+	memset(buffer, 0, LIVE_CONTROL_FORWARD_MAXIMUM_SIZE);
+	buffer[0] = (byte)(0x40 + player_index);
+	return LIVE_CONTROL_FORWARD_MAXIMUM_SIZE;
 }
-static void network_substeps_live_forwarded(void) { memset(live_pending, 0, sizeof(live_pending)); }
+static void network_substeps_live_forwarded(void)
+{
+	memset(live_pending, 0, sizeof(live_pending));
+	memset(far_pressed, 0, sizeof(far_pressed));
+}
 static boolean network_substeps_live_pending(void)
 {
 	short index;
 
 	for (index = 0; index < MAXIMUM_TRACKED_PLAYERS; index++)
-		if (live_pending[index])
+		if (live_pending[index] || far_pressed[index])
 			return TRUE;
 	return FALSE;
 }
 static struct player_datum *distributed_player(short player_index)
 {
-	return near[player_index] ? &players[player_index] : NULL;
+	return near[player_index] || far[player_index] ? &players[player_index] : NULL;
+}
+static long distributed_living_unit(struct player_datum const *player) { return (long)(player - players); }
+static void object_get_origin(long unit_index, real_point3d *origin)
+{
+	origin->x = (real)unit_index; origin->y = 0.0f; origin->z = 0.0f;
+}
+static short distributed_object_cluster(long unit_index) { return (short)unit_index; }
+static boolean distributed_reacts_at(long machine_index, real_point3d const *origin, short cluster_index)
+{
+	CHECK((short)origin->x == cluster_index, "the player's own place");
+	return reacts_now[machine_index][cluster_index];
 }
 static void distributed_state_from_player(short player_index, long time, struct distributed_unit_state *state)
 {
@@ -174,7 +211,28 @@ static boolean network_distributed_server_send_to_machine(long machine_index, vo
 	return TRUE;
 }
 
+/* the messages a compact batch is read back as (network_distributed_handle_message) */
+static boolean distributed_handling_batch;
+static long sender_clock;
+static long distributed_sender_clock(long machine_index) { (void)machine_index; return sender_clock; }
+enum { MAXIMUM_HEARD = 64 };
+static struct { struct distributed_message_header header; word size; byte entries[DATAGRAM_MAXIMUM_SIZE]; } heard[MAXIMUM_HEARD];
+static short heard_count;
+void network_distributed_handle_message(long machine_index, word const *message, word size);
+
 #include "under_test.inc"
+
+void network_distributed_handle_message(long machine_index, word const *message, word size)
+{
+	(void)machine_index;
+	CHECK(distributed_handling_batch, "read as a batch's");
+	CHECK(heard_count < MAXIMUM_HEARD && size >= sizeof(struct distributed_message_header), "a message");
+	memcpy(&heard[heard_count].header, message, sizeof(struct distributed_message_header));
+	heard[heard_count].size = (word)(size - sizeof(struct distributed_message_header));
+	memcpy(heard[heard_count].entries, (byte const *)message + sizeof(struct distributed_message_header),
+		heard[heard_count].size);
+	heard_count++;
+}
 
 /* a datagram's messages: each one's type, count and entries */
 struct parsed { byte type; byte count; word size; byte const *entries; };
@@ -186,6 +244,29 @@ static short parse(long machine_index, short datagram_index, struct parsed *mess
 	word offset = sizeof(struct distributed_message_header);
 	short count = 0;
 
+	if (network_standard_machine_is_openh1(machine_index))
+	{
+		/* (compact: its messages' lengths, kinds and counts) */
+		CHECK(data[sizeof(message_header)] == _distributed_message_compact_batch, "a compact batch");
+		offset = COMPACT_BATCH_HEADER_SIZE;
+		while (offset < size)
+		{
+			word value = data[offset++];
+
+			if (value & 0x80)
+				value = (word)((value & 0x7F) | data[offset++] << 7);
+			CHECK(offset + 2 + (value >> 1) <= size, "a message within its datagram");
+			CHECK(count < maximum, "too many messages");
+			messages[count].type = data[offset];
+			messages[count].count = data[offset + 1];
+			messages[count].size = (word)(value >> 1);
+			messages[count].entries = data + offset + 2;
+			count++;
+			offset += (word)(2 + (value >> 1));
+		}
+		CHECK(offset == size, "the datagram's messages fill it");
+		return count;
+	}
 	CHECK(((struct distributed_message_header const *)data)->type == _distributed_message_batch, "a batch");
 	while (offset + sizeof(word) <= size)
 	{
@@ -215,6 +296,11 @@ static void reset(void)
 	memset(near, 0, sizeof(near));
 	memset(live_pending, 0, sizeof(live_pending));
 	memset(distributed_forward_periods, 0, sizeof(distributed_forward_periods));
+	memset(far, 0, sizeof(far));
+	memset(far_pressed, 0, sizeof(far_pressed));
+	memset(reacts_now, 0, sizeof(reacts_now));
+	memset(distributed_forward_immediate, 0, sizeof(distributed_forward_immediate));
+	memset(distributed_far_owed, 0, sizeof(distributed_far_owed));
 }
 
 /* players near machines 1 and 2: their states at the sub-steps */
@@ -223,6 +309,19 @@ static void set_near(short player_index)
 	near[player_index] = TRUE;
 	distributed_forward_periods[1][player_index] = 1;
 	distributed_forward_periods[2][player_index] = 1;
+	distributed_forward_immediate[1][player_index] = TRUE;
+	distributed_forward_immediate[2][player_index] = TRUE;
+}
+
+/* a player further from machines 1 and 2, of the plan's period, whom they
+can react to (in sight, or near: the plan's word) or not */
+static void set_far(short player_index, byte period, boolean reacts)
+{
+	far[player_index] = TRUE;
+	distributed_forward_periods[1][player_index] = period;
+	distributed_forward_periods[2][player_index] = period;
+	distributed_forward_immediate[1][player_index] = reacts;
+	distributed_forward_immediate[2][player_index] = reacts;
 }
 
 /* the tick's own message to a machine: entries numbered from first */
@@ -380,7 +479,7 @@ static void split_case(void)
 		/* (split only where the next entry would not fit) */
 		if (datagram_index < datagram_count[1] - 1)
 		{
-			CHECK(datagrams[1][datagram_index].size + BATCH_MESSAGE_OVERHEAD + TICK_ENTRY_SIZE > DATAGRAM_MAXIMUM_SIZE,
+			CHECK(datagrams[1][datagram_index].size + COMPACT_BATCH_MESSAGE_OVERHEAD + TICK_ENTRY_SIZE > DATAGRAM_MAXIMUM_SIZE,
 				"datagram %d split with room for another entry (%d bytes)", datagram_index,
 				datagrams[1][datagram_index].size);
 		}
@@ -398,10 +497,237 @@ static void held_case(void)
 	live_pending[3] = TRUE;
 	now_microseconds += 1000000;
 	network_distributed_host_substep_ended(3, 4);
-	CHECK(datagram_count[1] == 0, "held for the tick");
+	CHECK(datagram_count[1] == 0 && distributed_forward_held, "held for the tick");
 	now_microseconds += 1000;
 	network_distributed_frame_received();
 	CHECK(datagram_count[1] == 1 && datagram_count[2] == 1, "sent by the next frame");
+}
+
+/* whether a datagram has a player's press (forwarded live controls) */
+static boolean has_press(long machine_index, short datagram_index, short player_index)
+{
+	struct parsed messages[8];
+	short count = parse(machine_index, datagram_index, messages, 8);
+	short index;
+
+	for (index = 0; index < count; index++)
+	{
+		short entry;
+
+		if (messages[index].type != _distributed_message_forwarded_live_controls)
+			continue;
+		for (entry = 0; entry < messages[index].count; entry++)
+		{
+			if (messages[index].entries[entry * LIVE_CONTROL_FORWARD_MAXIMUM_SIZE] == 0x40 + player_index)
+				return TRUE;
+		}
+	}
+	return FALSE;
+}
+
+/* players the clients can react to: a near one's states and controls, a
+far one's press in sight and an unseen but near one's, all in the
+sub-step's own datagram, as they went before */
+static void react_case(void)
+{
+	long machine_index;
+
+	reset();
+	set_near(3);
+	live_pending[3] = TRUE;
+	set_far(4, 4, TRUE);
+	far_pressed[4] = TRUE;
+	set_far(5, 6, TRUE);
+	far_pressed[5] = TRUE;
+	now_microseconds += 1000000;
+	network_distributed_host_substep_ended(0, 4);
+	for (machine_index = 1; machine_index <= 2; machine_index++)
+	{
+		struct parsed messages[8];
+		short count;
+
+		CHECK(datagram_count[machine_index] == 1, "one datagram of the sub-step to machine %ld, not %d",
+			machine_index, datagram_count[machine_index]);
+		count = parse(machine_index, 0, messages, 8);
+		CHECK(count == 2 && messages[0].type == _distributed_message_substep_states,
+			"the near player's state in it (%d messages)", count);
+		CHECK(messages[1].type == _distributed_message_forwarded_live_controls && messages[1].count == 3,
+			"the near player's controls and both presses in it");
+		CHECK(has_press(machine_index, 0, 4), "the far player in sight's press at once");
+		CHECK(has_press(machine_index, 0, 5), "the player unseen but near's press at once");
+	}
+}
+
+/* a player the clients cannot react to (far and unseen): its press made no
+datagram of a sub-step, and went in the tick's last, once */
+static void defer_case(void)
+{
+	long machine_index;
+
+	reset();
+	set_far(5, 6, FALSE);
+	far_pressed[5] = TRUE;
+	now_microseconds += 1000000;
+	network_distributed_host_substep_ended(0, 4);
+	CHECK(datagram_count[1] == 0 && datagram_count[2] == 0, "no datagram of a sub-step for it");
+	now_microseconds += 8000;
+	network_distributed_frame_received();
+	network_distributed_host_substep_ended(1, 4);
+	network_distributed_host_substep_ended(2, 4);
+	CHECK(datagram_count[1] == 0 && datagram_count[2] == 0, "none later in the tick either");
+	network_distributed_host_substep_ended(3, 4);
+	now_time++;
+	tick_message(1, 4, 0);
+	tick_message(2, 4, 0);
+	distributed_batches_flush();
+	for (machine_index = 1; machine_index <= 2; machine_index++)
+	{
+		CHECK(datagram_count[machine_index] == 1, "the tick's datagram alone, not %d", datagram_count[machine_index]);
+		CHECK(has_press(machine_index, 0, 5), "the press in the tick's datagram");
+	}
+	/* (owed no more) */
+	network_distributed_host_substep_ended(0, 4);
+	CHECK(datagram_count[1] == 1, "sent once");
+}
+
+/* a far, unseen player's press owed, then the player comes into sight (or
+near) at a later sub-step: it goes in that sub-step's datagram */
+static void into_view_case(void)
+{
+	reset();
+	set_far(5, 6, FALSE);
+	far_pressed[5] = TRUE;
+	now_microseconds += 1000000;
+	network_distributed_host_substep_ended(0, 4);
+	CHECK(datagram_count[1] == 0 && datagram_count[2] == 0, "owed");
+	reacts_now[1][5] = TRUE;
+	network_distributed_host_substep_ended(1, 4);
+	CHECK(datagram_count[1] == 1 && has_press(1, 0, 5), "into view: the press at once, in sub-step 1's datagram");
+	CHECK(datagram_count[2] == 0, "the other client, which cannot react to it, still owed");
+	CHECK(distributed_forward_immediate[1][5], "and at once from then on");
+	far_pressed[5] = TRUE;
+	network_distributed_host_substep_ended(2, 4);
+	CHECK(datagram_count[1] == 2 && has_press(1, 1, 5), "its next press at once too");
+}
+
+/* a message of the kind, count entries of size bytes (each its index, the
+seed after), of its tick and world, to the machine */
+static void send_message(long machine_index, byte type, short count, word size, long time, unsigned long epoch,
+	byte seed)
+{
+	static struct { struct distributed_message_header header; byte data[2048]; } message;
+	long saved_time = now_time;
+	unsigned long saved_epoch = distributed_checkpoint_epoch;
+	short index;
+	word byte_index;
+
+	for (index = 0; index < count; index++)
+		for (byte_index = 0; byte_index < size; byte_index++)
+			message.data[index * size + byte_index] = (byte)(index + seed + byte_index);
+	now_time = time;
+	distributed_checkpoint_epoch = epoch;
+	distributed_send_to_machine(machine_index, &message, type, count,
+		(word)(sizeof(message.header) + count * size));
+	now_time = saved_time;
+	distributed_checkpoint_epoch = saved_epoch;
+}
+
+/* every datagram to the machine read back */
+static void read_back(long machine_index)
+{
+	short index;
+
+	heard_count = 0;
+	for (index = 0; index < datagram_count[machine_index]; index++)
+	{
+		if (network_standard_machine_is_openh1(machine_index))
+			distributed_compact_batch_handle(1, (word const *)datagrams[machine_index][index].data,
+				datagrams[machine_index][index].size);
+	}
+}
+
+static void heard_is(short index, byte type, short count, word size, long time, unsigned long epoch, byte seed)
+{
+	short entry;
+	word byte_index;
+
+	CHECK(index < heard_count, "message %d read back (%d were)", index, heard_count);
+	CHECK(heard[index].header.type == type && heard[index].header.count == count, "message %d: kind %d count %d",
+		index, heard[index].header.type, heard[index].header.count);
+	CHECK(heard[index].header.game_time == time, "message %d: tick %ld, not %ld", index,
+		(long)heard[index].header.game_time, time);
+	CHECK(heard[index].header.checkpoint_epoch == epoch, "message %d: world %lx, not %lx", index,
+		(unsigned long)heard[index].header.checkpoint_epoch, epoch);
+	CHECK(heard[index].size == count * size, "message %d: %d bytes", index, heard[index].size);
+	for (entry = 0; entry < count; entry++)
+		for (byte_index = 0; byte_index < size; byte_index++)
+			CHECK(heard[index].entries[entry * size + byte_index] == (byte)(entry + seed + byte_index),
+				"message %d: its bytes", index);
+}
+
+/* a compact batch's messages read back with the headers they went with:
+the tick and the next in one datagram, each long and short message's
+length, a message of another world or a tick further in one of its own,
+and the ticks about a 16-bit wrap */
+static void compact_case(void)
+{
+	long base = 0x2FFFE;
+
+	reset();
+	sender_clock = base + 3;
+	send_message(1, _distributed_message_forwarded_live_controls, 1, 12, base, 0x1234, 1);
+	send_message(1, _distributed_message_unit_state_differences, 20, 30, base + 1, 0x1234, 2);
+	send_message(1, _distributed_message_pings, 2, 4, base + 1, 0x1234, 3);
+	CHECK(datagram_count[1] == 0, "nothing sent before the flush");
+	send_message(1, _distributed_message_pings, 1, 4, base + 2, 0x1234, 4);
+	CHECK(datagram_count[1] == 1, "a tick further: the batch sent first (%d)", datagram_count[1]);
+	send_message(1, _distributed_message_pings, 1, 4, base + 2, 0x1235, 5);
+	CHECK(datagram_count[1] == 2, "another world: the batch sent first");
+	distributed_batches_flush();
+	CHECK(datagram_count[1] == 3, "three datagrams, not %d", datagram_count[1]);
+	CHECK(datagrams[1][0].size == COMPACT_BATCH_HEADER_SIZE + (1 + 2 + 12) + (2 + 2 + 600) + (1 + 2 + 8),
+		"the first datagram's %d bytes", datagrams[1][0].size);
+	read_back(1);
+	CHECK(heard_count == 5, "five messages, not %d", heard_count);
+	heard_is(0, _distributed_message_forwarded_live_controls, 1, 12, base, 0x1234, 1);
+	heard_is(1, _distributed_message_unit_state_differences, 20, 30, base + 1, 0x1234, 2);
+	heard_is(2, _distributed_message_pings, 2, 4, base + 1, 0x1234, 3);
+	heard_is(3, _distributed_message_pings, 1, 4, base + 2, 0x1234, 4);
+	/* (a world this machine is not in: not its own) */
+	CHECK(heard[4].header.checkpoint_epoch != distributed_checkpoint_epoch, "another world read as this one");
+	/* (the sender's clock behind or ahead of the tick, within the window) */
+	sender_clock = base - 400;
+	read_back(1);
+	heard_is(1, _distributed_message_unit_state_differences, 20, 30, base + 1, 0x1234, 2);
+	sender_clock = base + 400;
+	read_back(1);
+	heard_is(3, _distributed_message_pings, 1, 4, base + 2, 0x1234, 4);
+}
+
+/* an OpenCE machine's batches as before (and a cut datagram read no
+further than its end) */
+static void opence_case(void)
+{
+	struct parsed messages[8];
+	short count;
+
+	reset();
+	send_message(3, _distributed_message_pings, 2, 4, now_time, distributed_checkpoint_epoch, 1);
+	distributed_batches_flush();
+	CHECK(datagram_count[3] == 1, "one datagram");
+	CHECK(datagrams[3][0].size == sizeof(struct distributed_message_header) + BATCH_MESSAGE_OVERHEAD + 8,
+		"the batch as before, %d bytes", datagrams[3][0].size);
+	count = parse(3, 0, messages, 8);
+	CHECK(count == 1 && messages[0].type == _distributed_message_pings && messages[0].count == 2, "its message");
+	/* (cut short) */
+	reset();
+	sender_clock = now_time;
+	send_message(1, _distributed_message_pings, 2, 4, now_time, distributed_checkpoint_epoch, 1);
+	send_message(1, _distributed_message_pings, 1, 4, now_time, distributed_checkpoint_epoch, 2);
+	distributed_batches_flush();
+	heard_count = 0;
+	distributed_compact_batch_handle(1, (word const *)datagrams[1][0].data, (word)(datagrams[1][0].size - 1));
+	CHECK(heard_count == 1, "a message past the end read");
 }
 
 int main(int argc, char **argv)
@@ -418,6 +744,16 @@ int main(int argc, char **argv)
 		split_case();
 	else if (!strcmp(name, "held"))
 		held_case();
+	else if (!strcmp(name, "react"))
+		react_case();
+	else if (!strcmp(name, "defer"))
+		defer_case();
+	else if (!strcmp(name, "into-view"))
+		into_view_case();
+	else if (!strcmp(name, "compact"))
+		compact_case();
+	else if (!strcmp(name, "opence"))
+		opence_case();
 	else
 	{
 		fprintf(stderr, "no case %s\n", name);

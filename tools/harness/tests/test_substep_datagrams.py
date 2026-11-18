@@ -14,7 +14,7 @@ from harness import CHECK_FAILED, build, constant, enum_with, function, mutated,
 SOURCE = "port/linux/game/network_distributed.c"
 HEADER = "port/linux/game/network_distributed.h"
 SUBSTEPS_HEADER = "port/linux/game/network_substeps.h"
-CASES = ["substep", "substep-after-read", "tick-end", "split", "held"]
+CASES = ["substep", "substep-after-read", "tick-end", "split", "held", "react", "defer", "into-view", "compact", "opence"]
 
 NEGATIVE_CONTROLS = {
     # a tick's last sub-step's controls in a datagram of their own, before the tick's
@@ -27,11 +27,32 @@ NEGATIVE_CONTROLS = {
     # what a tick's last sub-step held, left when no tick follows
     "held-forgotten": (("\tif (distributed_forward_held)\n\t\tdistributed_batches_flush();\n", ""), "held"),
     # a batch sent whenever it has anything: a datagram split with room left
-    "split-early": (("if (used + BATCH_MESSAGE_OVERHEAD + minimum > DATAGRAM_MAXIMUM_SIZE)", "if (batch->size)"),
+    "split-early": (("if (used + overhead + minimum > DATAGRAM_MAXIMUM_SIZE)", "if (batch->size)"),
                     "split"),
+    # every far player's press held for the tick's datagram, those in sight too
+    "defer-in-sight": (("distributed_forward_reacts(machine_index, player_index)))", "FALSE))"), "react"),
+    # a far, unseen player's press at once, as before
+    "never-defer": (("if (*owed && (occasion == _forward_at_tick_end ||", "if (*owed && (TRUE ||"), "defer"),
+    # one owed waits for the tick's end though it came into sight
+    # the next tick's message read as the batch's
+    "later-ignored": (("buffer.header.game_time = game_time + (value & 1);", "buffer.header.game_time = game_time;"),
+                      "compact"),
+    # a message of another world packed with the batch's
+    "world-mixed": (("header->checkpoint_epoch != batch->checkpoint_epoch ||", ""), "compact"),
+    # the tick read against this machine's clock, not the sender's as it has it
+    "own-clock": (("long clock = distributed_sender_clock(machine_index);", "long clock = game_time_get();"),
+                  "compact"),
+    # a compact batch to an OpenCE machine
+    "compact-to-opence": (("return sender == HOST_SENDER ? network_standard_agreed_rate() != 0 :\n\t\tnetwork_standard_machine_is_openh1(sender);",
+                           "return TRUE;"), "opence"),
+    # a message's length taken past the datagram's end
+    "unbounded": (("length > size - offset - 2 ||", ""), "opence"),
+    "no-coming-into-view": (("if (!distributed_reacts_at(machine_index, &origin, distributed_object_cluster(unit_index)))",
+                             "if (TRUE)"), "into-view"),
 }
 
-FUNCTIONS = ("distributed_batch_flush", "distributed_batch_room", "distributed_batch_append", "distributed_batch_add",
+FUNCTIONS = ("distributed_far_owed_any", "distributed_forward_reacts", "distributed_batch_flush",
+             "distributed_batch_compact", "distributed_compact_batch_handle", "distributed_batch_room", "distributed_batch_append", "distributed_batch_add",
              "distributed_batches_flush", "distributed_fill_header", "distributed_entry_size",
              "distributed_send_to_machine", "distributed_packer_begin", "distributed_packer_flush",
              "distributed_packer_add", "distributed_forward_flush", "network_distributed_frame_received",
@@ -58,6 +79,9 @@ def generated(fault=None):
     structures = structure(header, "distributed_message_header") + "\n"
     structures += structure(source, "distributed_batch") + "\n"
     structures += re.search(r"#define BATCH_MESSAGE_OVERHEAD \\\n[^\n]*\n", source)[0]
+    structures += re.search(r"#define COMPACT_BATCH_MESSAGE_OVERHEAD [^\n]*\n", source)[0]
+    structures += re.search(r"#define COMPACT_BATCH_HEADER_SIZE [^\n]*\n", source)[0]
+    structures += re.search(r"#define DATAGRAM_IP_UDP_BYTES [^\n]*\n", source)[0]
     structures += structure(source, "distributed_packer") + "\n"
     return (("config.inc", config), ("structures.inc", structures), ("under_test.inc", code))
 

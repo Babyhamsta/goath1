@@ -12,7 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from harness import CHECK_FAILED, build, constant, enum_with, function, mutated, read, run, structure
 
 SOURCE = "port/linux/game/network_objects.c"
-CASES = ["resting-unchanged", "resting-changed", "resting-jitter", "came-to-rest", "unseen", "comes-into-view", "starts-moving"]
+CASES = ["resting-unchanged", "resting-changed", "resting-jitter", "came-to-rest", "unseen", "comes-into-view", "starts-moving", "budget"]
 
 NEGATIVE_CONTROLS = {
     # the resting round-robin as before: unchanged objects at rest sent as often as the scan comes round
@@ -26,7 +26,12 @@ NEGATIVE_CONTROLS = {
     "change-every-tick": (("game_time_get() - objects_host_rest_sent_times[absolute_index] >= REST_STATE_REPEAT_TICKS",
                            "TRUE"), "resting-jitter"),
     # no sight test: by distance alone, as before
-    "no-sight-test": (("if (!seen && period < HIDDEN_PLAYER_PERIOD_TICKS)", "if (FALSE)"), "unseen"),
+    # the budget's stretch on near objects out of sight too
+    "budget-near": (("(period > 2 ? distributed_budget_stretch(machine_index) : 1)",
+                     "distributed_budget_stretch(machine_index)"), "budget"),
+    # no stretch: the far and unseen as often over budget
+    "budget-ignored": (("(period > 2 ? distributed_budget_stretch(machine_index) : 1)", "1"), "budget"),
+    "no-sight-test": (("if (!seen)\n", "if (FALSE)\n"), "unseen"),
     # one come into sight waits for its period
     "sight-waits": (("return started || came_into_sight ||", "return started ||"), "comes-into-view"),
     # one that starts moving waits for its period
