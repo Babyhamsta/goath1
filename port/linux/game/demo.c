@@ -562,6 +562,7 @@ void demo_game_state_allocation(
 		"decal vertex cache", "particle systems", "particle system particles", "particle", "contrail",
 		"contrail point", "game sound globals", "cached object render states", "motion sensor (radar)",
 		"object looping sounds", "scenario globals", "player control globals", "first person weapons",
+		"effect first person", "effect first person location",
 		/* (the lights' cluster references, and their globals, go with the
 		lights: a difference written into them would not be the lights'
 		here) */
@@ -2803,6 +2804,27 @@ static struct demo_allocation const *demo_allocation_holding(unsigned long offse
 compared with the playback's game state: the first bytes apart in each
 allocation the ticks keep logged (the objects' by object), to find where a
 playback parts */
+/* whether the game state's offset is in a part the ticks can read (one of
+spans', which are in order) */
+static boolean demo_spans_hold(
+	struct demo_spans const *spans,
+	unsigned long offset)
+{
+	long low = 0;
+	long high = spans->count;
+
+	while (low < high)
+	{
+		long middle = low + (high - low) / 2;
+
+		if (spans->list[middle].end <= offset)
+			low = middle + 1;
+		else
+			high = middle;
+	}
+	return low < spans->count && spans->list[low].start <= offset;
+}
+
 static void demo_playback_verify(
 	struct demo_block_entry const *entry)
 {
@@ -2815,6 +2837,9 @@ static void demo_playback_verify(
 		entry->packed_size) && demo_files_unpack(packed, entry->packed_size, data, entry->size) && entry->size > 21)
 	{
 		demo_skips_find();
+		/* (as the hash: a data array's free datums and a pool's holes, which
+		no tick reads, left out) */
+		demo_spans_find(&demo_live_spans);
 		while (position + 8 <= entry->size && logged < 40)
 		{
 			unsigned long offset = demo_read_u32(data + position);
@@ -2834,8 +2859,11 @@ static void demo_playback_verify(
 					long skip;
 					boolean skipped = FALSE;
 
-					if (!memcmp(data + position + index, demo_allocations.base + offset + index, 4))
+					if (!memcmp(data + position + index, demo_allocations.base + offset + index, 4) ||
+						(!demo_live_spans.failed && !demo_spans_hold(&demo_live_spans, offset + index)))
+					{
 						continue;
+					}
 					for (skip = 0; skip < demo_skip_count; skip++)
 						skipped |= demo_skips[skip] == address;
 					if (skipped)
