@@ -91,6 +91,9 @@ static int mcc_load_network_host_waiting(long machine_index)
 	return VALID_INDEX(machine_index, MAXIMUM_NETWORK_MACHINE_COUNT) && mcc_waiting[machine_index];
 }
 static void mcc_load_network_peer_left(long machine_index) { (void)machine_index; }
+/* the machine whose party's held room the drop let go (network_party.c) */
+static long party_dropped = NONE;
+static void network_party_machine_dropped(long machine_index) { party_dropped = machine_index; }
 static unsigned long network_client_timeout_milliseconds(void) { return 15000; }
 static boolean halo_server_mode(void) { return FALSE; }
 static boolean cache_files_precache_map_loaded(char const *name) { (void)name; return TRUE; }
@@ -498,6 +501,29 @@ int main(int argc, char **argv)
 		machine_in(_machine_state_lobby);
 		CHECK(network_game_server_machine_phase(&server, MACHINE) == _network_machine_phase_downloading,
 			"a machine downloading in the lobby was not");
+	}
+	/* what is a machine's in every state (its party's held room) ends with
+	its drop, from any state, and with nothing else */
+	CASE("drop-ends-party")
+	{
+		short state, event;
+
+		for (state = _machine_state_connected; state < NUMBER_OF_MACHINE_STATES; state++)
+		{
+			for (event = 0; event < NUMBER_OF_MACHINE_EVENTS; event++)
+			{
+				if (event == _machine_event_drop)
+					continue;
+				party_dropped = NONE;
+				network_game_server_machine_event(machine_in(state), event);
+				CHECK(party_dropped == NONE, "event %s in state %s let the machine's party go",
+					network_game_server_machine_event_names[event], network_game_server_machine_state_names[state]);
+			}
+			party_dropped = NONE;
+			network_game_server_machine_event(machine_in(state), _machine_event_drop);
+			CHECK(party_dropped == MACHINE, "a drop in state %s kept the machine's party",
+				network_game_server_machine_state_names[state]);
+		}
 	}
 	return 0;
 }

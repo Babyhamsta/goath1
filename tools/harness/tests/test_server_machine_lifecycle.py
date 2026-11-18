@@ -12,7 +12,8 @@ from harness import CHECK_FAILED, build, constant, enum_with, function, mutated,
 
 CASES = ['table', 'timeouts', 'loading-wait', 'mcc-loading', 'downloading', 'local', 'lobby-silent', 'lobby-heard',
          'dead-machine-countdown', 'postgame-silent', 'round-reset-grace', 'loaded-wrong-game', 'loaded-unnamed',
-         'loaded-twice-in-game', 'loaded-late', 'version-old', 'version-new', 'version-same', 'phase']
+         'loaded-twice-in-game', 'loaded-late', 'version-old', 'version-new', 'version-same', 'phase',
+         'drop-ends-party']
 
 SERVER = 'source/networking/network_server_manager.c'
 HANDLER = 'source/networking/network_server_message_handler.c'
@@ -67,6 +68,9 @@ NEGATIVE_CONTROLS = {
                      'table'),
     'phase-loading-as-loaded': ((SERVER, '\tcase _machine_state_loading:\n\t\treturn _network_machine_phase_loading;',
                                  '\tcase _machine_state_loading:\n\t\treturn _network_machine_phase_loaded;'), 'phase'),
+    # the code before: nothing told of a drop (the party module guessed it from the machines loaded)
+    'drop-party-kept': ((SERVER, '\t\t\tnetwork_party_machine_dropped(machine->machine_index);', '\t\t\t;'),
+                        'drop-ends-party'),
 }
 
 

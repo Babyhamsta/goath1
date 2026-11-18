@@ -1132,6 +1132,10 @@ static boolean network_game_server_machine_event(
 	case _machine_event_drop:
 		machine->flags = 0;
 		machine->last_heard_time = 0;
+		/* (what is the machine's for as long as it is here, in any state,
+		ends with it: its party's held room) */
+		if (VALID_INDEX(machine->machine_index, MAXIMUM_NETWORK_MACHINE_COUNT))
+			network_party_machine_dropped(machine->machine_index);
 		break;
 	default:
 		/* (its time in the new state starts now: the start, its load, a
