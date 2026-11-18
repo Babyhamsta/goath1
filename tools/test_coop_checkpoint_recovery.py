@@ -53,7 +53,7 @@ def generated(fault=None):
                   "TARGET_HISTORY_SLACK_TICKS", "REPORT_DELAY_SLACK_TICKS", "REPORT_MAXIMUM_AGE_TICKS",
                   "MAXIMUM_RECENT_WEAPONS", "MAXIMUM_GRENADE_THROWS", "MAXIMUM_STUCK_PROJECTILES",
                   "RECENT_WEAPON_TICKS", "HIT_REPORT_BURST_SECONDS", "PLAYER_TRAIL_POINTS",
-                  "DAMAGE_RATE_CACHE_SIZE", "MAXIMUM_HIT_REPORTS_PER_TICK")),
+                  "DAMAGE_RATE_CACHE_SIZE", "MAXIMUM_HIT_REPORTS_PER_TICK", "ROUND_TRIP_WINDOW_TICKS")),
     ):
         config.extend(define_value(source, name) for name in names)
     config.append(define_value(distributed_h, 'DISTRIBUTED_UNIT_SCALE'))
