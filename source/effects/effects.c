@@ -617,9 +617,10 @@ weapons are, and the ticks never read them but to place those particles. */
 
 struct effect_first_person
 {
-	/* the effect's identifier (its datum's), 0 when the slot is free */
-	short identifier;
+	/* the effect's (its datum index), NONE when the slot is free */
+	long effect_index;
 	short local_player_index;
+	short unused06;
 	long location_datum_indices[MAXIMUM_EFFECT_LOCATIONS];
 };
 
@@ -668,7 +669,7 @@ void effects_initialize_for_new_map(
 	data_make_valid(effect_first_person_location_data);
 	for (index = 0; index < HALO_PORT_MAXIMUM_EFFECTS; index++)
 	{
-		effect_first_persons[index].identifier = 0;
+		effect_first_persons[index].effect_index = NONE;
 		effect_first_persons[index].local_player_index = NONE;
 	}
 
@@ -704,25 +705,20 @@ static struct effect_first_person *effect_first_person_try_and_get(
 	long effect_index)
 {
 	struct effect_first_person *first_person;
-	short identifier = (short)(effect_index >> 16);
 
-	if (effect_index == NONE || !effect_first_persons || !identifier)
+	if (effect_index == NONE || !effect_first_persons)
 		return NULL;
 	first_person = &effect_first_persons[(short)effect_index];
-	return first_person->identifier == identifier ? first_person : NULL;
+	return first_person->effect_index == effect_index ? first_person : NULL;
 }
 
-/* ... the slot of an effect's datum */
-static struct effect_first_person *effect_first_person_of(
+/* (an effect's datum index, from the datum) */
+static long effect_index_from_datum(
 	struct effect_datum const *effect)
 {
 	long absolute_index = (long)(((char const *)effect - (char const *)effect_data->data) / effect_data->size);
-	struct effect_first_person *first_person;
 
-	if (!effect_first_persons || !effect->header.identifier)
-		return NULL;
-	first_person = &effect_first_persons[absolute_index];
-	return first_person->identifier == effect->header.identifier ? first_person : NULL;
+	return (long)(((unsigned long)(unsigned short)effect->header.identifier << 16) | (unsigned long)absolute_index);
 }
 
 /* the local player whose first-person weapon an effect's particles are
@@ -731,7 +727,7 @@ static short effect_local_player_index(
 	struct effect_datum const *effect)
 {
 	struct effect_first_person const *first_person =
-		effect_first_person_of(effect);
+		effect_first_person_try_and_get(effect_index_from_datum(effect));
 
 	return first_person ? first_person->local_player_index : NONE;
 }
@@ -745,7 +741,7 @@ static void effect_first_person_free(
 	struct effect_first_person *first_person = &effect_first_persons[absolute_index];
 	short location_index;
 
-	if (!first_person->identifier)
+	if (first_person->effect_index == NONE)
 		return;
 	for (location_index = 0; location_index < MAXIMUM_EFFECT_LOCATIONS; location_index++)
 	{
@@ -763,7 +759,7 @@ static void effect_first_person_free(
 		}
 		first_person->location_datum_indices[location_index] = NONE;
 	}
-	first_person->identifier = 0;
+	first_person->effect_index = NONE;
 	first_person->local_player_index = NONE;
 }
 
@@ -779,7 +775,7 @@ static struct effect_first_person *effect_first_person_new(
 	{
 		effect_first_person_free((short)effect_index);
 		first_person = &effect_first_persons[(short)effect_index];
-		first_person->identifier = (short)(effect_index >> 16);
+		first_person->effect_index = effect_index;
 		for (location_index = 0; location_index < MAXIMUM_EFFECT_LOCATIONS; location_index++)
 			first_person->location_datum_indices[location_index] = NONE;
 	}
@@ -1369,7 +1365,7 @@ static long effect_location_first_instance(
 	if (effect_camera_mode_first_person(effect, camera_mode))
 	{
 		struct effect_first_person const *first_person =
-			effect_first_person_of(effect);
+			effect_first_person_try_and_get(effect_index_from_datum(effect));
 
 		return first_person ? first_person->location_datum_indices[location_index] : NONE;
 	}
@@ -2963,7 +2959,7 @@ static long effect_build_location(
 	/* port: a first-person weapon's in the effect's first-person slot
 	(effect_first_person), the frames', which effect_first_person_new took */
 	struct effect_first_person *first_person = first_person_weapon
-		? effect_first_person_of(effect)
+		? effect_first_person_try_and_get(effect_index_from_datum(effect))
 		: NULL;
 	struct data_array *data = first_person ? effect_first_person_location_data : effect_location_data;
 	long *first_instance = first_person
