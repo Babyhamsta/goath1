@@ -80,6 +80,7 @@ know: its players cannot vote, and count as players who did not.
 #include "networking/network_game_globals.h"
 #include "network_distributed.h"
 #include "network_votekick.h"
+#include "network_standard.h"
 #include "server_director.h"
 #include "halo_keyboard.h"
 #include "cutscene/cinematics.h"
@@ -925,8 +926,11 @@ static void votekick_host_request(
 		votekick_refuse(machine_index, "vote: that vote has ended");
 		return;
 	}
-	/* (a start is a yes) */
-	if (!serial && choice != _votekick_choice_yes)
+	/* (a start is a yes; but a machine of a build before serials, an OpenCE
+	one or one in a Legacy game, names none in any choice: its no is one in
+	the vote running) */
+	if (!serial && choice != _votekick_choice_yes &&
+		(!votekick.active || machine_index == NONE || network_standard_machine_is_openh1(machine_index)))
 	{
 		votekick_refuse(machine_index, votekick.active ? "vote: vote yes or no in the vote running" :
 			"vote: no vote is running");

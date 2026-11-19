@@ -118,6 +118,9 @@ static void game_engine_end_game(void) {}
 static long kicked = NONE;
 static void network_game_server_kick_machine(long machine_index, boolean kept_out) { (void)kept_out; kicked = machine_index; }
 static short local_player_get_next(short index) { (void)index; return NONE; }
+/* (machine 4: an OpenCE one, or one of a build before serials) */
+enum { BEFORE_SERIALS = 4 };
+static boolean network_standard_machine_is_openh1(long machine_index) { return machine_index != BEFORE_SERIALS; }
 
 /* a client's sent request, as it went */
 static byte sent[4];
@@ -229,6 +232,17 @@ int main(int argc, char **argv)
 		CHECK(votekick.votes == 2, "the scoreboard's start in the same vote did not count as a yes (%d)", votekick.votes);
 		request(1, TARGET, NO, votekick.serial);
 		CHECK(votekick.no_votes == 1, "a no naming the vote did not count");
+		return 0;
+	}
+	/* a machine of a build before serials (an OpenCE one) names no vote: its
+	no counts in the vote running, and starts none */
+	CASE("before-serials-no")
+	{
+		request(BEFORE_SERIALS, TARGET, NO, 0);
+		CHECK(!votekick.active, "a no started a vote");
+		request(0, TARGET, YES, 0);
+		request(BEFORE_SERIALS, TARGET, NO, 0);
+		CHECK(votekick.no_votes == 1, "the no of a machine before serials did not count (%d)", votekick.no_votes);
 		return 0;
 	}
 	/* a client's choices name the vote it heard; a start names none */

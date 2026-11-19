@@ -652,6 +652,19 @@ vehicle's window, and every vehicle such a rider names, move once a tick at
 so the host sends no sub-step state of a rider: its place on the deck goes
 with the tick's state, as in a Legacy game.
 
+OpenH1's protocol version 33 is the smaller messages of an OpenH1 game,
+between OpenH1 machines only; network version 44 is unchanged, so Legacy
+games and OpenCE players play as before. The host sends an OpenH1 client
+its messages in a compact batch (148), objects' states packed (149), tick
+states' differences packed and joined (141's packed form, 158), relayed
+actions packed (159), a sub-step's state when it is asked for (147), and
+statistics and inventories when they change; a client sends its live
+controls and sub-steps packed (155, 156) and its held inputs and prediction
+shortened (145, 146). `debug.network_forms_before` sends the forms before,
+for comparison. A vote's choices name the vote's serial in what was a pad
+byte of messages 78 and 79 (`network_votekick.c`); a machine of a build
+before it, an OpenCE one among them, names none and votes as before.
+
 `port/linux/network_format.txt` records the wire format of the current
 version (`tools/network_format.py`): `test_linux_port.py` fails when the
 sources' messages, kinds, bits, structs sent whole or the sizes of their

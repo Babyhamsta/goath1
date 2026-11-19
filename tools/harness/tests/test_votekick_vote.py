@@ -1,7 +1,7 @@
 """A vote of network_votekick.c as an object with an identity and an end: a choice names its vote's serial, so one for
 a vote that has ended is refused and never starts or counts toward another (a yes in flight across a map change
 among them); a vote ended by a new game cools its starter down and keeps the gap after it; a client's choices name the
-vote it heard."""
+vote it heard; a machine of a build before serials (an OpenCE one) names none, and its no still counts."""
 
 import sys
 from pathlib import Path
@@ -18,7 +18,7 @@ CLIENT_FUNCTIONS = ("network_votekick_handle_status", "network_votekick_get_stat
                     "network_votekick_request", "network_vote_choose")
 
 CASES = ["ballot-for-ended-vote", "game-end-cooldown", "yes-across-map-change", "start-is-a-yes",
-         "client-names-the-vote"]
+         "before-serials-no", "client-names-the-vote"]
 
 # a fault (each the code before, in part), and the case that must catch it
 NEGATIVE_CONTROLS = {
@@ -30,7 +30,9 @@ NEGATIVE_CONTROLS = {
                            "\t\tdistributed_send_notice(\"The vote ended with the game\");"), "game-end-cooldown"),
     "game-end-no-cooldown": (("\tif (votekick.kind == _network_vote_kick)\n\t{\n\t\tvotekick_remember(votekick_cooling_starters",
                               "\tif (0)\n\t{\n\t\tvotekick_remember(votekick_cooling_starters"), "game-end-cooldown"),
-    "start-may-be-no": (("if (!serial && choice != _votekick_choice_yes)", "if (0)"), "start-is-a-yes"),
+    "start-may-be-no": (("if (!serial && choice != _votekick_choice_yes &&", "if (0 &&"), "start-is-a-yes"),
+    "before-serials-no-refused": ((" || network_standard_machine_is_openh1(machine_index)))", " || 1))"),
+                                  "before-serials-no"),
     "client-names-none": (("\tmessage.request.vote = (byte)serial;\n", ""), "client-names-the-vote"),
 }
 
